@@ -1,0 +1,11 @@
+node_modules/
+*.log
+*.tmp
+tmp/
+.DS_Store
+__pycache__/
+*.pyc
+report_*.txt
+meta_*.json
+rome_slave_*/
+/home/paul-kane/tmp/
