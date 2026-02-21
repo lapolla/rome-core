@@ -1,0 +1,30 @@
+{
+  "capabilities": {
+    "GEMINI": {
+      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
+      "args": ["gemini", "-p"],
+      "timeout": 300
+    },
+    "CLAUDE": {
+      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
+      "args": ["claude", "-p"],
+      "timeout": 300
+    },
+    "OPENCODE": {
+      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
+      "args": ["opencode", "run"],
+      "timeout": 120
+    },
+    "CODEX": {
+      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
+      "args": ["codex", "exec", "--full-auto", "--skip-git-repo-check"],
+      "timeout": 120
+    },
+    "SAFE_SHELL": {
+      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
+      "args": [],
+      "timeout": 60
+    }
+  },
+  "protocol_version": "1.0"
+}
