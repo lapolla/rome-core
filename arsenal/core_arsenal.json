@@ -21,8 +21,8 @@
       "timeout": 120
     },
     "MCP_TOOL_CLIENT": {
-      "exec": "node",
-      "args": ["/home/paul-kane/projects/rome-core/dictator/mcp_client_tool.mjs"],
+      "exec": "python3",
+      "args": ["/home/paul-kane/projects/rome-core/dictator/mcp_client_tool.py"],
       "timeout": 120
     },
     "SAFE_SHELL": {

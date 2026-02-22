@@ -218,16 +218,6 @@ async def git_push(branch: str = "master") -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 10. git_push
-# ═══════════════════════════════════════════════════════════════════════
-@mcp.tool()
-async def git_push(branch: str = "master") -> str:
-    """Push current branch to origin."""
-    r = await run_cmd(f"git push origin {shlex.quote(branch)}", cwd=GIT_ROOT)
-    return json.dumps(r, indent=2)
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # 11. drush_run
 # ═══════════════════════════════════════════════════════════════════════
 @mcp.tool()
