@@ -2,12 +2,12 @@
   "capabilities": {
     "GEMINI": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["gemini", "--yolo", "-p"],
+      "args": ["gemini", "-p", "--yolo"],
       "timeout": 300
     },
     "CLAUDE": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["claude", "--dangerously-skip-permissions", "-p"],
+      "args": ["claude", "-p", "--yolo"],
       "timeout": 300
     },
     "OPENCODE": {

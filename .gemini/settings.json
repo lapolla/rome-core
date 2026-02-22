@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "dictator": {
+      "command": "python3",
+      "args": [
+        "/home/paul-kane/projects/rome-core/dictator/dictator.py"
+      ],
+      "trust": true
+    }
+  }
+}
