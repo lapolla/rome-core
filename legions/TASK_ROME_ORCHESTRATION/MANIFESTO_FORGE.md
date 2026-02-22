@@ -7,13 +7,12 @@
 *   **Source Files:** `src/CommandDispatcher.cpp`, `src/CommandHooks.cpp`, `src/JsonProcessor.cpp`
 
 ## 2. Output Requirements
-Generate a `CMakeLists.txt` file in the project root that supports:
-1.  **Cross-Compilation:** Targeting `msvc-wine` for SKSE64 plugins.
-2.  **Dependencies:**
-    *   Include `CommonLibSSE-NG` (assume it's available via a standard path or provided as a variable).
-    *   Include `nlohmann_json` (header-only).
-3.  **Compilation Flags:** Standard C++20, optimization level O2, and RTTI/Exceptions as required by CommonLibSSE.
-4.  **Artifact:** Output a DLL named `ROME_Core.dll`.
+Generate a `CMakeLists.txt` file in the project root by combining the following sections:
+1.  **Header & Versioning:** `cmake_minimum_required`, `project`, and C++ standard settings.
+2.  **Options & Flags:** `CMAKE_CXX_FLAGS`, RTTI, Exceptions, and other compilation options.
+3.  **Dependencies:** `find_package` for CommonLibSSE-NG, `nlohmann_json` includes.
+4.  **Target Definition:** `add_library` for `ROME_Core.dll`, source files (`src/*.cpp`), include directories.
+5.  **Post-Build:** Logic to copy the generated `ROME_Core.dll` to the appropriate SKSE plugin directory.
 
 ## 3. Engineering Standards
 *   **Clarity:** Use modern CMake practices (`target_include_directories`, `target_link_libraries`).

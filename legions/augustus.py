@@ -2,8 +2,8 @@
 import subprocess, sys, time, threading, os, json, shutil, re
 from queue import Queue, Empty
 
-# --- ROME AUGUSTUS: THE IMPERIAL REFINEMENT (V1.5 - LOGGING & DIVISION) ---
-# Protocol: Atomic division and persistent mission logging.
+# --- ROME AUGUSTUS: THE IMPERIAL REFINEMENT (V1.6 - FOCUSED EXTRACTION) ---
+# Protocol: Optimized prompts to reduce LLM context load for faster and more accurate extraction.
 
 MAX_TASK_TIME = 45.0 
 
@@ -53,6 +53,7 @@ def run_legion(tid, capability, cmd, ui_queue, arsenal, global_start, results):
     cap_data = arsenal["capabilities"][capability]
     wrapper = os.path.expanduser("~/projects/rome-core/legions/legion_wrapper.py")
     
+    # FIX: JOIN ALL COMMAND PARTS INTO A SINGLE STRING FOR -p
     full_prompt = " ".join(cmd)
     full_cmd = [wrapper, tid, str(global_start)] + cap_data["args"] + [full_prompt]
     
@@ -74,28 +75,40 @@ def run_legion(tid, capability, cmd, ui_queue, arsenal, global_start, results):
     ui_queue.put(("final", tid, status))
 
 def main():
-    print("--- ROME SUPREME COMMAND: OPERATION AUGUSTUS (V1.5) ---", file=sys.stderr)
+    print("--- ROME SUPREME COMMAND: OPERATION AUGUSTUS (V1.6) ---", file=sys.stderr)
     
     with open(os.path.expanduser("~/projects/rome-core/arsenal/core_arsenal.json"), "r") as f:
         arsenal = json.load(f)
 
+    # 16 Slaves: Hyper-Parallel Extraction
+    # Prompts now explicitly state to extract *from* the monolith, reducing LLM context load.
+    monolith_path = "/home/paul-kane/tmp/caesar_final_code.cpp"
+    manifesto_architect_path = os.path.expanduser("~/projects/rome-core/legions/TASK_ROME_ORCHESTRATION/MANIFESTO_ARCHITECT.md")
+    manifesto_forge_path = os.path.expanduser("~/projects/rome-core/legions/TASK_ROME_ORCHESTRATION/MANIFESTO_FORGE.md")
+    
     tasks = {
-        "TASK_DISP_H":     ("GEMINI", ["MANIFESTO_ARCHITECT: CommandDispatcher.h Header Guards and Classes."]),
-        "TASK_DISP_SNG":   ("GEMINI", ["MANIFESTO_ARCHITECT: CommandDispatcher Singleton and Singleton access logic."]),
-        "TASK_DISP_PUSH":  ("GEMINI", ["MANIFESTO_ARCHITECT: CommandDispatcher thread-safe Push() implementation."]),
-        "TASK_DISP_POP":   ("GEMINI", ["MANIFESTO_ARCHITECT: CommandDispatcher thread-safe Pop() implementation."]),
-        "TASK_DISP_PROC":  ("GEMINI", ["MANIFESTO_ARCHITECT: CommandDispatcher Main Process Loop and thread management."]),
-        "TASK_HOOKS_H":    ("GEMINI", ["MANIFESTO_ARCHITECT: CommandHooks.h Headers."]),
-        "TASK_HOOKS_CON":  ("GEMINI", ["MANIFESTO_ARCHITECT: CommandHooks ExecuteRaw (RE::Console) implementation."]),
-        "TASK_HOOKS_ACT":  ("GEMINI", ["MANIFESTO_ARCHITECT: CommandHooks ExecuteKill (RE::Actor) implementation."]),
-        "TASK_JSON_H":     ("GEMINI", ["MANIFESTO_ARCHITECT: JsonProcessor.h Headers."]),
-        "TASK_JSON_CPP":   ("GEMINI", ["MANIFESTO_ARCHITECT: JsonProcessor.cpp nlohmann::json parsing implementation."]),
-        "TASK_FORGE_HDR":  ("GEMINI", ["MANIFESTO_FORGE: CMake Project Setup and Versioning."]),
-        "TASK_FORGE_OPTS": ("GEMINI", ["MANIFESTO_FORGE: CMake C++20 and Optimization flags."]),
-        "TASK_FORGE_DEPS": ("GEMINI", ["MANIFESTO_FORGE: CMake Dependency handling (SKSE, JSON)."]),
-        "TASK_FORGE_TRGT": ("GEMINI", ["MANIFESTO_FORGE: CMake Targets and sources list."]),
-        "TASK_FORGE_POST": ("GEMINI", ["MANIFESTO_FORGE: CMake Post-build and DLL output configuration."]),
-        "TASK_README":     ("GEMINI", ["MANIFESTO_DOCS: Comprehensive README.md based on PROJECT_ROME.md."])
+        # DISPATCHER HEADERS
+        "TASK_DISP_H":     ("GEMINI", [f"From {monolith_path}, extract CommandDispatcher.h Header Guards and Classes, following {manifesto_architect_path}."]),
+        # DISPATCHER IMPLEMENTATION (TRIPLE SPLIT)
+        "TASK_DISP_SNG":   ("GEMINI", [f"From {monolith_path}, extract CommandDispatcher Singleton and Singleton access logic, following {manifesto_architect_path}."]),
+        "TASK_DISP_PUSH":  ("GEMINI", [f"From {monolith_path}, extract CommandDispatcher thread-safe Push() implementation, following {manifesto_architect_path}."]),
+        "TASK_DISP_POP":   ("GEMINI", [f"From {monolith_path}, extract CommandDispatcher thread-safe Pop() implementation, following {manifesto_architect_path}."]),
+        "TASK_DISP_PROC":  ("GEMINI", [f"From {monolith_path}, extract CommandDispatcher Main Process Loop and thread management, following {manifesto_architect_path}."]),
+        # HOOKS
+        "TASK_HOOKS_H":    ("GEMINI", [f"From {monolith_path}, extract CommandHooks.h Headers, following {manifesto_architect_path}."]),
+        "TASK_HOOKS_CON":  ("GEMINI", [f"From {monolith_path}, extract CommandHooks ExecuteRaw (RE::Console) implementation, following {manifesto_architect_path}."]),
+        "TASK_HOOKS_ACT":  ("GEMINI", [f"From {monolith_path}, extract CommandHooks ExecuteKill (RE::Actor) implementation, following {manifesto_architect_path}."]),
+        # JSON
+        "TASK_JSON_H":     ("GEMINI", [f"From {monolith_path}, extract JsonProcessor.h Headers, following {manifesto_architect_path}."]),
+        "TASK_JSON_CPP":   ("GEMINI", [f"From {monolith_path}, extract JsonProcessor.cpp nlohmann::json parsing implementation, following {manifesto_architect_path}."]),
+        # FORGE (QUINTUPLE SPLIT)
+        "TASK_FORGE_HDR":  ("GEMINI", [f"From {manifesto_forge_path}, generate CMake Header and Versioning (3.20+)."]),
+        "TASK_FORGE_OPTS": ("GEMINI", [f"From {manifesto_forge_path}, generate CMake Options, C++20 Flags, and RTTI settings."]),
+        "TASK_FORGE_DEPS": ("GEMINI", [f"From {manifesto_forge_path}, generate CMake Dependency Lookup (CommonLibSSE-NG, nlohmann_json)."]),
+        "TASK_FORGE_TRGT": ("GEMINI", [f"From {manifesto_forge_path}, generate CMake add_library and Sources (src/*.cpp)."]),
+        "TASK_FORGE_POST": ("GEMINI", [f"From {manifesto_forge_path}, generate CMake Post-build and DLL output configuration."]),
+        # DOCS
+        "TASK_README":     ("GEMINI", ["Generate a beautiful, technical README.md for ROME Core based on PROJECT_ROME.md and AUGUSTUS.md."])
     }
 
     results = {}
@@ -104,15 +117,9 @@ def main():
     global_start = time.time()
     
     for tid, (cap, cmd) in tasks.items():
-        if "ARCHITECT" in cmd[0]:
-            manifesto_path = os.path.expanduser("~/projects/rome-core/legions/TASK_ROME_ORCHESTRATION/MANIFESTO_ARCHITECT.md")
-        elif "FORGE" in cmd[0]:
-            manifesto_path = os.path.expanduser("~/projects/rome-core/legions/TASK_ROME_ORCHESTRATION/MANIFESTO_FORGE.md")
-        else:
-            manifesto_path = os.path.expanduser("~/projects/rome-core/PROJECT_ROME.md")
-            
-        cmd_with_context = cmd + [f"Source: /home/paul-kane/tmp/caesar_final_code.cpp. Rules: {manifesto_path}"]
-        threading.Thread(target=run_legion, args=(tid, cap, cmd_with_context, ui_queue, arsenal, global_start, results), daemon=True).start()
+        # The prompt is already built with explicit file references.
+        # No need to add extra context here.
+        threading.Thread(target=run_legion, args=(tid, cap, cmd, ui_queue, arsenal, global_start, results), daemon=True).start()
 
     active_tasks = len(tasks)
     while active_tasks > 0:

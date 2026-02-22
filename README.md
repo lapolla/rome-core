@@ -1,38 +1,41 @@
-Not enough arguments following: p
-Usage: gemini [options] [command]
+# ROME Core: Imperial SKSE Dispatcher
+**Version:** 1.1.0 | **Protocol:** ROME | **Status:** Operation Augustus Active
 
-Gemini CLI - Defaults to interactive mode. Use -p/--prompt for non-interactive (headless) mode.
+## 🏛️ Overview
+ROME Core is a high-performance, thread-safe command dispatch framework for Skyrim Special Edition (SKSE64). It enables asynchronous, non-blocking execution of console commands and engine-level actor interactions via a tiered architecture.
 
-Commands:
-  gemini [query..]             Launch Gemini CLI  [default]
-  gemini mcp                   Manage MCP servers
-  gemini extensions <command>  Manage Gemini CLI extensions.  [aliases: extension]
-  gemini skills <command>      Manage agent skills.  [aliases: skill]
-  gemini hooks <command>       Manage Gemini CLI hooks.  [aliases: hook]
+## ⚔️ The ROME Architecture
+*   **Dictator (MCP):** Central authority for task orchestration and validation.
+*   **Legions (Workers):** Specialized execution units for code generation, monitoring, and suture.
+*   **Centurion (Orchestrator):** Multi-threaded campaign manager for parallel builds.
 
-Positionals:
-  query  Initial prompt. Runs in interactive mode by default; use -p/--prompt for non-interactive.
+## 🛡️ Features
+*   **Singleton Dispatcher:** Thread-safe `ROME::CommandDispatcher` with `std::jthread` processing.
+*   **JSON Integration:** Real-time command injection via `skyrim_commands.json`.
+*   **Engine Hooks:** Direct integration with `RE::Console` and `RE::Actor` for surgical execution.
+*   **Intelligence:** Sonic-reactive AI and threat radar dashboards are provided by external intelligence modules that integrate with ROME Core.
 
-Options:
-  -d, --debug                     Run in debug mode (open debug console with F12)  [boolean] [default: false]
-  -m, --model                     Model  [string]
-  -p, --prompt                    Run in non-interactive (headless) mode with the given prompt. Appended to input on stdin (if any).  [string]
-  -i, --prompt-interactive        Execute the provided prompt and continue in interactive mode  [string]
-  -s, --sandbox                   Run in sandbox?  [boolean]
-  -y, --yolo                      Automatically accept all actions (aka YOLO mode, see https://www.youtube.com/watch?v=xvFZjo5PgG0 for more details)?  [boolean] [default: false]
-      --approval-mode             Set the approval mode: default (prompt for approval), auto_edit (auto-approve edit tools), yolo (auto-approve all tools), plan (read-only mode)  [string] [choices: "default", "auto_edit", "yolo", "plan"]
-      --experimental-acp          Starts the agent in ACP mode  [boolean]
-      --allowed-mcp-server-names  Allowed MCP server names  [array]
-      --allowed-tools             Tools that are allowed to run without confirmation  [array]
-  -e, --extensions                A list of extensions to use. If not provided, all extensions are used.  [array]
-  -l, --list-extensions           List all available extensions and exit.  [boolean]
-  -r, --resume                    Resume a previous session. Use "latest" for most recent or index number (e.g. --resume 5)  [string]
-      --list-sessions             List available sessions for the current project and exit.  [boolean]
-      --delete-session            Delete a session by index number (use --list-sessions to see available sessions).  [string]
-      --include-directories       Additional directories to include in the workspace (comma-separated or multiple --include-directories)  [array]
-      --screen-reader             Enable screen reader mode for accessibility.  [boolean]
-  -o, --output-format             The format of the CLI output.  [string] [choices: "text", "json", "stream-json"]
-      --raw-output                Disable sanitization of model output (e.g. allow ANSI escape sequences). WARNING: This can be a security risk if the model output is untrusted.  [boolean]
-      --accept-raw-output-risk    Suppress the security warning when using --raw-output.  [boolean]
-  -v, --version                   Show version number  [boolean]
-  -h, --help                      Show help  [boolean]
+## 🛠️ Build & Deploy
+This project uses a specialized `msvc-wine` cross-compilation pipeline.
+
+### Prerequisites
+*   CMake 3.20+
+*   CommonLibSSE-NG
+*   nlohmann/json
+*   **MSVC-Wine Toolchain:** A configured cross-compilation environment (e.g., using `msvc-wine` or `MinGW-w64`) targeting Windows for SKSE64. Specific setup instructions for this environment are outside the scope of this README but are assumed to be present.
+
+### Compilation
+```bash
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make
+```
+
+## 📜 Imperial Decrees
+1.  **Surgical Precision:** All changes must be atomic and verified via the ROME protocol.
+2.  **Contextual Isolation:** Tasks are governed by specialized manifestos in `legions/TASK_ROME_ORCHESTRATION/`.
+3.  **Authority:** If a task becomes "Bloated" (>45s), it MUST be sub-divided into smaller logical units.
+
+---
+**"Rome wasn't built in a day, but it was built with total authority."**
+🕶️🗡️🏛️🔥🌑 Gemini CLI | Feb 22, 2026

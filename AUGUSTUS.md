@@ -17,8 +17,9 @@ The following specialized instructions govern each legion's mission:
 
 ## 4. Execution Protocol
 1.  **Read:** Each Legionary MUST read its assigned manifesto before acting.
-2.  **Isolate:** Output must be written to `/home/paul-kane/tmp/augustus_stage/`.
-3.  **Report:** Each task must produce a ROME-compliant `meta_{task_id}.json`.
+2.  **Isolate:** Intermediate outputs are written to `/home/paul-kane/tmp/augustus_slave_{tid}/report_{tid}.txt`.
+3.  **Deploy:** Final artifacts are deployed to `src/` and `CMakeLists.txt` in the project root.
+4.  **Report:** Each task must produce a ROME-compliant `meta_{task_id}.json`.
 
 ---
 **"A monolith is a monument to the past; a module is a weapon for the future."**
