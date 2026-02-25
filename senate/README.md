@@ -14,3 +14,7 @@ python3 senate/brain.py <sector_id> "<mission_prompt>"
 ```
 
 The brain resolves the sector manifesto, constructs an Imperial Prompt, and returns a single executable strike command.
+
+## MCP Tools
+
+- **`senate_query`** — Query the Senate for which architect sector handles a specific technical concern. Searches across all manifestos in `architects/` to find the most relevant context.

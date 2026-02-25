@@ -62,10 +62,17 @@ class LegionaryUI:
 
     def handle_bytes(self, b):
         try:
-            text = b.decode("utf-8", errors="ignore").lower()
-            if "thinking" in text: self.log(20, "Reasoning...")
-            elif "analyzing" in text: self.log(50, "Analyzing...")
-            elif "generating" in text: self.log(80, "Generating...")
+            text = b.decode("utf-8", errors="ignore")
+            text_lower = text.lower()
+            # Detect MCP tool calls in agent output (Gemini/Claude JSON streams)
+            if '"toolcall"' in text_lower or '"tool_use"' in text_lower or '"function_call"' in text_lower:
+                match = re.search(r'"name"\s*:\s*"(\w+)"', text)
+                if match:
+                    self.log(min(90, self.percent + 5), f"Calling {match.group(1)}...")
+                    return
+            if "thinking" in text_lower: self.log(20, "Reasoning...")
+            elif "analyzing" in text_lower: self.log(50, "Analyzing...")
+            elif "generating" in text_lower: self.log(80, "Generating...")
             elif self.percent < 95: self.log(min(95, self.percent + 1), "Working...")
         except: pass
 

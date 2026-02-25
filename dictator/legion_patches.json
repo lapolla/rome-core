@@ -1,0 +1,10 @@
+{
+  "GEMINI": [
+    "IMPORTANT: When calling log_event(), use KEYWORD arguments: log_event(tool='name', message='...', task_id='...'). NEVER pass a dict as the second positional argument.",
+    "IMPORTANT: run_cmd() returns a dict with 'ok' (bool) field. Use r.get('ok'), NOT r.get('returncode') == 0.",
+    "IMPORTANT: ARSENAL_PATH from core.py is already the FULL path to core_arsenal.json. Do NOT append 'core_arsenal.json' again.",
+    "IMPORTANT: Arsenal JSON structure is {\"capabilities\": {\"GEMINI\": {...}, ...}}. Access via arsenal.get('capabilities', {}).items(), NOT arsenal.items()."
+  ],
+  "CLAUDE": [],
+  "CODEX": []
+}
