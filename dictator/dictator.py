@@ -449,11 +449,37 @@ async def execute_legion(
 
     elapsed = _time.monotonic() - t0
     ok = r.get("ok", False)
-    log_event("execute_legion", task_id=task_id, status="ok" if ok else "error", duration_s=elapsed)
 
+    # Read manifest for usage + progress
+    usage = None
+    progress = []
+    manifest_path = task_dir / "manifest.json"
+    try:
+        if manifest_path.exists():
+            manifest = json.loads(manifest_path.read_text())
+            usage = manifest.get("usage")
+            progress = manifest.get("progress", [])
+    except Exception:
+        pass
+
+    log_event("execute_legion", task_id=task_id, status="ok" if ok else "error",
+              duration_s=elapsed, usage=usage)
+
+    # Return structured result with progress and usage
+    result = {
+        "ok": ok,
+        "task_id": task_id,
+        "capability": capability,
+        "elapsed_s": round(elapsed, 2),
+        "progress": progress,
+        "usage": usage,
+    }
     if ok:
-        return r.get("stdout", "")
-    return f"Legion Execution Failed: {r.get('message', r.get('stderr', ''))}"
+        result["output"] = r.get("stdout", "")
+    else:
+        result["error"] = r.get("message", r.get("stderr", ""))
+
+    return json.dumps(result, indent=2)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -734,12 +760,33 @@ async def execute_campaign(
 
     results = await asyncio.gather(*(run_task(t) for t in tasks))
 
+    # Aggregate usage from task manifests
+    total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+    has_usage = False
+    for t in tasks:
+        manifest_path = ROME_ROOT / "legions" / f"{campaign_id}_{t['id']}" / "manifest.json"
+        try:
+            if manifest_path.exists():
+                m = json.loads(manifest_path.read_text())
+                u = m.get("usage")
+                if u:
+                    has_usage = True
+                    total_usage["input_tokens"] += u.get("input_tokens", 0)
+                    total_usage["output_tokens"] += u.get("output_tokens", 0)
+                    total_usage["total_tokens"] += u.get("total_tokens", 0)
+                    if u.get("cost_usd") is not None:
+                        total_usage["cost_usd"] += u["cost_usd"]
+        except Exception:
+            pass
+
     elapsed = _time.monotonic() - t0
     log_event("execute_campaign", task_id=campaign_id, status="ok", duration_s=elapsed,
-              message=f"Completed {len(tasks)} tasks")
+              message=f"Completed {len(tasks)} tasks",
+              usage=total_usage if has_usage else None)
 
     report = {
         "campaign_id": campaign_id,
+        "total_usage": total_usage if has_usage else None,
         "results": {t['id']: r for t, r in zip(tasks, results)}
     }
     return json.dumps(report, indent=2)

@@ -23,7 +23,7 @@ from dictator.dictator import (
     execute_campaign,
     ROOT_DIR,
 )
-from legions.legion_wrapper import parse_rome_signals
+from legions.legion_wrapper import parse_rome_signals, parse_usage
 
 
 # ── run_cmd ────────────────────────────────────────────────────────────
@@ -147,3 +147,75 @@ def test_parse_rome_signals_invalid():
     """Pathological input shouldn't crash."""
     s = parse_rome_signals("[ROME_START]" * 1000)
     assert isinstance(s, dict)
+
+
+# ── parse_usage ───────────────────────────────────────────────────────
+
+def test_parse_usage_claude_json():
+    """Claude --output-format json shape."""
+    data = json.dumps({
+        "result": "hello world",
+        "total_cost_usd": 0.05,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_creation_input_tokens": 200,
+            "cache_read_input_tokens": 300,
+        },
+        "modelUsage": {
+            "claude-opus-4-6": {"inputTokens": 100, "outputTokens": 50}
+        },
+    })
+    text, usage = parse_usage(data)
+    assert text == "hello world"
+    assert usage["model"] == "claude-opus-4-6"
+    assert usage["input_tokens"] == 400  # 100 + 300 cache_read
+    assert usage["output_tokens"] == 50
+    assert usage["total_tokens"] == 650  # 100 + 300 + 200 + 50
+    assert usage["cost_usd"] == 0.05
+
+
+def test_parse_usage_gemini_json():
+    """Gemini --output-format json shape."""
+    data = json.dumps({
+        "response": "hello from gemini",
+        "stats": {
+            "models": {
+                "gemini-2.5-flash": {
+                    "tokens": {"input": 500, "candidates": 30, "total": 560}
+                }
+            }
+        },
+    })
+    text, usage = parse_usage(data)
+    assert text == "hello from gemini"
+    assert usage["model"] == "gemini-2.5-flash"
+    assert usage["input_tokens"] == 500
+    assert usage["output_tokens"] == 30
+    assert usage["total_tokens"] == 560
+    assert usage["cost_usd"] is None
+
+
+def test_parse_usage_raw_text():
+    """Non-JSON output returns original text and None usage."""
+    text, usage = parse_usage("just plain text output")
+    assert text == "just plain text output"
+    assert usage is None
+
+
+def test_parse_usage_empty():
+    text, usage = parse_usage("")
+    assert text == ""
+    assert usage is None
+
+
+def test_parse_usage_gemini_with_preamble():
+    """Gemini sometimes emits stderr lines before the JSON."""
+    raw = 'Loaded cached credentials.\nError during discovery for MCP server...' + json.dumps({
+        "response": "result",
+        "stats": {"models": {"gemini-3-flash": {"tokens": {"input": 10, "candidates": 5, "total": 15}}}}
+    })
+    text, usage = parse_usage(raw)
+    assert text == "result"
+    assert usage is not None
+    assert usage["model"] == "gemini-3-flash"

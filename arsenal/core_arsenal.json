@@ -2,14 +2,14 @@
   "capabilities": {
     "GEMINI": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["gemini", "--yolo", "-p"],
+      "args": ["gemini", "--yolo", "-p", "--output-format", "json"],
       "timeout": 300,
       "min_version": "2.5",
       "_note": "Google Gemini CLI"
     },
     "CLAUDE": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["claude", "--dangerously-skip-permissions", "-p"],
+      "args": ["claude", "--dangerously-skip-permissions", "-p", "--output-format", "json"],
       "timeout": 300,
       "min_version": "1.0",
       "_note": "Anthropic Claude Code CLI"

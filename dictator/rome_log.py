@@ -35,6 +35,7 @@ def log_event(
     status: str = "ok",
     duration_s: float = 0.0,
     message: str = "",
+    usage: dict | None = None,
 ):
     """Append one JSON line to the ROME log."""
     try:
@@ -51,6 +52,8 @@ def log_event(
             "duration_s": round(duration_s, 3),
             "message": message[:500],
         }
+        if usage:
+            entry["usage"] = usage
         with open(LOG_FILE, "a") as f:
             f.write(json.dumps(entry) + "\n")
     except Exception:
