@@ -3,32 +3,44 @@
     "GEMINI": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
       "args": ["gemini", "--yolo", "-p"],
-      "timeout": 300
+      "timeout": 300,
+      "min_version": "2.5",
+      "_note": "Google Gemini CLI"
     },
     "CLAUDE": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
       "args": ["claude", "--dangerously-skip-permissions", "-p"],
-      "timeout": 300
+      "timeout": 300,
+      "min_version": "1.0",
+      "_note": "Anthropic Claude Code CLI"
     },
     "OPENCODE": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
       "args": ["opencode", "run"],
-      "timeout": 120
+      "timeout": 120,
+      "min_version": "0.1",
+      "_note": "Opencode CLI (unreliable)"
     },
     "CODEX": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
       "args": ["codex", "exec", "--full-auto", "--skip-git-repo-check"],
-      "timeout": 120
+      "timeout": 120,
+      "min_version": "0.1",
+      "_note": "OpenAI Codex CLI"
     },
     "MCP_TOOL_CLIENT": {
       "exec": "python3",
       "args": ["/home/paul-kane/projects/rome-core/dictator/mcp_client_tool.py"],
-      "timeout": 120
+      "timeout": 120,
+      "min_version": "0.1",
+      "_note": "Internal MCP tool client"
     },
     "SAFE_SHELL": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
       "args": ["bash", "-c"],
-      "timeout": 60
+      "timeout": 60,
+      "min_version": "5.0",
+      "_note": "Bash shell wrapper"
     }
   },
   "protocol_version": "1.0"

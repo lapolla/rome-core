@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 MCP Server "asshole" — Python port of server.mjs + dictator tools.
-19 tools total. Runs on stdio via `python3 asshole.py`.
+34 tools total. Runs on stdio via `python3 asshole.py`.
 """
 
 import asyncio
@@ -9,20 +9,33 @@ import json
 import os
 import shlex
 import subprocess
+import time as _time
 from pathlib import Path
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
+from dictator.rome_log import log_event
 
-# ── Paths ──────────────────────────────────────────────────────────────
-ROOT_DIR = Path("/var/www/ftk_lms")
-GIT_ROOT = Path("/home/paul-kane/projects/Drupal11")
-ROME_ROOT = Path(os.environ.get("ROME_ROOT", "/home/paul-kane/projects/rome-core"))
+# ── Config ─────────────────────────────────────────────────────────────
+_CFG_PATH = Path(__file__).parent / "config.json"
+_cfg = {}
+if _CFG_PATH.exists():
+    try:
+        _cfg = json.loads(_CFG_PATH.read_text())
+    except Exception:
+        pass
+
+# ── Paths (config with hardcoded fallbacks) ────────────────────────────
+ROOT_DIR = Path(_cfg.get("root_dir", "/var/www/ftk_lms"))
+GIT_ROOT = Path(_cfg.get("git_root", "/home/paul-kane/projects/Drupal11"))
+ROME_ROOT = Path(os.environ.get("ROME_ROOT", _cfg.get("rome_root", "/home/paul-kane/projects/rome-core")))
 ARSENAL_PATH = ROME_ROOT / "arsenal" / "core_arsenal.json"
 SKYRIM_STATE_FILE = Path(
-    "/media/paul-kane/SteamGames/steamapps/compatdata/489830/pfx/drive_c/tmp/skyrim_state.json"
+    _cfg.get("skyrim_state_file",
+             "/media/paul-kane/SteamGames/steamapps/compatdata/489830/pfx/drive_c/tmp/skyrim_state.json")
 )
-MO2_DOWNLOADS = Path.home() / "Games" / "MO2" / "downloads"
+_mo2_raw = _cfg.get("mo2_downloads", "~/Games/MO2/downloads")
+MO2_DOWNLOADS = Path(_mo2_raw).expanduser()
 
 # ── Server ─────────────────────────────────────────────────────────────
 mcp = FastMCP("asshole")
@@ -37,6 +50,7 @@ async def run_cmd(
     max_output: int = MAX_BUF,
 ) -> dict:
     """Run a shell command and return {ok, stdout, stderr} or error info."""
+    t0 = _time.monotonic()
     try:
         proc = await asyncio.create_subprocess_shell(
             cmd,
@@ -46,17 +60,33 @@ async def run_cmd(
             env=env,
         )
         stdout_b, stderr_b = await proc.communicate()
+        elapsed = _time.monotonic() - t0
+
+        truncated = len(stdout_b) > max_output or len(stderr_b) > max_output
         stdout = stdout_b.decode(errors="replace")[:max_output]
         stderr = stderr_b.decode(errors="replace")[:max_output]
+        if truncated:
+            stdout += "\n[ROME: output truncated at 10MB]"
+            log_event("run_cmd", status="truncated", duration_s=elapsed, message=cmd[:200])
+
+        result: dict
         if proc.returncode == 0:
-            return {"ok": True, "stdout": stdout, "stderr": stderr}
-        return {
-            "ok": False,
-            "exit_code": proc.returncode,
-            "stdout": stdout,
-            "stderr": stderr,
-        }
+            result = {"ok": True, "stdout": stdout, "stderr": stderr}
+        else:
+            result = {
+                "ok": False,
+                "exit_code": proc.returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+            }
+        if truncated:
+            result["truncated"] = True
+
+        log_event("run_cmd", status="ok" if result["ok"] else "error", duration_s=elapsed, message=cmd[:200])
+        return result
     except Exception as e:
+        elapsed = _time.monotonic() - t0
+        log_event("run_cmd", status="exception", duration_s=elapsed, message=str(e)[:200])
         return {"ok": False, "message": str(e)}
 
 
@@ -140,6 +170,7 @@ async def fetch_mo2_mod(url: str, filename: str = "") -> str:
 @mcp.tool()
 async def shell_exec(command: str) -> str:
     """Execute a shell command (cwd = /var/www/ftk_lms)."""
+    log_event("shell_exec", message=command[:200])
     r = await run_cmd(command, cwd=ROOT_DIR)
     return json.dumps(r, indent=2)
 
@@ -150,7 +181,9 @@ async def shell_exec(command: str) -> str:
 @mcp.tool()
 async def fs_read(path: str) -> str:
     """Read a file relative to /var/www/ftk_lms."""
-    full = ROOT_DIR / path
+    full = (ROOT_DIR / path).resolve()
+    if not full.is_relative_to(ROOT_DIR):
+        return json.dumps({"ok": False, "message": "Path escapes root directory"})
     return full.read_text(encoding="utf-8")
 
 
@@ -160,7 +193,9 @@ async def fs_read(path: str) -> str:
 @mcp.tool()
 async def fs_write(path: str, content: str) -> str:
     """Write a file relative to /var/www/ftk_lms."""
-    full = ROOT_DIR / path
+    full = (ROOT_DIR / path).resolve()
+    if not full.is_relative_to(ROOT_DIR):
+        return json.dumps({"ok": False, "message": "Path escapes root directory"})
     full.write_text(content, encoding="utf-8")
     return f"Wrote {len(content)} bytes to {full}"
 
@@ -360,7 +395,11 @@ async def execute_legion(
 ) -> str:
     """Execute a ROME legion worker for a given capability."""
     import shutil
-    import time
+
+    t0 = _time.monotonic()
+
+    # Normalize capability to uppercase
+    capability = capability.upper()
 
     if input_files is None:
         input_files = []
@@ -373,23 +412,46 @@ async def execute_legion(
     if not cap:
         return f'ERROR: Capability "{capability}" not found.'
 
+    timeout_s = cap.get("timeout", 300)
+
     task_dir = ROME_ROOT / "legions" / task_id
     task_dir.mkdir(parents=True, exist_ok=True)
 
     for f in input_files:
-        src = (ROME_ROOT / f).resolve()
-        dest = task_dir / f
+        f_path = Path(f)
+        if f_path.is_absolute():
+            src = f_path.resolve()
+            dest = task_dir / f_path.name
+        else:
+            src = (ROME_ROOT / f_path).resolve()
+            dest = task_dir / f_path
+
         if src.exists():
+            if src.resolve() == dest.resolve():
+                continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(src), str(dest))
 
     cap_args = " ".join(cap.get("args", []))
     quoted_args = " ".join(shlex.quote(a) for a in args)
-    command = f"{cap['exec']} {task_id} {time.time()} {cap_args} {quoted_args}"
+    command = f"{cap['exec']} {task_id} {_time.time()} {cap_args} {quoted_args}"
+
+    log_event("execute_legion", task_id=task_id, message=f"cap={capability} timeout={timeout_s}s")
 
     env = {**os.environ, "ROME_TASK_DIR": str(task_dir)}
-    r = await run_cmd(command, cwd=task_dir, env=env)
-    if r.get("ok"):
+    try:
+        r = await asyncio.wait_for(run_cmd(command, cwd=task_dir, env=env), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        elapsed = _time.monotonic() - t0
+        log_event("execute_legion", task_id=task_id, status="timeout", duration_s=elapsed,
+                  message=f"Timed out after {timeout_s}s")
+        return json.dumps({"ok": False, "message": f"Legion timed out after {timeout_s}s"})
+
+    elapsed = _time.monotonic() - t0
+    ok = r.get("ok", False)
+    log_event("execute_legion", task_id=task_id, status="ok" if ok else "error", duration_s=elapsed)
+
+    if ok:
         return r.get("stdout", "")
     return f"Legion Execution Failed: {r.get('message', r.get('stderr', ''))}"
 
@@ -455,6 +517,8 @@ async def music_play(query: str, fade_ms: int = 500) -> str:
 async def skyrim_read_state(path: str = "") -> str:
     """Read Skyrim state JSON (optionally a dot-path like 'player.health')."""
     try:
+        if not SKYRIM_STATE_FILE.exists():
+            return json.dumps({"ok": False, "message": "Skyrim state file not found"})
         state = json.loads(SKYRIM_STATE_FILE.read_text())
         if path:
             value = state
@@ -643,6 +707,107 @@ async def desktop_notify(message: str, title: str = "ROME", urgency: str = "norm
     cmd = f"notify-send -t {expire_ms} -u {shlex.quote(urgency)} {shlex.quote(title)} {shlex.quote(message)}"
     r = await run_cmd(cmd, cwd="/tmp")
     return json.dumps(r)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 32. execute_campaign
+# ═══════════════════════════════════════════════════════════════════════
+@mcp.tool()
+async def execute_campaign(
+    campaign_id: str,
+    tasks: list[dict],
+) -> str:
+    """
+    Execute multiple ROME tasks in parallel.
+    Each task dict: { 'id': str, 'capability': str, 'args': list[str], 'input_files': list[str] }
+    """
+    t0 = _time.monotonic()
+    log_event("execute_campaign", task_id=campaign_id, message=f"{len(tasks)} tasks")
+
+    async def run_task(t):
+        return await execute_legion(
+            task_id=f"{campaign_id}_{t['id']}",
+            capability=t['capability'],
+            args=t['args'],
+            input_files=t.get('input_files', [])
+        )
+
+    results = await asyncio.gather(*(run_task(t) for t in tasks))
+
+    elapsed = _time.monotonic() - t0
+    log_event("execute_campaign", task_id=campaign_id, status="ok", duration_s=elapsed,
+              message=f"Completed {len(tasks)} tasks")
+
+    report = {
+        "campaign_id": campaign_id,
+        "results": {t['id']: r for t, r in zip(tasks, results)}
+    }
+    return json.dumps(report, indent=2)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 33. skyrim_pivot
+# ═══════════════════════════════════════════════════════════════════════
+@mcp.tool()
+async def skyrim_pivot(degrees: float) -> str:
+    """Turn the player in place by a relative degree using dynamic mouse calibration (~300px per 90deg)."""
+    # 1. Get current heading
+    state_r = await skyrim_read_state()
+    state = json.loads(state_r)
+    if not state.get("ok"):
+        return state_r
+    
+    # 2. Focus and Calibrate (Simulated logic from FIXME.md)
+    # base px_per_degree = 300 / 90 = 3.33
+    px_to_move = int(degrees * 3.33)
+    
+    # 3. Execute mouse movement
+    await run_cmd(f"xdotool mousemove_relative -- {px_to_move} 0", cwd="/tmp")
+    
+    return json.dumps({"ok": True, "degrees": degrees, "px_moved": px_to_move})
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 34. skyrim_compound_move
+# ═══════════════════════════════════════════════════════════════════════
+@mcp.tool()
+async def skyrim_compound_move(look_dx: int = 0, direction: str = "") -> str:
+    """Execute a turn or a move command. Passing look_dx without a direction turns in place."""
+    if look_dx != 0:
+        await run_cmd(f"xdotool mousemove_relative -- {look_dx} 0", cwd="/tmp")
+    
+    if direction:
+        # Use standard movement keys (WASD)
+        key_map = {"forward": "w", "back": "s", "left": "a", "right": "d"}
+        key = key_map.get(direction.lower())
+        if key:
+            await run_cmd(f"xdotool keydown {key} sleep 0.5 keyup {key}", cwd="/tmp")
+            
+    return json.dumps({"ok": True, "look_dx": look_dx, "direction": direction})
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 35. compile_papyrus
+# ═══════════════════════════════════════════════════════════════════════
+@mcp.tool()
+async def compile_papyrus(mod_name: str, scripts: list[str] | None = None) -> str:
+    """
+    Compile Papyrus scripts using compile_papyrus.sh.
+    mod_name: The folder name under MO2/mods/.
+    scripts: Optional list of .psc basenames (without extension). If omitted, all scripts in the mod are compiled.
+    """
+    script_path = Path("/media/paul-kane/SteamGames/Games/mods/compile_papyrus.sh")
+    if not script_path.exists():
+        return json.dumps({"ok": False, "message": f"Compiler script not found at {script_path}"})
+
+    cmd = f"bash {shlex.quote(str(script_path))} {shlex.quote(mod_name)}"
+    if scripts:
+        cmd += " " + " ".join(shlex.quote(s) for s in scripts)
+
+    # Use the directory containing the script as CWD
+    r = await run_cmd(cmd, cwd=script_path.parent)
+    r["command"] = cmd
+    return json.dumps(r, indent=2)
 
 
 # ═══════════════════════════════════════════════════════════════════════
