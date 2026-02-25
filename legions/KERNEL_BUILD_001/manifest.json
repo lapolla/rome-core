@@ -1,0 +1,17 @@
+{
+  "rome_v": "2.0",
+  "task_id": "KERNEL_BUILD_001",
+  "status": "FAILED",
+  "metadata": {},
+  "usage": null,
+  "artifacts": [
+    {
+      "path": "/home/paul-kane/projects/rome-core/legions/KERNEL_BUILD_001/report_KERNEL_BUILD_001.txt",
+      "type": "raw"
+    }
+  ],
+  "runtime": {
+    "elapsed_s": 0.23297715187072754,
+    "exit_code": 1
+  }
+}

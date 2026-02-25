@@ -1,0 +1,17 @@
+{
+  "rome_v": "2.0",
+  "task_id": "KERNEL_GIT_CLONE",
+  "status": "SUCCESS",
+  "metadata": {},
+  "usage": null,
+  "artifacts": [
+    {
+      "path": "/home/paul-kane/projects/rome-core/legions/KERNEL_GIT_CLONE/report_KERNEL_GIT_CLONE.txt",
+      "type": "raw"
+    }
+  ],
+  "runtime": {
+    "elapsed_s": 70.06126594543457,
+    "exit_code": 0
+  }
+}

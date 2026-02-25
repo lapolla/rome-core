@@ -3,5 +3,17 @@
   "git_root": "/home/paul-kane/projects/Drupal11",
   "rome_root": "/home/paul-kane/projects/rome-core",
   "skyrim_state_file": "/media/paul-kane/SteamGames/steamapps/compatdata/489830/pfx/drive_c/tmp/skyrim_state.json",
-  "mo2_downloads": "~/Games/MO2/downloads"
+  "mo2_downloads": "~/Games/MO2/downloads",
+  "drupal_modules_src": "/home/paul-kane/projects/Drupal11/modules/custom/",
+  "drupal_modules_dest": "/var/www/ftk_lms/web/modules/custom/",
+  "drupal_themes_src": "/home/paul-kane/projects/Drupal11/themes/custom/",
+  "drupal_themes_dest": "/var/www/ftk_lms/web/themes/custom/",
+  "skyrim_game_dir": "/media/paul-kane/SteamGames/Games/SkyrimSE/",
+  "mo2_mods_dir": "/media/paul-kane/SteamGames/Games/mods/",
+  "papyrus_compiler": "/media/paul-kane/SteamGames/Games/mods/compile_papyrus.sh",
+  "skyrim_crash_logs": "/media/paul-kane/SteamGames/steamapps/compatdata/489830/pfx/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition/SKSE/",
+  "legion_wrapper": "legions/legion_wrapper.py",
+  "gc_max_age_days": 7,
+  "gc_keep_min": 50,
+  "max_output_bytes": 10485760
 }

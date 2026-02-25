@@ -1,38 +1,73 @@
-Not enough arguments following: p
-Usage: gemini [options] [command]
+#include "CommandDispatcher.h"
+#include "CommandHooks.h"
+#include <iostream>
+#include "SKSE/SKSE.h"
 
-Gemini CLI - Defaults to interactive mode. Use -p/--prompt for non-interactive (headless) mode.
+namespace ROME {
 
-Commands:
-  gemini [query..]             Launch Gemini CLI  [default]
-  gemini mcp                   Manage MCP servers
-  gemini extensions <command>  Manage Gemini CLI extensions.  [aliases: extension]
-  gemini skills <command>      Manage agent skills.  [aliases: skill]
-  gemini hooks <command>       Manage Gemini CLI hooks.  [aliases: hook]
+    CommandDispatcher& CommandDispatcher::Get() {
+        static CommandDispatcher instance;
+        return instance;
+    }
 
-Positionals:
-  query  Initial prompt. Runs in interactive mode by default; use -p/--prompt for non-interactive.
+    CommandDispatcher::CommandDispatcher() : m_running(false) {}
 
-Options:
-  -d, --debug                     Run in debug mode (open debug console with F12)  [boolean] [default: false]
-  -m, --model                     Model  [string]
-  -p, --prompt                    Run in non-interactive (headless) mode with the given prompt. Appended to input on stdin (if any).  [string]
-  -i, --prompt-interactive        Execute the provided prompt and continue in interactive mode  [string]
-  -s, --sandbox                   Run in sandbox?  [boolean]
-  -y, --yolo                      Automatically accept all actions (aka YOLO mode, see https://www.youtube.com/watch?v=xvFZjo5PgG0 for more details)?  [boolean] [default: false]
-      --approval-mode             Set the approval mode: default (prompt for approval), auto_edit (auto-approve edit tools), yolo (auto-approve all tools), plan (read-only mode)  [string] [choices: "default", "auto_edit", "yolo", "plan"]
-      --experimental-acp          Starts the agent in ACP mode  [boolean]
-      --allowed-mcp-server-names  Allowed MCP server names  [array]
-      --allowed-tools             Tools that are allowed to run without confirmation  [array]
-  -e, --extensions                A list of extensions to use. If not provided, all extensions are used.  [array]
-  -l, --list-extensions           List all available extensions and exit.  [boolean]
-  -r, --resume                    Resume a previous session. Use "latest" for most recent or index number (e.g. --resume 5)  [string]
-      --list-sessions             List available sessions for the current project and exit.  [boolean]
-      --delete-session            Delete a session by index number (use --list-sessions to see available sessions).  [string]
-      --include-directories       Additional directories to include in the workspace (comma-separated or multiple --include-directories)  [array]
-      --screen-reader             Enable screen reader mode for accessibility.  [boolean]
-  -o, --output-format             The format of the CLI output.  [string] [choices: "text", "json", "stream-json"]
-      --raw-output                Disable sanitization of model output (e.g. allow ANSI escape sequences). WARNING: This can be a security risk if the model output is untrusted.  [boolean]
-      --accept-raw-output-risk    Suppress the security warning when using --raw-output.  [boolean]
-  -v, --version                   Show version number  [boolean]
-  -h, --help                      Show help  [boolean]
+    CommandDispatcher::~CommandDispatcher() {
+        Stop();
+    }
+
+    void CommandDispatcher::Push(const Command& cmd) {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_queue.push_back(cmd);
+        }
+        m_cv.notify_one();
+    }
+
+    void CommandDispatcher::Start() {
+        if (!m_running) {
+            m_running = true;
+            m_worker = std::jthread(&CommandDispatcher::Process, this);
+        }
+    }
+
+    void CommandDispatcher::Stop() {
+        m_running = false;
+        m_cv.notify_all();
+        if (m_worker.joinable()) {
+            m_worker.join();
+        }
+    }
+
+    void CommandDispatcher::Process() {
+        while (m_running) {
+            Command cmd;
+            {
+                std::unique_lock<std::mutex> lock(m_mutex);
+                m_cv.wait(lock, [this] { return !m_queue.empty() || !m_running; });
+
+                if (!m_running && m_queue.empty()) {
+                    break;
+                }
+
+                cmd = std::move(m_queue.front());
+                m_queue.pop_front();
+            }
+
+            // Real Imperial Strike: Execute through SKSE Task Queue
+            SKSE::GetTaskInterface()->AddTask([cmd]() {
+                switch (cmd.type) {
+                    case Command::Type::Raw:
+                        ExecuteRaw(cmd.target);
+                        break;
+                    case Command::Type::Kill:
+                        ExecuteKill(cmd.target);
+                        break;
+                    default:
+                        break;
+                }
+            });
+        }
+    }
+
+} // namespace ROME

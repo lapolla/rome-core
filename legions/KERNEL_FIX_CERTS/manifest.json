@@ -1,0 +1,17 @@
+{
+  "rome_v": "2.0",
+  "task_id": "KERNEL_FIX_CERTS",
+  "status": "SUCCESS",
+  "metadata": {},
+  "usage": null,
+  "artifacts": [
+    {
+      "path": "/home/paul-kane/projects/rome-core/legions/KERNEL_FIX_CERTS/report_KERNEL_FIX_CERTS.txt",
+      "type": "raw"
+    }
+  ],
+  "runtime": {
+    "elapsed_s": 0.22564196586608887,
+    "exit_code": 0
+  }
+}

@@ -1,38 +1,44 @@
-Not enough arguments following: p
-Usage: gemini [options] [command]
+cmake_minimum_required(VERSION 3.20)
+project(ROME_Core VERSION 1.0.0)
 
-Gemini CLI - Defaults to interactive mode. Use -p/--prompt for non-interactive (headless) mode.
+# 1. Compilation Settings
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-Commands:
-  gemini [query..]             Launch Gemini CLI  [default]
-  gemini mcp                   Manage MCP servers
-  gemini extensions <command>  Manage Gemini CLI extensions.  [aliases: extension]
-  gemini skills <command>      Manage agent skills.  [aliases: skill]
-  gemini hooks <command>       Manage Gemini CLI hooks.  [aliases: hook]
+# 2. Options and Flags
+if(MSVC)
+    add_compile_options(/W4 /WX /EHsc /permissive- /Zc:preprocessor)
+else()
+    add_compile_options(-Wall -Wextra -Werror)
+endif()
 
-Positionals:
-  query  Initial prompt. Runs in interactive mode by default; use -p/--prompt for non-interactive.
+# 3. Dependencies
+# Assume CommonLibSSE-NG and nlohmann_json are available in include paths
+# or provided via find_package in a full SKSE environment.
+# find_package(CommonLibSSE-NG REQUIRED)
+# find_package(nlohmann_json REQUIRED)
 
-Options:
-  -d, --debug                     Run in debug mode (open debug console with F12)  [boolean] [default: false]
-  -m, --model                     Model  [string]
-  -p, --prompt                    Run in non-interactive (headless) mode with the given prompt. Appended to input on stdin (if any).  [string]
-  -i, --prompt-interactive        Execute the provided prompt and continue in interactive mode  [string]
-  -s, --sandbox                   Run in sandbox?  [boolean]
-  -y, --yolo                      Automatically accept all actions (aka YOLO mode, see https://www.youtube.com/watch?v=xvFZjo5PgG0 for more details)?  [boolean] [default: false]
-      --approval-mode             Set the approval mode: default (prompt for approval), auto_edit (auto-approve edit tools), yolo (auto-approve all tools), plan (read-only mode)  [string] [choices: "default", "auto_edit", "yolo", "plan"]
-      --experimental-acp          Starts the agent in ACP mode  [boolean]
-      --allowed-mcp-server-names  Allowed MCP server names  [array]
-      --allowed-tools             Tools that are allowed to run without confirmation  [array]
-  -e, --extensions                A list of extensions to use. If not provided, all extensions are used.  [array]
-  -l, --list-extensions           List all available extensions and exit.  [boolean]
-  -r, --resume                    Resume a previous session. Use "latest" for most recent or index number (e.g. --resume 5)  [string]
-      --list-sessions             List available sessions for the current project and exit.  [boolean]
-      --delete-session            Delete a session by index number (use --list-sessions to see available sessions).  [string]
-      --include-directories       Additional directories to include in the workspace (comma-separated or multiple --include-directories)  [array]
-      --screen-reader             Enable screen reader mode for accessibility.  [boolean]
-  -o, --output-format             The format of the CLI output.  [string] [choices: "text", "json", "stream-json"]
-      --raw-output                Disable sanitization of model output (e.g. allow ANSI escape sequences). WARNING: This can be a security risk if the model output is untrusted.  [boolean]
-      --accept-raw-output-risk    Suppress the security warning when using --raw-output.  [boolean]
-  -v, --version                   Show version number  [boolean]
-  -h, --help                      Show help  [boolean]
+# 4. Target Definition
+add_library(${PROJECT_NAME} SHARED
+    src/CommandDispatcher.cpp
+    src/CommandHooks.cpp
+    src/JsonProcessor.cpp
+)
+
+target_include_directories(${PROJECT_NAME} PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+# Link dependencies (Placeholder)
+# target_link_libraries(${PROJECT_NAME} PRIVATE CommonLibSSE-NG::CommonLibSSE-NG nlohmann_json::nlohmann_json)
+
+# 5. Post-Build
+# Copy to SKSE Plugins directory (Placeholder)
+# add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+#     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+#     $<TARGET_FILE:${PROJECT_NAME}>
+#     "${SKSE_PLUGINS_PATH}/${PROJECT_NAME}.dll"
+# )
+
+message(STATUS "ROME Core configured for build.")

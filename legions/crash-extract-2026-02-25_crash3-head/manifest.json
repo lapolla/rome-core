@@ -1,0 +1,24 @@
+{
+  "rome_v": "2.0",
+  "task_id": "crash-extract-2026-02-25_crash3-head",
+  "status": "SUCCESS",
+  "metadata": {},
+  "usage": null,
+  "progress": [
+    "0% + [0.0s] Engaged (V2.0).",
+    "0% x [0.2s] Awaiting thought...",
+    "1% * [0.2s] Working...",
+    "2% . [0.2s] Working...",
+    "100% o [0.2s] Mission complete."
+  ],
+  "artifacts": [
+    {
+      "path": "/home/paul-kane/projects/rome-core/legions/crash-extract-2026-02-25_crash3-head/report_crash-extract-2026-02-25_crash3-head.txt",
+      "type": "raw"
+    }
+  ],
+  "runtime": {
+    "elapsed_s": 0.23295187950134277,
+    "exit_code": 0
+  }
+}
