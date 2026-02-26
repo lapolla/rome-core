@@ -3,6 +3,7 @@
 import collections
 import json
 import os
+import time as _time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -257,3 +258,30 @@ async def senate_query(question: str) -> str:
                 continue
 
     return json.dumps({"ok": True, "question": question, "matches": matches}, indent=2)
+
+
+@mcp.tool()
+async def senate_brain(sector_id: int, mission: str) -> str:
+    """Spawn a Senate brain — binds an LLM soul to a sector manifesto and executes a mission."""
+    manifesto_path = ROME_ROOT / "senate" / "architects" / f"T{sector_id}.md"
+    if not manifesto_path.exists():
+        return json.dumps({"ok": False, "error": f"Sector T{sector_id} has no manifesto."})
+
+    manifesto = manifesto_path.read_text(encoding="utf-8")
+
+    imperial_prompt = (
+        f"YOU ARE THE ARCHITECT FOR ROME SECTOR {sector_id}.\n"
+        f"YOUR MANIFESTO:\n{manifesto}\n\n"
+        f"YOUR MISSION:\n{mission}\n\n"
+        "Analyze the mission in the context of your sector's manifesto. "
+        "Provide a concrete action plan or answer. Be specific and actionable."
+    )
+
+    from dictator.tools_legion import execute_legion
+    task_id = f"senate_T{sector_id}_{int(_time.time())}"
+    result_json = await execute_legion(
+        task_id=task_id,
+        capability="GEMINI",
+        args=[imperial_prompt],
+    )
+    return result_json
