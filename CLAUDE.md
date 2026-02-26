@@ -1,4 +1,4 @@
-# ROME Core — Imperial Directives (v2.2)
+# ROME Core — Imperial Directives (v2.3)
 
 ## Project
 SKSE64 command dispatch framework for Skyrim SE, with a modular Python MCP server (Dictator), worker legion scripts, and a Senate architecture brain.
@@ -13,6 +13,7 @@ SKSE64 command dispatch framework for Skyrim SE, with a modular Python MCP serve
 - **`arsenal/core_arsenal.json`** — Capability registry defining agent CLIs, args, and timeouts.
 - **`senate/`** — brain.py (soul spawner) + architects/ (sector manifestos).
 - **`tests/`** — pytest suite covering tools, signals, and usage parsing.
+- **CENTURION Hierarchy** — Emperor (User) > Dictator (any LLM) > Centurion (any LLM) > Legionnaires (any LLM).
 
 ## Build & OS
 - **OS**: Linux (Ubuntu 22.04+) with wine/proton for SKSE/Skyrim interaction.
@@ -31,7 +32,7 @@ Exposes 47 tools across 10 modules:
 - **`tools_stats`**: rome_tail, rome_costs, rome_health, rome_find, senate_query, senate_brain
 - **`tools_prefect`**: execute_prefect
 
-## ROME Protocol Rules (v2.2)
+## ROME Protocol Rules (v2.3)
 1. **Atomic Changes**: Surgical commits, one concern per commit.
 2. **Sub-division**: If a task exceeds 45s, divide into smaller logical units.
 3. **Manifesto Compliance**: All Legion tasks must be governed by manifestos in `legions/TASK_*/`.
@@ -45,6 +46,7 @@ Exposes 47 tools across 10 modules:
 - **Campaign Error Isolation**: `execute_campaign` uses `return_exceptions=True` for robust parallel execution.
 - **Usage Aggregation**: Real-time extraction and aggregation of token/cost metrics from Claude/Gemini JSON.
 - **Auto Summary**: Legion and Campaign reports include concise one-line status summaries.
+- **Centurion Hierarchy**: ROME v3 nested orchestration — Centurion capability dispatches CODEX/OPENCODE as Legionnaires via shell commands within its session.
 
 ## Prefect Agents
 - **Autonomous Agents**: `execute_prefect` provides domain-scoped (drupal, skyrim, git, investigate, full) autonomous control.

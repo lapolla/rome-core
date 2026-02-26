@@ -13,6 +13,7 @@
 - [x] Codex sandbox sync — auto-copies /tmp outputs and modified input_files back after CODEX runs (Phase 21)
 - [x] Prefect enforcement hardened — pre-flight tool declaration + violations now mark task FAILED (not just warning)
 - [x] Delegation heuristics — new `recommend_capability` MCP tool with keyword/volume scoring (GEMINI vs CODEX vs SAFE_SHELL)
+- [x] ROME v3 Centurion hierarchy — CENTURION capability in arsenal, prompt patch, recommend_capability heuristics
 
 ## Open
 - [ ] Prefect sandboxing is still prompt-level — true MCP-level tool filtering not possible with gemini CLI dispatch

@@ -7,6 +7,13 @@
       "min_version": "2.5",
       "_note": "Google Gemini CLI — -p must be last so user prompt follows it"
     },
+    "CENTURION": {
+      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
+      "args": ["gemini", "--yolo", "--output-format", "json", "-p"],
+      "timeout": 600,
+      "min_version": "2.5",
+      "_note": "Middle-manager — dispatches CODEX/OPENCODE as Legionnaires"
+    },
     "CLAUDE": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
       "args": ["claude", "--dangerously-skip-permissions", "--output-format", "json", "-p"],

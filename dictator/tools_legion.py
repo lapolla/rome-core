@@ -404,8 +404,10 @@ async def recommend_capability(task_description: str) -> str:
     """Recommend the best Legion capability based on task heuristics."""
     import re
     desc = task_description.lower()
+    word_count = len(desc.split())
 
     kw_gemini = ["review", "analyze", "security", "architect", "complex", "audit", "refactor", "design"]
+    kw_centurion = ["multi-step", "complex", "review and fix", "analyze and edit", "refactor across"]
     kw_codex = ["fix", "implement", "update", "write", "add", "small", "patch", "rename"]
     kw_shell = ["grep", "build", "test", "find", "run", "execute", "shell", "bash", "compile", "move", "copy", "delete"]
 
@@ -415,23 +417,26 @@ async def recommend_capability(task_description: str) -> str:
     line_count = int(lines_match.group(1)) if lines_match else 0
 
     sg = sum(1 for k in kw_gemini if k in desc)
+    scen = sum(1 for k in kw_centurion if k in desc)
     sc = sum(1 for k in kw_codex if k in desc)
     ss = sum(1 for k in kw_shell if k in desc)
 
     if file_count > 10 or line_count > 1000:
         sg += 3
 
-    if ss > sg and ss > sc:
+    if ss > sg and ss > scen and ss > sc:
         rec, reason = "SAFE_SHELL", "Task dominated by execution/search/build operations."
-    elif sg >= sc:
+    elif sg >= scen and sg >= sc and word_count <= 50:
         rec, reason = "GEMINI", "High reasoning or large context requirements detected."
+    elif scen >= sc or word_count > 50:
+        rec, reason = "CENTURION", "Multi-step complex task requiring orchestrator oversight."
     else:
         rec, reason = "CODEX", "Focused implementation or small fix with moderate context."
 
     return json.dumps({
         "recommendation": rec,
         "reasoning": reason,
-        "scores": {"gemini": sg, "codex": sc, "shell": ss},
+        "scores": {"gemini": sg, "centurion": scen, "codex": sc, "shell": ss},
     }, indent=2)
 
 
