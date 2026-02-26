@@ -9,3 +9,9 @@ report_*.txt
 meta_*.json
 rome_slave_*/
 /home/paul-kane/tmp/
+legions/*/
+!legions/legion_wrapper.py
+!legions/centurion.py
+legions/.cache/
+legions/*_report.json
+logs/
