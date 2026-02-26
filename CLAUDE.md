@@ -19,16 +19,16 @@ SKSE64 command dispatch framework for Skyrim SE, with a modular Python MCP serve
 - **Build**: SKSE plugin cross-compiled via msvc-wine targeting Windows (CMake 3.20+, CommonLibSSE-NG).
 
 ## MCP Server (Asshole)
-Exposes 44 tools across 10 modules:
+Exposes 47 tools across 10 modules:
 - **`tools_fs`**: shell_exec, fs_read, fs_write, list_directory, read_anywhere, write_anywhere
 - **`tools_git`**: git_status, git_diff, git_commit, git_push
 - **`tools_drupal`**: rsync_ftk_modules, drush_run, drupal_fj_run
-- **`tools_legion`**: execute_legion, execute_campaign, rome_dispatch
+- **`tools_legion`**: execute_legion, execute_campaign, rome_dispatch, recommend_capability, launch_centurion (fire-and-forget campaign with visual ANSI dashboard in terminal via /dev/tty)
 - **`tools_skyrim`**: skyrim_console, skyrim_read_state, skyrim_face_actor, skyrim_follow_actor, skyrim_pivot, skyrim_compound_move, compile_papyrus
 - **`tools_desktop`**: desktop_screenshot, desktop_click, desktop_type_text, desktop_press_key, desktop_find_window, desktop_focus_window, desktop_get_mouse_location, desktop_notify
 - **`tools_media`**: music_play, music_stop, music_status, http_fetch, fetch_mo2_mod
 - **`tools_gc`**: gc_legions, legion_stats
-- **`tools_stats`**: rome_tail, rome_costs, rome_health, rome_find, senate_query
+- **`tools_stats`**: rome_tail, rome_costs, rome_health, rome_find, senate_query, senate_brain
 - **`tools_prefect`**: execute_prefect
 
 ## ROME Protocol Rules (v2.2)
@@ -39,7 +39,7 @@ Exposes 44 tools across 10 modules:
 5. **Observability**: Use `rome_tail` to monitor progress and `rome_costs` for budget tracking.
 
 ## Legion & Campaign Features
-- **Failover Chain**: Automatic failover (e.g., GEMINI → CODEX) on rate limits or service unavailability.
+- **Failover Chain**: Automatic chained failover (GEMINI → CODEX → OPENCODE) on rate limits or service unavailability.
 - **Result Caching**: 1-hour TTL caching for Legion results in `legions/.cache`.
 - **Prompt Patches**: Inject capability-specific coding rules from `dictator/legion_patches.json`.
 - **Campaign Error Isolation**: `execute_campaign` uses `return_exceptions=True` for robust parallel execution.

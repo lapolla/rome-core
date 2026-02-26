@@ -1,128 +1,142 @@
 #!/usr/bin/env python3
-"""
-ROME Centurion — Unified DAG-aware parallel orchestrator.
-
-Usage:
-    centurion.py <campaign.json>
-    centurion.py -              # read campaign from stdin
-
-Campaign JSON format:
-{
-  "tasks": {
-    "TASK_ID": {
-      "capability": "GEMINI",
-      "args": ["prompt or command"],
-      "depends_on": [],
-      "input_files": []
-    }
-  }
-}
-"""
-
 import json
 import os
 import re
-import shutil
-import subprocess
 import sys
-import threading
 import time
-from queue import Empty, Queue
+import asyncio
+import threading
+import shutil
+from datetime import datetime
 
+# --- CONFIGURATION & PATHS ---
+# Centurion V2: Standalone parallel orchestrator for ROME.
+ROME_ROOT = os.environ.get("ROME_ROOT", "/home/paul-kane/projects/rome-core")
+ARSENAL_PATH = os.path.join(ROME_ROOT, "arsenal", "core_arsenal.json")
 
+def log_event(tool, message, task_id=None, **kwargs):
+    """Structured logger following ROME keyword-only requirements."""
+    try:
+        sys.path.insert(0, ROME_ROOT)
+        from dictator.rome_log import log_event as _log_event
+        _log_event(tool=tool, message=message, task_id=task_id, **kwargs)
+    except Exception:
+        pass
+
+# --- DASHBOARD UI ---
 class OrchestratorUI:
-    def __init__(self, names):
-        self.names = names
+    def __init__(self, task_ids):
+        self.task_ids = task_ids
+        # Pad all task labels to the same width
+        display_ids = [tid.split("_")[-1] if "_" in tid else tid for tid in task_ids]
+        self.max_id_len = max(len(d) for d in display_ids) if display_ids else 12
         self.stats = {
-            n: {"percent": 0, "msg": "Standing by", "elapsed": 0.0, "status": "PENDING"}
-            for n in names
+            tid: {"percent": 0, "msg": "Standing by", "elapsed": 0.0, "status": "PENDING"}
+            for tid in task_ids
         }
         self.lock = threading.Lock()
-        for _ in names:
+        for _ in task_ids:
             sys.stderr.write("\n")
         sys.stderr.flush()
 
-    def update(self, name, line):
+    def update(self, task_id, line):
+        # Handle structured progress: "75% x [12.3s] Thinking..."
         m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
         if m:
             with self.lock:
-                self.stats[name].update({
+                self.stats[task_id].update({
                     "percent": int(m.group(1)),
                     "elapsed": float(m.group(2)),
                     "msg": m.group(3).strip(),
                 })
-            self._redraw()
+        elif "MISSION COMPLETE" in line.upper() or "SUCCESS" in line.upper() or line.startswith("OK:"):
+            with self.lock:
+                self.stats[task_id]["status"] = "SUCCESS"
+                self.stats[task_id]["percent"] = 100
+        elif "FAILED" in line.upper() or "ERR:" in line.upper():
+            with self.lock:
+                self.stats[task_id]["status"] = "FAILED"
 
-    def set_final(self, name, status):
+    def redraw(self):
         with self.lock:
-            self.stats[name]["status"] = status
-            self.stats[name]["percent"] = 100 if status != "BLOCKED" else 0
-        self._redraw()
-
-    def _redraw(self):
-        with self.lock:
-            sys.stderr.write(f"\033[{len(self.names)}A")
-            for name in self.names:
-                s = self.stats[name]
+            # Move cursor up to overwrite previous lines
+            sys.stderr.write(f"\033[{len(self.task_ids)}A")
+            for tid in self.task_ids:
+                s = self.stats[tid]
                 filled = int(25 * s["percent"] / 100)
                 if s["status"] == "SUCCESS":
                     color = "\033[92m"
                 elif s["status"] == "FAILED":
                     color = "\033[91m"
-                elif s["status"] == "BLOCKED":
-                    color = "\033[93m"
                 else:
                     color = "\033[0m"
-                bar = "█" * filled + "░" * (25 - filled)
-                if s["status"] in ("PENDING",):
-                    status_tag = f"{s['percent']:3}%"
-                else:
-                    status_tag = f"[{s['status']}]"
+                bar = "\u2588" * filled + "\u2591" * (25 - filled)
+                status_tag = f"[{s['status']:7}]" if s["status"] != "PENDING" else f"{s['percent']:3}%"
+                display_id = tid.split("_")[-1] if "_" in tid else tid
                 line = (
-                    f"\033[K[ROME:{name:15}] {color}{bar} {status_tag}"
+                    f"\033[K[ROME:{display_id:{self.max_id_len}}] {color}{bar} {status_tag}"
                     f" [{s['elapsed']:5.1f}s]\033[0m >> {s['msg'][:30]}"
                 )
                 sys.stderr.write(line + "\n")
             sys.stderr.flush()
 
+    def finalize(self, summary):
+        sys.stderr.write(f"\n\033[1;36m=== CAESAR'S CONSOLIDATED INTELLIGENCE ===\033[0m\n")
+        sys.stderr.write(f"{summary}\n\n")
+        sys.stderr.flush()
 
-def run_legion(tid, capability, args, input_files, ui_queue, arsenal, global_start, results):
-    task_dir = os.environ.get("ROME_ROOT", os.path.expanduser("~/projects/rome-core"))
-    sandbox = os.path.join(task_dir, "legions", tid)
-    if os.path.exists(sandbox):
-        shutil.rmtree(sandbox)
-    os.makedirs(sandbox)
-
-    cap_data = arsenal["capabilities"].get(capability.upper())
+# --- PARALLEL EXECUTION ENGINE ---
+async def run_task(task, arsenal, ui, global_start, results):
+    """Executes a single legion_wrapper task as an async subprocess."""
+    tid = task["id"]
+    capability = task["capability"]
+    args = task.get("args", [])
+    
+    cap_data = arsenal.get("capabilities", {}).get(capability.upper())
     if not cap_data:
+        ui.update(tid, f"ERR: Unknown capability: {capability}")
         results[tid] = {"status": "FAILED", "error": f"Unknown capability: {capability}"}
-        ui_queue.put(("final", tid, "FAILED"))
         return
 
-    wrapper = os.path.join(task_dir, "legions", "legion_wrapper.py")
-    full_cmd = [wrapper, tid, str(global_start)] + cap_data.get("args", []) + args
-
-    # Copy input files
-    for f in (input_files or []):
-        src = os.path.abspath(f)
-        if os.path.exists(src):
-            dest = os.path.join(sandbox, os.path.basename(f))
-            shutil.copy2(src, dest)
-
-    env = {**os.environ, "PYTHONUNBUFFERED": "1", "ROME_TASK_DIR": sandbox}
-    process = subprocess.Popen(
-        full_cmd, cwd=sandbox,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, bufsize=1, env=env,
+    # Prepare command for legion_wrapper.py
+    exec_path = cap_data.get("exec", os.path.join(ROME_ROOT, "legions", "legion_wrapper.py"))
+    wrapper_args = [tid, str(global_start)] + cap_data.get("args", []) + args
+    
+    # Task-specific directory setup
+    task_dir = os.path.join(ROME_ROOT, "legions", tid)
+    if os.path.exists(task_dir):
+        shutil.rmtree(task_dir)
+    os.makedirs(task_dir, exist_ok=True)
+    
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "ROME_TASK_DIR": task_dir}
+    
+    process = await asyncio.create_subprocess_exec(
+        exec_path, *wrapper_args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=task_dir,
+        env=env
     )
 
-    for line in process.stderr:
-        ui_queue.put(("update", tid, line))
+    # Legion wrapper sends progress to stderr; we stream it directly to the UI
+    async def stream_output(pipe, is_stderr):
+        while True:
+            line = await pipe.readline()
+            if not line:
+                break
+            decoded = line.decode(errors="ignore").strip()
+            if decoded:
+                ui.update(tid, decoded)
 
-    process.wait()
+    # Consume both pipes concurrently
+    await asyncio.gather(
+        stream_output(process.stdout, False),
+        stream_output(process.stderr, True),
+        process.wait()
+    )
 
-    # Load manifest
-    manifest_path = os.path.join(sandbox, "manifest.json")
+    # Read the ROME v2 manifest.json to extract usage and status
+    manifest_path = os.path.join(task_dir, "manifest.json")
     manifest = {}
     if os.path.exists(manifest_path):
         try:
@@ -132,117 +146,103 @@ def run_legion(tid, capability, args, input_files, ui_queue, arsenal, global_sta
             pass
 
     status = manifest.get("status", "SUCCESS" if process.returncode == 0 else "FAILED")
-    results[tid] = {"status": status, "manifest": manifest, "sandbox": sandbox}
-    ui_queue.put(("final", tid, status))
+    results[tid] = {
+        "status": status,
+        "manifest": manifest,
+        "exit_code": process.returncode,
+        "sandbox": task_dir
+    }
 
-
-def run_campaign(campaign):
-    tasks = campaign.get("tasks", {})
+async def main_async(campaign):
+    """Main parallel loop using asyncio for orchestration."""
+    tasks = campaign.get("tasks", [])
     if not tasks:
-        print("No tasks in campaign.", file=sys.stderr)
-        return {}
+        print("Empty campaign.")
+        sys.exit(0)
 
-    arsenal_path = os.path.join(
-        os.environ.get("ROME_ROOT", os.path.expanduser("~/projects/rome-core")),
-        "arsenal", "core_arsenal.json",
-    )
-    with open(arsenal_path) as f:
+    # Load arsenal using standard protocol: arsenal.get('capabilities', {}).items()
+    with open(ARSENAL_PATH) as f:
         arsenal = json.load(f)
 
-    ui = OrchestratorUI(list(tasks.keys()))
-    ui_queue = Queue()
+    task_ids = [t["id"] for t in tasks]
+    ui = OrchestratorUI(task_ids)
     global_start = time.time()
     results = {}
 
-    running = set()
-    completed = set()
-    failed = set()
+    # Background UI refresh task
+    async def ui_loop():
+        while any(tid not in results for tid in task_ids):
+            ui.redraw()
+            await asyncio.sleep(0.2)
+        ui.redraw()
 
-    print(f"--- ROME CENTURION: {len(tasks)} tasks ---", file=sys.stderr)
-
-    while len(completed) + len(failed) < len(tasks):
-        # Spawn eligible tasks
-        for tid, spec in tasks.items():
-            if tid in running or tid in completed or tid in failed:
-                continue
-            deps = spec.get("depends_on", [])
-            if all(d in completed for d in deps):
-                running.add(tid)
-                threading.Thread(
-                    target=run_legion,
-                    args=(tid, spec["capability"], spec.get("args", []),
-                          spec.get("input_files", []), ui_queue, arsenal,
-                          global_start, results),
-                    daemon=True,
-                ).start()
-            elif any(d in failed for d in deps):
-                failed.add(tid)
-                ui.set_final(tid, "BLOCKED")
-                results[tid] = {"status": "BLOCKED", "blocked_by": [d for d in deps if d in failed]}
-
-        # Process events
-        try:
-            msg_type, tid, data = ui_queue.get(timeout=0.2)
-            if msg_type == "update":
-                ui.update(tid, data)
-            elif msg_type == "final":
-                ui.set_final(tid, data)
-                running.discard(tid)
-                if data == "SUCCESS":
-                    completed.add(tid)
-                else:
-                    failed.add(tid)
-        except Empty:
-            pass
+    # Launch all tasks in parallel
+    task_coros = [run_task(t, arsenal, ui, global_start, results) for t in tasks]
+    
+    await asyncio.gather(ui_loop(), *task_coros)
 
     elapsed = time.time() - global_start
+    
+    # Aggregate summary stats
+    success_count = sum(1 for r in results.values() if r["status"] == "SUCCESS")
+    fail_count = len(tasks) - success_count
+    
+    total_in = 0
+    total_out = 0
+    for r in results.values():
+        usage = r.get("manifest", {}).get("usage")
+        if usage:
+            total_in += usage.get("input_tokens", 0)
+            total_out += usage.get("output_tokens", 0)
 
-    # Aggregate usage
-    total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
-    has_usage = False
-    for res in results.values():
-        u = res.get("manifest", {}).get("usage")
-        if u:
-            has_usage = True
-            total_usage["input_tokens"] += u.get("input_tokens", 0)
-            total_usage["output_tokens"] += u.get("output_tokens", 0)
-            total_usage["total_tokens"] += u.get("total_tokens", 0)
-            if u.get("cost_usd") is not None:
-                total_usage["cost_usd"] += u["cost_usd"]
-
+    summary = (
+        f"Campaign: {campaign.get('campaign_id', 'N/A')}\n"
+        f"Status:   {'SUCCESS' if fail_count == 0 else 'PARTIAL FAILURE'}\n"
+        f"Tasks:    {success_count} succeeded, {fail_count} failed\n"
+        f"Elapsed:  {elapsed:.2f}s\n"
+        f"Usage:    {total_in} in / {total_out} out tokens"
+    )
+    ui.finalize(summary)
+    
     report = {
+        "campaign_id": campaign.get("campaign_id"),
+        "success": success_count,
+        "failed": fail_count,
         "elapsed_s": round(elapsed, 2),
-        "total": len(tasks),
-        "success": len(completed),
-        "failed": len(failed),
-        "usage": total_usage if has_usage else None,
-        "tasks": {tid: {"status": r["status"]} for tid, r in results.items()},
+        "usage": {"input_tokens": total_in, "output_tokens": total_out},
+        "tasks": {tid: {"status": r["status"], "exit_code": r["exit_code"]} for tid, r in results.items()}
     }
+    
+    # Write report to file instead of dumping JSON to terminal
+    campaign_id = campaign.get("campaign_id", "unknown")
+    report_path = os.path.join(ROME_ROOT, "legions", f"{campaign_id}_report.json")
+    with open(report_path, "w") as f:
+        json.dump(report, f, indent=2)
 
-    print(f"\n\033[1;36m=== CENTURION REPORT: {len(completed)}/{len(tasks)} OK"
-          f" in {elapsed:.1f}s ===\033[0m", file=sys.stderr)
-    for tid, r in results.items():
-        color = "\033[92m" if r["status"] == "SUCCESS" else "\033[91m"
-        print(f"  {color}[{r['status']:7}]\033[0m {tid}", file=sys.stderr)
-
-    return report
-
+    print(f"Report: {report_path}")
+    
+    # Final exit code based on complete success
+    if fail_count > 0:
+        sys.exit(1)
 
 def main():
     if len(sys.argv) < 2:
-        print(__doc__, file=sys.stderr)
+        print("Usage: python3 centurion.py <campaign.json | inline_json>")
         sys.exit(1)
 
-    source = sys.argv[1]
-    if source == "-":
-        campaign = json.load(sys.stdin)
-    else:
-        with open(source) as f:
-            campaign = json.load(f)
+    # Unified input parser: file or inline JSON
+    arg = sys.argv[1]
+    try:
+        if arg.startswith("{"):
+            campaign = json.loads(arg)
+        else:
+            with open(arg) as f:
+                campaign = json.load(f)
+    except Exception as e:
+        print(f"Error parsing campaign: {e}")
+        sys.exit(1)
 
-    report = run_campaign(campaign)
-    print(json.dumps(report, indent=2))
-
+    asyncio.run(main_async(campaign))
 
 if __name__ == "__main__":
     main()

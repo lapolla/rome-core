@@ -98,6 +98,7 @@ async def run_cmd_stream(
     cwd: str | Path = ROOT_DIR,
     env: dict | None = None,
     max_output: int = MAX_BUF,
+    on_stderr: callable | None = None,
 ) -> dict:
     """Like run_cmd but streams stderr to terminal in real-time (for legion progress bars)."""
     t0 = _time.monotonic()
@@ -117,9 +118,18 @@ async def run_cmd_stream(
                 line = await proc.stderr.readline()
                 if not line:
                     break
-                sys.stderr.buffer.write(line)
-                sys.stderr.buffer.flush()
+                
+                # Only stream to stderr if no callback is provided to avoid interference
+                if not on_stderr:
+                    sys.stderr.buffer.write(line)
+                    sys.stderr.buffer.flush()
+                
                 stderr_chunks.append(line)
+                if on_stderr:
+                    try:
+                        on_stderr(line.decode(errors="replace").strip())
+                    except Exception:
+                        pass
 
         stderr_task = asyncio.create_task(_stream_stderr())
         stdout_b = await proc.stdout.read()

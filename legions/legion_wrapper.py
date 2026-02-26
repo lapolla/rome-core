@@ -70,11 +70,52 @@ class LegionaryUI:
                 if match:
                     self.log(min(90, self.percent + 5), f"Calling {match.group(1)}...")
                     return
-            if "thinking" in text_lower: self.log(20, "Reasoning...")
-            elif "analyzing" in text_lower: self.log(50, "Analyzing...")
-            elif "generating" in text_lower: self.log(80, "Generating...")
-            elif self.percent < 95: self.log(min(95, self.percent + 1), "Working...")
-        except: pass
+            # Detect explicit progress patterns: "Step 3/5", "50%", "[3/5]"
+            step_match = re.search(r'(?:step\s+)?(\d+)\s*/\s*(\d+)', text_lower)
+            if step_match:
+                cur, total = int(step_match.group(1)), int(step_match.group(2))
+                if total > 0:
+                    self.log(min(95, int(cur / total * 95)), f"Step {cur}/{total}")
+                    return
+            pct_match = re.search(r'(\d{1,3})%', text)
+            if pct_match:
+                pct = int(pct_match.group(1))
+                if 0 < pct <= 100:
+                    self.log(min(95, pct), f"Progress {pct}%")
+                    return
+            # Keyword-based phase detection (ordered by typical workflow)
+            KEYWORDS = [
+                ("error",     self.percent, "Error detected"),
+                ("exception", self.percent, "Exception detected"),
+                ("traceback", self.percent, "Traceback detected"),
+                ("reading",   25, "Reading files..."),
+                ("searching", 30, "Searching..."),
+                ("thinking",  20, "Reasoning..."),
+                ("planning",  25, "Planning..."),
+                ("analyzing", 50, "Analyzing..."),
+                ("compiling", 60, "Compiling..."),
+                ("building",  60, "Building..."),
+                ("testing",   70, "Running tests..."),
+                ("installing",65, "Installing..."),
+                ("downloading",40,"Downloading..."),
+                ("writing",   75, "Writing..."),
+                ("editing",   75, "Editing..."),
+                ("creating",  70, "Creating..."),
+                ("generating",80, "Generating..."),
+                ("formatting",85, "Formatting..."),
+                ("complete",  95, "Wrapping up..."),
+                ("success",   95, "Success"),
+                ("done",      95, "Done"),
+            ]
+            for kw, target_pct, msg in KEYWORDS:
+                if kw in text_lower:
+                    self.log(max(self.percent, min(95, target_pct)), msg)
+                    return
+            # Default: slow crawl
+            if self.percent < 95:
+                self.log(min(95, self.percent + 1), "Working...")
+        except:
+            pass
 
 def parse_usage(text):
     """Dual-mode: try to extract usage stats from JSON output (Claude/Gemini).
