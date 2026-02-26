@@ -1,53 +1,63 @@
-# ROME Core: Imperial SKSE Dispatcher
-**Version:** 2.0.0 | **Protocol:** ROME v2.0 | **Status:** Operation Augustus Active
+# 🏛️ ROME: Remote Orchestrated Model Execution
 
-## Overview
-ROME Core is a high-performance, thread-safe command dispatch framework for Skyrim Special Edition (SKSE64). It enables asynchronous, non-blocking execution of console commands and engine-level actor interactions via a tiered architecture.
+*“Veni, Vidi, Vici — Through Parallel Legionnaires.”*
 
-## The ROME Architecture
-*   **Dictator (MCP):** Python MCP server — central authority for task orchestration, validation, and usage tracking.
-*   **Legions (Workers):** Specialized execution units (Gemini, Claude, Codex, SAFE_SHELL) managed by `legion_wrapper.py`.
-*   **Arsenal:** Capability registry (`arsenal/core_arsenal.json`) defining agent CLIs, args, and timeouts.
-*   **Centurion (Orchestrator):** Campaign manager for parallel task execution with usage aggregation.
+ROME is a high-performance **MCP (Model Context Protocol) orchestration framework** designed to provide unified, scalable, and failover-capable model execution. In the ROME ecosystem, the user is the **Emperor**, commanding a **Dictator** (any LLM agent) who in turn dispatches **Legions** of specialized workers to conquer complex tasks.
 
-## Features
-*   **Singleton Dispatcher:** Thread-safe `ROME::CommandDispatcher` with `std::jthread` processing.
-*   **JSON Integration:** Real-time command injection via `skyrim_commands.json`.
-*   **Engine Hooks:** Direct integration with `RE::Console` and `RE::Actor` for surgical execution.
-*   **Usage Tracking:** Per-task and per-campaign token/cost reporting from agent CLIs.
-*   **Progress Reporting:** Real-time heartbeat progress via `progress.log` and manifest `progress` array.
+## 👑 The Imperial Hierarchy
 
-## 🛠️ Build & Deploy
-This project uses a specialized `msvc-wine` cross-compilation pipeline.
+1.  **Emperor (You):** The ultimate authority. You provide high-level objectives and oversee the campaign.
+2.  **Dictator (LLM Agent):** Appointed by the Emperor to manage the campaign. The Dictator is model-agnostic (Claude, GPT-4, etc.) and interprets goals into actionable commands for the Legions.
+3.  **Legions (Workers):** Expendable, specialized AI agents dispatched in parallel.
+    *   **GEMINI:** High-speed generalist coding and analysis.
+    *   **CODEX:** Specialized code manipulation and repository insight.
+    *   **OPENCODE:** Local/OSS model execution for privacy-sensitive tasks.
 
-### Prerequisites
-*   CMake 3.20+
-*   CommonLibSSE-NG
-*   nlohmann/json
-*   **MSVC-Wine Toolchain:** A configured cross-compilation environment (e.g., using `msvc-wine` or `MinGW-w64`) targeting Windows for SKSE64. Specific setup instructions for this environment are outside the scope of this README but are assumed to be present.
+## ⚔️ The Arsenal (47 MCP Tools)
 
-### Compilation
+ROME provides 10 specialized modules containing 47 powerful tools to dominate any digital domain:
+
+*   📁 **Filesystem:** Advanced file manipulation and directory management.
+*   🌿 **Git:** Deep repository integration and automated source control.
+*   💧 **Drupal:** Specialized CMS orchestration and site management.
+*   🐲 **Skyrim Modding:** Automated mod deployment and conflict resolution.
+*   🖥️ **Desktop Automation:** Direct interaction with host OS and applications.
+*   🎬 **Media:** Sophisticated media processing and transformation.
+*   🛡️ **Legion Orchestration:** Management of worker state and lifecycle.
+*   🚩 **Campaign Execution:** Advanced task scheduling and parallel processing.
+*   🏛️ **Senate:** Architecture brain utilizing sector manifestos for domain expertise.
+*   ⚖️ **Prefect:** Domain-scoped autonomous agents (Drupal, Skyrim, Git, Investigate, Full).
+
+## 🎖️ Key Features
+
+### 🚜 Centurion CLI
+A standalone visual ANSI dashboard for real-time campaign execution. Monitor multiple parallel legions with dedicated progress bars and live status updates.
+
+### 🚩 Campaign System
+A robust execution engine for parallel tasks with **DAG (Directed Acyclic Graph)** dependency management.
+*   **Failover Chains:** Automatic fallback (e.g., GEMINI → CODEX → OPENCODE) ensure reliability even when individual models fail.
+*   **Result Caching:** Intelligent persistence to prevent redundant compute and minimize API latency.
+
+### 🏛️ The Senate & Sector Manifestos
+The architectural brain of ROME. The Senate maintains domain-specific "manifestos" that guide Legions with deep, specialized knowledge of each project sector.
+
+### ⚖️ Prefect Agents
+Autonomous, specialized agents designed for surgical precision in specific domains (Drupal, Skyrim, Git, and full-system investigation).
+
+## 🚀 Quick Start
+
+Initialize the ROME server to start your conquest.
+
+### Configuration
+Ensure your environment is configured before deployment:
+*   **Main Configuration:** `dictator/config.json`
+*   **Arsenal Definitions:** `arsenal/core_arsenal.json`
+
+### Starting the MCP Server
+The server entry point is managed by the Dictator:
 ```bash
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make
+python3 dictator/dictator.py
 ```
-
-## Project Layout
-```
-src/              C++ SKSE plugin (CommandDispatcher, JsonProcessor, CommandHooks)
-dictator/         Python MCP server (dictator.py, rome_log.py, config.json)
-legions/          legion_wrapper.py + worker scripts + task artifact dirs
-arsenal/          core_arsenal.json — capability registry
-senate/           Architecture brain + sector manifestos
-tests/            pytest suite (test_dictator.py — 18 tests)
-logs/             rome.jsonl — structured event log with usage data
-```
-
-## 📜 Imperial Decrees
-1.  **Surgical Precision:** All changes must be atomic and verified via the ROME protocol.
-2.  **Contextual Isolation:** Tasks are governed by specialized manifestos in `legions/TASK_ROME_ORCHESTRATION/`.
-3.  **Authority:** If a task becomes "Bloated" (>45s), it MUST be sub-divided into smaller logical units.
 
 ---
-**"Rome wasn't built in a day, but it was built with total authority."**
+*Glory to Rome. Efficiency to the Empire.*
