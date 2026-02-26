@@ -1,0 +1,33 @@
+{
+  "rome_v": "2.0",
+  "task_id": "PING_A",
+  "status": "SUCCESS",
+  "metadata": {},
+  "usage": null,
+  "progress": [
+    "0% + [0.0s] Engaged (V2.0).",
+    "0% x [0.2s] Awaiting thought...",
+    "1% * [0.2s] Working...",
+    "1% . [0.4s] Awaiting thought...",
+    "1% o [0.6s] Awaiting thought...",
+    "1% + [0.8s] Awaiting thought...",
+    "1% x [1.0s] Awaiting thought...",
+    "1% * [1.2s] Awaiting thought...",
+    "1% . [1.4s] Awaiting thought...",
+    "1% o [1.6s] Awaiting thought...",
+    "1% + [1.8s] Awaiting thought...",
+    "1% x [2.0s] Awaiting thought...",
+    "95% * [2.0s] Done",
+    "100% . [2.0s] Mission complete."
+  ],
+  "artifacts": [
+    {
+      "path": "/home/paul-kane/projects/rome-core/legions/PING_A/report_PING_A.txt",
+      "type": "raw"
+    }
+  ],
+  "runtime": {
+    "elapsed_s": 2.0251967906951904,
+    "exit_code": 0
+  }
+}
