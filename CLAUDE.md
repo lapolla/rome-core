@@ -52,3 +52,6 @@ Exposes 47 tools across 10 modules:
 - **Autonomous Agents**: `execute_prefect` provides domain-scoped (drupal, skyrim, git, investigate, full) autonomous control.
 - **Tool Audit**: Post-run log analysis to ensure agents stay within their tool whitelist.
 - **Clean Dispatch**: `rome_dispatch` hides bulky prompts in files to keep the approval UI clean.
+
+## Coding Conventions
+- **Type hints**: Use `Callable` from `collections.abc`, never lowercase `callable` (it's a builtin function, not a type — causes `TypeError` at import time with `|` union syntax).

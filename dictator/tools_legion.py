@@ -1,5 +1,6 @@
 """Legion tools: execute_legion, execute_campaign, rome_dispatch."""
 
+from collections.abc import Callable
 import asyncio
 import hashlib
 import json
@@ -113,7 +114,7 @@ async def _execute_legion_impl(
     input_files: list[str] | None = None,
     no_cache: bool = False,
     prompt_file: str = "",
-    on_progress: callable | None = None,
+    on_progress: Callable | None = None,
 ) -> dict:
     """Core legion logic. Returns a result dict (not JSON string)."""
     t0 = _time.monotonic()

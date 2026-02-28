@@ -34,18 +34,30 @@ class LegionaryUI:
             self._progress_f = open(self._progress_path, "w")
         except Exception:
             self._progress_f = None
+        # Write progress to /dev/tty to bypass pipe capture
+        try:
+            self._tty = open("/dev/tty", "w")
+        except Exception:
+            self._tty = sys.stderr
 
     def log(self, percent, msg):
         self.percent = percent
         elapsed = time.time() - self.global_start
+        # Centurion-style visual on stderr
+        filled = int(self.bar_width * self.percent / 100)
+        bar = "\u2588" * filled + "\u2591" * (self.bar_width - filled)
+        display_id = self.task_id.split("_")[-1] if "_" in self.task_id else self.task_id
+        vis = (
+            f"\r\033[K[ROME:{display_id:<14}] {bar}"
+            f"  {self.percent:3}% [{elapsed:5.1f}s] >> {msg[:30]}"
+        )
+        self._tty.write(vis)
+        self._tty.flush()
+        # File log for dictator/centurion to read back
         hb = self.hb_chars[self.hb_idx % len(self.hb_chars)]
         self.hb_idx += 1
         line = f"{self.percent}% {hb} [{elapsed:.1f}s] {msg[:40]}"
         self.progress_lines.append(line)
-        # stderr for terminal visibility
-        sys.stderr.write(line + "\n")
-        sys.stderr.flush()
-        # file for dictator to read back
         if self._progress_f:
             try:
                 self._progress_f.write(line + "\n")
@@ -53,10 +65,27 @@ class LegionaryUI:
             except Exception:
                 pass
 
+    def finalize(self, status):
+        elapsed = time.time() - self.global_start
+        color = "\033[92m" if status == "SUCCESS" else "\033[91m"
+        bar = "\u2588" * self.bar_width
+        display_id = self.task_id.split("_")[-1] if "_" in self.task_id else self.task_id
+        vis = (
+            f"\r\033[K[ROME:{display_id:<14}] {color}{bar}"
+            f"  [{status:7}] [{elapsed:5.1f}s]\033[0m >> Mission complete."
+        )
+        self._tty.write(vis + "\n")
+        self._tty.flush()
+
     def close(self):
         if self._progress_f:
             try:
                 self._progress_f.close()
+            except Exception:
+                pass
+        if self._tty and self._tty is not sys.stderr:
+            try:
+                self._tty.close()
             except Exception:
                 pass
 
@@ -231,7 +260,7 @@ def main():
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=0,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"}
+        env={**os.environ, "PYTHONUNBUFFERED": "1", "ROME_TASK_ID": task_id}
     )
     
     fd = process.stdout.fileno()
@@ -255,7 +284,8 @@ def main():
             ui.log(ui.percent, "Awaiting thought...")
             continue
 
-    ui.log(100, "Mission complete.")
+    status = "SUCCESS" if process.returncode == 0 else "FAILED"
+    ui.finalize(status)
     ui.close()
 
     raw_text = b"".join(full_output).decode("utf-8", errors="ignore")

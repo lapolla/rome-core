@@ -1,5 +1,6 @@
 """ROME MCP Server core — shared config, paths, run_cmd, FastMCP instance."""
 
+from collections.abc import Callable
 import asyncio
 import json
 import os
@@ -98,7 +99,7 @@ async def run_cmd_stream(
     cwd: str | Path = ROOT_DIR,
     env: dict | None = None,
     max_output: int = MAX_BUF,
-    on_stderr: callable | None = None,
+    on_stderr: Callable | None = None,
 ) -> dict:
     """Like run_cmd but streams stderr to terminal in real-time (for legion progress bars)."""
     t0 = _time.monotonic()
