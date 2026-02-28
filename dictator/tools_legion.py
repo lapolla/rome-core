@@ -22,6 +22,7 @@ BUSY_PATTERNS = ["service temporarily unavailable", "overloaded", "rate_limit",
 
 CACHE_DIR = ROME_ROOT / "legions" / ".cache"
 CACHE_TTL = 3600  # 1 hour
+MAX_OUTPUT_CHARS = 2000
 
 
 class OrchestratorUI:
@@ -104,7 +105,10 @@ async def execute_legion(
 ) -> str:
     """Execute a ROME legion worker for a given capability."""
     result = await _execute_legion_impl(task_id, capability, args, input_files, no_cache, prompt_file)
-    return json.dumps(result, indent=2)
+    payload = json.dumps(result, indent=2)
+    est_tokens = len(payload) // 4
+    log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
+    return payload
 
 
 async def _execute_legion_impl(
@@ -242,6 +246,9 @@ async def _execute_legion_impl(
             manifest = json.loads(manifest_path.read_text())
             usage = manifest.get("usage")
             progress = manifest.get("progress", [])
+            # Trim progress to reduce MCP response bloat
+            if len(progress) > 6:
+                progress = progress[:3] + [f'... [{len(progress) - 6} lines trimmed] ...'] + progress[-3:]
     except Exception:
         pass
 
@@ -261,6 +268,16 @@ async def _execute_legion_impl(
         result["output"] = r.get("stdout", "")
     else:
         result["error"] = r.get("message", r.get("stderr", ""))
+
+    if result.get('output') and len(result['output']) > MAX_OUTPUT_CHARS:
+        original_len = len(result['output'])
+        report_path = task_dir / f'report_{task_id}.txt'
+        if not report_path.exists():
+            report_path.write_text(result['output'])
+        result['output'] = result['output'][:200] + f'\n...[TRUNCATED — full output: {report_path}]'
+        result['truncated'] = True
+        result['report_path'] = str(report_path)
+        log_event(tool='token_guard', message='output truncated', task_id=task_id, truncated_chars=original_len)
 
     # Auto summary (Phase 19)
     status_icon = "OK" if ok else "FAIL"
@@ -382,11 +399,14 @@ async def execute_campaign(
         "summary": f"{ok_count}/{len(tasks)} ok | {round(elapsed, 1)}s | {tok}tok{cost_str}",
     }
 
-    return json.dumps(report, indent=2)
+    payload = json.dumps(report, indent=2)
+    est_tokens = len(payload) // 4
+    log_event(tool='token_guard', message='mcp_outbound', task_id=campaign_id, usage={'estimated_output_tokens': est_tokens})
+    return payload
 
 
 @mcp.tool()
-async def rome_dispatch(task_id: str, capability: str, prompt: str, input_files: list[str] | None = None) -> str:
+async def rome_dispatch(task_id: str, capability: str, prompt: str, input_files: list[str] | None = None, no_cache: bool = False) -> str:
     """Quick dispatch: writes prompt to file, then executes legion. Keeps approval dialog clean."""
     task_dir = ROME_ROOT / "legions" / task_id
     task_dir.mkdir(parents=True, exist_ok=True)
@@ -396,8 +416,24 @@ async def rome_dispatch(task_id: str, capability: str, prompt: str, input_files:
         capability=capability,
         args=["Read and execute the task in task.md in your current working directory. Output results with [ROME_STATUS: SUCCESS] or [ROME_STATUS: FAILED]."],
         input_files=input_files,
+        no_cache=no_cache,
     )
-    return json.dumps(result, indent=2)
+    payload = json.dumps(result, indent=2)
+    est_tokens = len(payload) // 4
+    log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
+    return payload
+
+
+@mcp.tool()
+async def clear_cache() -> str:
+    """Clear the legion result cache."""
+    count = 0
+    if CACHE_DIR.exists():
+        for f in CACHE_DIR.glob('*.json'):
+            f.unlink()
+            count += 1
+    log_event(tool='clear_cache', message=f'Cleared {count} cached entries')
+    return f'Cleared {count} cached entries from {CACHE_DIR}'
 
 
 @mcp.tool()
