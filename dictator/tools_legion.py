@@ -622,8 +622,7 @@ async def recommend_capability(task_description: str) -> str:
 
 @mcp.tool()
 async def launch_centurion(campaign_id: str, tasks: list[dict]) -> str:
-    """Launch a campaign with the Centurion CLI dashboard (fire-and-forget, renders in terminal)."""
-    import subprocess
+    """Launch a campaign with the Centurion CLI dashboard (blocks until complete, renders bars in terminal)."""
     import tempfile
 
     campaign = {"campaign_id": campaign_id, "tasks": tasks}
@@ -633,10 +632,7 @@ async def launch_centurion(campaign_id: str, tasks: list[dict]) -> str:
     tmp.close()
 
     centurion_path = str(ROME_ROOT / "legions" / "centurion.py")
-    tty = open("/dev/tty", "w")
-    subprocess.Popen(
-        ["python3", centurion_path, tmp.name],
-        stdout=tty, stderr=tty, stdin=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    return f"Centurion launched: {campaign_id} | {len(tasks)} tasks. Watch your terminal."
+    command = f"python3 {centurion_path} {tmp.name}"
+    r = await run_cmd_stream(command, cwd=str(ROME_ROOT / "legions"))
+    exit_code = r.get("exit_code", "?")
+    return f"Campaign {campaign_id} complete | {len(tasks)} tasks | exit={exit_code}"

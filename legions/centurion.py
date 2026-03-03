@@ -35,9 +35,12 @@ class OrchestratorUI:
             for tid in task_ids
         }
         self.lock = threading.Lock()
-        for _ in task_ids:
-            sys.stderr.write("\n")
-        sys.stderr.flush()
+        self.is_tty = sys.stderr.isatty()
+        self._last_simple_print = 0
+        if self.is_tty:
+            for _ in task_ids:
+                sys.stderr.write("\n")
+            sys.stderr.flush()
 
     def update(self, task_id, line):
         # Handle structured progress: "75% x [12.3s] Thinking..."
@@ -59,11 +62,32 @@ class OrchestratorUI:
 
     def redraw(self):
         with self.lock:
-            # Move cursor up to overwrite previous lines
+            if not self.is_tty:
+                now = time.time()
+                if now - self._last_simple_print < 2.0:
+                    return
+                self._last_simple_print = now
+                for tid in self.task_ids:
+                    s = self.stats[tid]
+                    reported = s["percent"]
+                    time_pct = min(90, int(s["elapsed"] / 60.0 * 90)) if s["status"] == "PENDING" else reported
+                    ep = max(reported, time_pct)
+                    if s["status"] == "SUCCESS": ep = 100
+                    display_id = tid.split("_")[-1] if "_" in tid else tid
+                    tag = f"[{s['status']:7}]" if s["status"] != "PENDING" else f"{ep:3}%"
+                    print(f"[ROME:{display_id:{self.max_id_len}}] {tag} [{s['elapsed']:5.1f}s] {s['msg'][:40]}", flush=True)
+                return
+            # TTY mode: overwrite lines in place
             sys.stderr.write(f"\033[{len(self.task_ids)}A")
             for tid in self.task_ids:
                 s = self.stats[tid]
-                filled = int(25 * s["percent"] / 100)
+                # Time-based minimum: ramp to 90% over 60s when reported % is low
+                reported = s["percent"]
+                time_pct = min(90, int(s["elapsed"] / 60.0 * 90)) if s["status"] == "PENDING" else reported
+                effective_pct = max(reported, time_pct)
+                if s["status"] == "SUCCESS":
+                    effective_pct = 100
+                filled = int(25 * effective_pct / 100)
                 if s["status"] == "SUCCESS":
                     color = "\033[92m"
                 elif s["status"] == "FAILED":
@@ -71,7 +95,7 @@ class OrchestratorUI:
                 else:
                     color = "\033[0m"
                 bar = "\u2588" * filled + "\u2591" * (25 - filled)
-                status_tag = f"[{s['status']:7}]" if s["status"] != "PENDING" else f"{s['percent']:3}%"
+                status_tag = f"[{s['status']:7}]" if s["status"] != "PENDING" else f"{effective_pct:3}%"
                 display_id = tid.split("_")[-1] if "_" in tid else tid
                 line = (
                     f"\033[K[ROME:{display_id:{self.max_id_len}}] {color}{bar} {status_tag}"
@@ -118,20 +142,44 @@ async def run_task(task, arsenal, ui, global_start, results):
         env=env
     )
 
-    # Legion wrapper sends progress to stderr; we stream it directly to the UI
-    async def stream_output(pipe, is_stderr):
+    async def drain_pipe(pipe):
+        """Consume pipe to avoid deadlock."""
         while True:
-            line = await pipe.readline()
-            if not line:
+            chunk = await pipe.read(1024)
+            if not chunk:
                 break
-            decoded = line.decode(errors="ignore").strip()
-            if decoded:
-                ui.update(tid, decoded)
 
-    # Consume both pipes concurrently
+    async def poll_progress(task_dir, tid):
+        """Poll progress.log for structured updates."""
+        log_path = os.path.join(task_dir, "progress.log")
+        # Wait for log file to appear
+        while not os.path.exists(log_path):
+            if process.returncode is not None:
+                return
+            await asyncio.sleep(0.1)
+        
+        with open(log_path, "r") as f:
+            last_pos = 0
+            while True:
+                f.seek(last_pos)
+                lines = f.readlines()
+                last_pos = f.tell()
+                for line in lines:
+                    ui.update(tid, line.strip())
+                
+                if process.returncode is not None:
+                    # One final sweep after process finishes
+                    remaining = f.readlines()
+                    for line in remaining:
+                        ui.update(tid, line.strip())
+                    break
+                await asyncio.sleep(0.1)
+
+    # Consume both pipes and poll progress concurrently
     await asyncio.gather(
-        stream_output(process.stdout, False),
-        stream_output(process.stderr, True),
+        drain_pipe(process.stdout),
+        drain_pipe(process.stderr),
+        poll_progress(task_dir, tid),
         process.wait()
     )
 
@@ -159,6 +207,9 @@ async def main_async(campaign):
     if not tasks:
         print("Empty campaign.")
         sys.exit(0)
+
+    # Brief pause so Claude Code finishes rendering before we draw on /dev/tty
+    await asyncio.sleep(0.5)
 
     # Load arsenal using standard protocol: arsenal.get('capabilities', {}).items()
     with open(ARSENAL_PATH) as f:
