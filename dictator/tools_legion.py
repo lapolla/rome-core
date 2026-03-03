@@ -13,6 +13,8 @@ import threading
 import time as _time
 from pathlib import Path
 
+from mcp.server.fastmcp import Context
+
 from dictator.core import mcp, run_cmd, run_cmd_stream, ROME_ROOT, ARSENAL_PATH
 from dictator.rome_log import log_event
 
@@ -94,8 +96,48 @@ def _cache_key(capability: str, args: list) -> str:
     return hashlib.sha256(f"{capability}:{':'.join(args)}".encode()).hexdigest()[:16]
 
 
+def _recommend_capability_impl(task_description: str) -> dict:
+    """Core logic for capability recommendation."""
+    desc = task_description.lower()
+    word_count = len(desc.split())
+
+    kw_gemini = ["review", "analyze", "security", "architect", "complex", "audit", "refactor", "design"]
+    kw_centurion = ["multi-step", "complex", "review and fix", "analyze and edit", "refactor across"]
+    kw_codex = ["fix", "implement", "update", "write", "add", "small", "patch", "rename"]
+    kw_shell = ["grep", "build", "test", "find", "run", "execute", "shell", "bash", "compile", "move", "copy", "delete"]
+
+    files_match = re.search(r'(\d+)\s+files?', desc)
+    lines_match = re.search(r'(\d+)\s+lines?', desc)
+    file_count = int(files_match.group(1)) if files_match else 0
+    line_count = int(lines_match.group(1)) if lines_match else 0
+
+    sg = sum(1 for k in kw_gemini if k in desc)
+    scen = sum(1 for k in kw_centurion if k in desc)
+    sc = sum(1 for k in kw_codex if k in desc)
+    ss = sum(1 for k in kw_shell if k in desc)
+
+    if file_count > 10 or line_count > 1000:
+        sg += 3
+
+    if ss > sg and ss > scen and ss > sc:
+        rec, reason = "SAFE_SHELL", "Task dominated by execution/search/build operations."
+    elif sg >= scen and sg >= sc and word_count <= 50:
+        rec, reason = "GEMINI", "High reasoning or large context requirements detected."
+    elif scen >= sc or word_count > 50:
+        rec, reason = "CENTURION", "Multi-step complex task requiring orchestrator oversight."
+    else:
+        rec, reason = "CODEX", "Focused implementation or small fix with moderate context."
+
+    return {
+        "recommendation": rec,
+        "reasoning": reason,
+        "scores": {"gemini": sg, "centurion": scen, "codex": sc, "shell": ss},
+    }
+
+
 @mcp.tool()
 async def execute_legion(
+    ctx: Context,
     task_id: str,
     capability: str,
     args: list[str],
@@ -104,11 +146,25 @@ async def execute_legion(
     prompt_file: str = "",
 ) -> str:
     """Execute a ROME legion worker for a given capability."""
-    result = await _execute_legion_impl(task_id, capability, args, input_files, no_cache, prompt_file)
-    payload = json.dumps(result, indent=2)
-    est_tokens = len(payload) // 4
+    result = await _execute_legion_impl(
+        task_id=task_id,
+        capability=capability,
+        args=args,
+        input_files=input_files,
+        no_cache=no_cache,
+        prompt_file=prompt_file,
+        ctx=ctx
+    )
+    
+    summary = result.get("summary", "Task complete.")
+    if result.get("truncated"):
+        summary += f"\nNote: Output was truncated. Report saved to {result.get('report_path')}."
+    if result.get("error"):
+        summary += f"\nError: {result['error']}"
+
+    est_tokens = len(summary) // 4
     log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
-    return payload
+    return summary
 
 
 async def _execute_legion_impl(
@@ -119,10 +175,32 @@ async def _execute_legion_impl(
     no_cache: bool = False,
     prompt_file: str = "",
     on_progress: Callable | None = None,
+    _is_retry: bool = False,
+    ctx: Context | None = None,
 ) -> dict:
     """Core legion logic. Returns a result dict (not JSON string)."""
     t0 = _time.monotonic()
     capability = capability.upper()
+
+    def default_on_progress(line):
+        if ctx:
+            m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
+            if m:
+                try:
+                    p = int(m.group(1))
+                    msg = m.group(3).strip()
+                    asyncio.create_task(ctx.info(f"{p}% | {msg}"))
+                except Exception:
+                    pass
+
+    actual_on_progress = on_progress or default_on_progress
+
+    # Change 2: Auto-routing capability
+    if capability == "AUTO":
+        desc = args[0] if args else ""
+        rec_data = _recommend_capability_impl(desc)
+        capability = rec_data["recommendation"].upper()
+        log_event(tool="execute_legion", message=f"Auto-routed to {capability}", task_id=task_id)
 
     if input_files is None:
         input_files = []
@@ -161,7 +239,10 @@ async def _execute_legion_impl(
         if pf.exists():
             file_content = pf.read_text()
             (task_dir / "task.md").write_text(file_content)
-            args = ["Read and execute the task in task.md in your current working directory. Output results with [ROME_STATUS: SUCCESS] or [ROME_STATUS: FAILED]."]
+            if capability == "SAFE_SHELL":
+                args = [file_content]
+            else:
+                args = ["Read and execute the task in task.md in your current working directory. Output results with [ROME_STATUS: SUCCESS] or [ROME_STATUS: FAILED]."]
 
     # Prompt Patches (Phase 10)
     patches_path = Path(__file__).parent / "legion_patches.json"
@@ -174,6 +255,28 @@ async def _execute_legion_impl(
                 args[0] = f"## Coding Rules\n{patch_block}\n\n{args[0]}"
         except Exception:
             pass
+
+    if capability == "SAFE_SHELL":
+        import subprocess as _sp, time as _time2, json as _json2
+        from pathlib import Path as _Path2
+        task_dir2 = ROME_ROOT / "legions" / task_id
+        task_dir2.mkdir(parents=True, exist_ok=True)
+        # Get the actual shell command from args
+        shell_cmd = args[0] if args else ""
+        shell_script = str(Path(__file__).parent.parent / "legions" / "shell_executor.py")
+        proc = _sp.run(
+            ["python3", shell_script, task_id, str(_time2.time()), shell_cmd],
+            capture_output=True, text=True, timeout=70
+        )
+        report_path = task_dir2 / f"report_{task_id}.txt"
+        summary_lines = [l for l in proc.stdout.strip().splitlines() if not l.startswith("PROGRESS:")]
+        return {
+            "ok": proc.returncode == 0,
+            "status": "SUCCESS" if proc.returncode == 0 else "FAILED",
+            "report_path": str(report_path),
+            "summary": "\n".join(summary_lines[-3:]),
+            "elapsed_s": _time.monotonic() - t0,
+        }
 
     cap_args = " ".join(cap.get("args", []))
     quoted_args = " ".join(shlex.quote(a) for a in args)
@@ -195,7 +298,7 @@ async def _execute_legion_impl(
     env = {**os.environ, "ROME_TASK_DIR": str(task_dir)}
     fallback_used = None
     try:
-        r = await asyncio.wait_for(run_cmd_stream(command, cwd=task_dir, env=env, on_stderr=on_progress), timeout=timeout_s)
+        r = await asyncio.wait_for(run_cmd_stream(command, cwd=task_dir, env=env, on_stderr=actual_on_progress), timeout=timeout_s)
 
         # Failover Chain (Phase 7) — walks GEMINI→CODEX→OPENCODE
         current_cap = capability
@@ -210,13 +313,43 @@ async def _execute_legion_impl(
             f_cap_args = " ".join(next_cap.get("args", []))
             f_command = f"{next_cap['exec']} {task_id} {_time.time()} {f_cap_args} {quoted_args}"
             fb_timeout = next_cap.get("timeout", 120)
-            r = await asyncio.wait_for(run_cmd_stream(f_command, cwd=task_dir, env=env, on_stderr=on_progress), timeout=fb_timeout)
+            r = await asyncio.wait_for(run_cmd_stream(f_command, cwd=task_dir, env=env, on_stderr=actual_on_progress), timeout=fb_timeout)
             current_cap = next_cap_name
     except asyncio.TimeoutError:
         elapsed = _time.monotonic() - t0
         log_event(tool="execute_legion", task_id=task_id, status="timeout", duration_s=elapsed,
                   message=f"Timed out after {timeout_s}s")
         return {"ok": False, "message": f"Legion timed out after {timeout_s}s"}
+
+    # Change 1: Auto-retry on empty report
+    ok = r.get("ok", False)
+    output = r.get("stdout", "")
+    report_path_file = task_dir / f'report_{task_id}.txt'
+    is_empty_output = not output.strip() or output.strip() == f"OK:{task_id}"
+    is_empty_report = report_path_file.exists() and report_path_file.stat().st_size == 0
+
+    if ok and is_empty_output and is_empty_report:
+        if not _is_retry:
+            log_event(tool="execute_legion", message="Empty report detected. Retrying once with no_cache=True...", task_id=task_id)
+            return await _execute_legion_impl(
+                task_id=task_id,
+                capability=capability,
+                args=args,
+                input_files=input_files,
+                no_cache=True,
+                prompt_file=prompt_file,
+                on_progress=on_progress,
+                _is_retry=True,
+                ctx=ctx
+            )
+        else:
+            log_event(tool="execute_legion", message="Empty report after retry.", task_id=task_id)
+            return {
+                "ok": False,
+                "task_id": task_id,
+                "error": "empty_report_after_retry",
+                "summary": f"[FAIL] {task_id} | {capability} | empty_report_after_retry"
+            }
 
     # CODEX Sandbox Sync (Phase 21)
     if (capability == "CODEX" or fallback_used == "CODEX") and r.get("ok"):
@@ -304,6 +437,7 @@ async def _execute_legion_impl(
 
 @mcp.tool()
 async def execute_campaign(
+    ctx: Context,
     campaign_id: str,
     tasks: list[dict],
 ) -> str:
@@ -324,13 +458,23 @@ async def execute_campaign(
         def on_progress(line):
             ui.update(tid, line)
             ui.redraw()
+            if ctx:
+                m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
+                if m:
+                    try:
+                        p = int(m.group(1))
+                        msg = f"[{tid}] {m.group(3).strip()}"
+                        asyncio.create_task(ctx.info(f"{p}% | {msg}"))
+                    except Exception:
+                        pass
 
         return await _execute_legion_impl(
             task_id=tid,
             capability=t['capability'],
             args=t['args'],
             input_files=t.get('input_files', []),
-            on_progress=on_progress
+            on_progress=on_progress,
+            ctx=ctx
         )
 
     # Campaign Error Isolation (Phase 8)
@@ -391,22 +535,33 @@ async def execute_campaign(
     
     ui.finalize(summary)
 
-    report = {
-        "campaign_id": campaign_id,
-        "ok": True,
-        "total_usage": total_usage if has_usage else None,
-        "results": task_results,
-        "summary": f"{ok_count}/{len(tasks)} ok | {round(elapsed, 1)}s | {tok}tok{cost_str}",
-    }
-
-    payload = json.dumps(report, indent=2)
-    est_tokens = len(payload) // 4
+    # Convert to minimal string return instead of massive JSON
+    out_lines = [summary, ""]
+    for t_id, res_str in task_results.items():
+        try:
+            r = json.loads(res_str) if isinstance(res_str, str) else res_str
+            task_sum = r.get("summary", "")
+            if not task_sum:
+                task_sum = "Success" if r.get("ok") else "Failed"
+            out_lines.append(f"- {t_id}: {task_sum}")
+        except Exception:
+            pass
+            
+    final_output = "\n".join(out_lines)
+    est_tokens = len(final_output) // 4
     log_event(tool='token_guard', message='mcp_outbound', task_id=campaign_id, usage={'estimated_output_tokens': est_tokens})
-    return payload
+    return final_output
 
 
 @mcp.tool()
-async def rome_dispatch(task_id: str, capability: str, prompt: str, input_files: list[str] | None = None, no_cache: bool = False) -> str:
+async def rome_dispatch(
+    ctx: Context,
+    task_id: str,
+    capability: str,
+    prompt: str,
+    input_files: list[str] | None = None,
+    no_cache: bool = False
+) -> str:
     """Quick dispatch: writes prompt to file, then executes legion. Keeps approval dialog clean."""
     task_dir = ROME_ROOT / "legions" / task_id
     task_dir.mkdir(parents=True, exist_ok=True)
@@ -414,14 +569,36 @@ async def rome_dispatch(task_id: str, capability: str, prompt: str, input_files:
     result = await _execute_legion_impl(
         task_id=task_id,
         capability=capability,
-        args=["Read and execute the task in task.md in your current working directory. Output results with [ROME_STATUS: SUCCESS] or [ROME_STATUS: FAILED]."],
+        args=[prompt if capability == "SAFE_SHELL" else "Read and execute the task in task.md in your current working directory. Output results with [ROME_STATUS: SUCCESS] or [ROME_STATUS: FAILED]."],
         input_files=input_files,
         no_cache=no_cache,
+        ctx=ctx
     )
-    payload = json.dumps(result, indent=2)
-    est_tokens = len(payload) // 4
+    
+    # Change 3: rome_dispatch returns path only
+    report_path = result.get('report_path')
+    if not report_path:
+        path = task_dir / f'report_{task_id}.txt'
+        if result.get('ok') and result.get('output'):
+            path.write_text(result['output'])
+            report_path = str(path)
+    
+    summary = result.get("summary", "")
+    if report_path and Path(report_path).exists():
+        try:
+            report_text = Path(report_path).read_text()[:500]
+            summary = f"{report_text}\n---\n{summary}"
+        except Exception:
+            pass
+
+    # Return minimal string summary
+    final_summary = summary
+    if report_path:
+        final_summary += f"\nReport: {report_path}"
+
+    est_tokens = len(final_summary) // 4
     log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
-    return payload
+    return final_summary
 
 
 @mcp.tool()
@@ -439,42 +616,8 @@ async def clear_cache() -> str:
 @mcp.tool()
 async def recommend_capability(task_description: str) -> str:
     """Recommend the best Legion capability based on task heuristics."""
-    import re
-    desc = task_description.lower()
-    word_count = len(desc.split())
-
-    kw_gemini = ["review", "analyze", "security", "architect", "complex", "audit", "refactor", "design"]
-    kw_centurion = ["multi-step", "complex", "review and fix", "analyze and edit", "refactor across"]
-    kw_codex = ["fix", "implement", "update", "write", "add", "small", "patch", "rename"]
-    kw_shell = ["grep", "build", "test", "find", "run", "execute", "shell", "bash", "compile", "move", "copy", "delete"]
-
-    files_match = re.search(r'(\d+)\s+files?', desc)
-    lines_match = re.search(r'(\d+)\s+lines?', desc)
-    file_count = int(files_match.group(1)) if files_match else 0
-    line_count = int(lines_match.group(1)) if lines_match else 0
-
-    sg = sum(1 for k in kw_gemini if k in desc)
-    scen = sum(1 for k in kw_centurion if k in desc)
-    sc = sum(1 for k in kw_codex if k in desc)
-    ss = sum(1 for k in kw_shell if k in desc)
-
-    if file_count > 10 or line_count > 1000:
-        sg += 3
-
-    if ss > sg and ss > scen and ss > sc:
-        rec, reason = "SAFE_SHELL", "Task dominated by execution/search/build operations."
-    elif sg >= scen and sg >= sc and word_count <= 50:
-        rec, reason = "GEMINI", "High reasoning or large context requirements detected."
-    elif scen >= sc or word_count > 50:
-        rec, reason = "CENTURION", "Multi-step complex task requiring orchestrator oversight."
-    else:
-        rec, reason = "CODEX", "Focused implementation or small fix with moderate context."
-
-    return json.dumps({
-        "recommendation": rec,
-        "reasoning": reason,
-        "scores": {"gemini": sg, "centurion": scen, "codex": sc, "shell": ss},
-    }, indent=2)
+    res = _recommend_capability_impl(task_description)
+    return json.dumps(res, indent=2)
 
 
 @mcp.tool()
@@ -490,12 +633,10 @@ async def launch_centurion(campaign_id: str, tasks: list[dict]) -> str:
     tmp.close()
 
     centurion_path = str(ROME_ROOT / "legions" / "centurion.py")
-    # Open the user's terminal directly so dashboard renders there, not in MCP pipes
     tty = open("/dev/tty", "w")
     subprocess.Popen(
         ["python3", centurion_path, tmp.name],
         stdout=tty, stderr=tty, stdin=subprocess.DEVNULL,
         start_new_session=True,
     )
-
-    return f"Centurion launched: {campaign_id} with {len(tasks)} tasks. Watch your terminal."
+    return f"Centurion launched: {campaign_id} | {len(tasks)} tasks. Watch your terminal."
