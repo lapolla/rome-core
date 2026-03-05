@@ -112,42 +112,66 @@ class OrchestratorUI:
 # --- PARALLEL EXECUTION ENGINE ---
 async def run_task(task, arsenal, ui, global_start, results):
     """Executes a single legion_wrapper task as an async subprocess."""
+    task["id"] = task.get("id", task.get("task_id"))
     tid = task["id"]
     capability = task["capability"]
     args = task.get("args", [])
-    
+
     cap_data = arsenal.get("capabilities", {}).get(capability.upper())
     if not cap_data:
         ui.update(tid, f"ERR: Unknown capability: {capability}")
         results[tid] = {"status": "FAILED", "error": f"Unknown capability: {capability}"}
         return
 
-    # Prepare command for legion_wrapper.py
-    exec_path = cap_data.get("exec", os.path.join(ROME_ROOT, "legions", "legion_wrapper.py"))
-    wrapper_args = [tid, str(global_start)] + cap_data.get("args", []) + args
-    
     # Task-specific directory setup
     task_dir = os.path.join(ROME_ROOT, "legions", tid)
     if os.path.exists(task_dir):
         shutil.rmtree(task_dir)
     os.makedirs(task_dir, exist_ok=True)
-    
+
+    exec_path = cap_data.get("exec", "python3")
+    script_and_args = cap_data.get("args", [])
+    prompt = task.get("prompt", "")
+
+    if capability.upper() == "SAFE_SHELL":
+        if not prompt:
+            ui.update(tid, "ERR: Missing shell command for SAFE_SHELL")
+            results[tid] = {"status": "FAILED", "exit_code": 2, "error": "Missing shell command"}
+            return
+        # For SAFE_SHELL: python3 shell_executor.py <tid> <timestamp> <shell_cmd>
+        final_args = script_and_args + [tid, str(global_start), prompt]
+    else:  # LLM capabilities
+        if not prompt:
+            ui.update(tid, f"ERR: Missing prompt for {capability}")
+            results[tid] = {"status": "FAILED", "exit_code": 2, "error": "Missing prompt"}
+            return
+        prompt_text = prompt
+        with open(os.path.join(task_dir, "task.md"), "w") as f:
+            f.write(prompt_text)
+        
+        # For LLM caps, it's: <exec> <script> <tid> <timestamp>
+        # The wrapper reads task.md from the CWD (task_dir)
+        final_args = script_and_args + [tid, str(global_start)]
+
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "ROME_TASK_DIR": task_dir}
-    
+
     process = await asyncio.create_subprocess_exec(
-        exec_path, *wrapper_args,
+        exec_path, *final_args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=task_dir,
         env=env
     )
 
+    # --- Stream and process output ---
     async def drain_pipe(pipe):
-        """Consume pipe to avoid deadlock."""
         while True:
-            chunk = await pipe.read(1024)
-            if not chunk:
-                break
+            try:
+                chunk = await pipe.read(1024)
+                if not chunk:
+                    break
+            except Exception:
+                break # Pipe closed
 
     async def poll_progress(task_dir, tid):
         """Poll progress.log for structured updates."""
@@ -157,7 +181,7 @@ async def run_task(task, arsenal, ui, global_start, results):
             if process.returncode is not None:
                 return
             await asyncio.sleep(0.1)
-        
+
         with open(log_path, "r") as f:
             last_pos = 0
             while True:
@@ -166,7 +190,7 @@ async def run_task(task, arsenal, ui, global_start, results):
                 last_pos = f.tell()
                 for line in lines:
                     ui.update(tid, line.strip())
-                
+
                 if process.returncode is not None:
                     # One final sweep after process finishes
                     remaining = f.readlines()
@@ -192,59 +216,62 @@ async def run_task(task, arsenal, ui, global_start, results):
                 manifest = json.load(f)
         except Exception:
             pass
-
-    status = manifest.get("status", "SUCCESS" if process.returncode == 0 else "FAILED")
+            
+    usage = manifest.get("usage") or {}
     results[tid] = {
-        "status": status,
-        "manifest": manifest,
+        "status": "SUCCESS" if process.returncode == 0 else "FAILED",
         "exit_code": process.returncode,
-        "sandbox": task_dir
+        "input_tokens": usage.get("input_tokens", 0),
+        "output_tokens": usage.get("output_tokens", 0)
     }
 
 async def main_async(campaign):
-    """Main parallel loop using asyncio for orchestration."""
-    tasks = campaign.get("tasks", [])
-    if not tasks:
-        print("Empty campaign.")
-        sys.exit(0)
-
-    # Brief pause so Claude Code finishes rendering before we draw on /dev/tty
-    await asyncio.sleep(0.5)
-
-    # Load arsenal using standard protocol: arsenal.get('capabilities', {}).items()
-    with open(ARSENAL_PATH) as f:
-        arsenal = json.load(f)
-
-    task_ids = [t["id"] for t in tasks]
-    ui = OrchestratorUI(task_ids)
+    """Main async function to run all tasks."""
     global_start = time.time()
+    
+    try:
+        with open(ARSENAL_PATH) as f:
+            arsenal = json.load(f)
+    except FileNotFoundError:
+        print(f"FATAL: Arsenal file not found at {ARSENAL_PATH}")
+        sys.exit(1)
+
+    tasks = campaign.get("tasks", [])
+    task_ids = [t.get("id", t.get("task_id", f"task_{i}")) for i, t in enumerate(tasks)]
+    
+    # Assign IDs back to tasks if missing
+    for i, task in enumerate(tasks):
+        task["id"] = task.get("id", task.get("task_id", task_ids[i]))
+
+    ui = OrchestratorUI(task_ids)
     results = {}
 
-    # Background UI refresh task
-    async def ui_loop():
-        while any(tid not in results for tid in task_ids):
+    # --- UI Renderer Thread ---
+    stop_event = threading.Event()
+    def ui_loop():
+        while not stop_event.is_set():
             ui.redraw()
-            await asyncio.sleep(0.2)
-        ui.redraw()
-
-    # Launch all tasks in parallel
-    task_coros = [run_task(t, arsenal, ui, global_start, results) for t in tasks]
+            time.sleep(0.05)
     
-    await asyncio.gather(ui_loop(), *task_coros)
+    ui_thread = threading.Thread(target=ui_loop, daemon=True)
+    ui_thread.start()
 
+    # --- Run tasks in parallel ---
+    task_coroutines = [run_task(t, arsenal, ui, global_start, results) for t in tasks]
+    await asyncio.gather(*task_coroutines)
+
+    stop_event.set()
+    ui_thread.join(timeout=1)
+    
+    # Final redraw
+    ui.redraw()
+
+    # --- Final Report ---
     elapsed = time.time() - global_start
-    
-    # Aggregate summary stats
     success_count = sum(1 for r in results.values() if r["status"] == "SUCCESS")
     fail_count = len(tasks) - success_count
-    
-    total_in = 0
-    total_out = 0
-    for r in results.values():
-        usage = r.get("manifest", {}).get("usage")
-        if usage:
-            total_in += usage.get("input_tokens", 0)
-            total_out += usage.get("output_tokens", 0)
+    total_in = sum(r.get("input_tokens", 0) for r in results.values())
+    total_out = sum(r.get("output_tokens", 0) for r in results.values())
 
     summary = (
         f"Campaign: {campaign.get('campaign_id', 'N/A')}\n"
@@ -254,7 +281,7 @@ async def main_async(campaign):
         f"Usage:    {total_in} in / {total_out} out tokens"
     )
     ui.finalize(summary)
-    
+
     report = {
         "campaign_id": campaign.get("campaign_id"),
         "success": success_count,
@@ -263,15 +290,15 @@ async def main_async(campaign):
         "usage": {"input_tokens": total_in, "output_tokens": total_out},
         "tasks": {tid: {"status": r["status"], "exit_code": r["exit_code"]} for tid, r in results.items()}
     }
-    
+
     # Write report to file instead of dumping JSON to terminal
     campaign_id = campaign.get("campaign_id", "unknown")
-    report_path = os.path.join(ROME_ROOT, "legions", f"{campaign_id}_report.json")
+    report_path = os.path.join(ROME_ROOT, "legions", f"centurion_{campaign_id}.json")
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
 
     print(f"Report: {report_path}")
-    
+
     # Final exit code based on complete success
     if fail_count > 0:
         sys.exit(1)

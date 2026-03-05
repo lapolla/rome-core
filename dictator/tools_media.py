@@ -1,5 +1,6 @@
 """Media tools: music_play, music_stop, music_status, http_fetch, fetch_mo2_mod."""
 
+import asyncio
 import json
 import shlex
 import subprocess
@@ -14,30 +15,75 @@ async def music_play(query: str, fade_ms: int = 500) -> str:
     try:
         is_url = query.startswith("http")
         ytdl_query = query if is_url else f"ytsearch:{query}"
-
-        r = await run_cmd(
-            f"yt-dlp --no-download --print webpage_url {shlex.quote(ytdl_query)}", cwd="/tmp"
-        )
+        r = await run_cmd(f"yt-dlp --no-download --print webpage_url {shlex.quote(ytdl_query)}", cwd="/tmp")
         if not r.get("ok"):
             return json.dumps({"ok": False, "message": r.get("stderr", "yt-dlp failed")})
-
         url = r["stdout"].strip()
+        sock = f"/tmp/mpv_{id(object()):x}.sock"
         proc = subprocess.Popen(
-            ["mpv", url, "--no-video", "--volume=100"],
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            ["mpv", url, "--no-video", "--volume=100", f"--input-ipc-server={sock}"],
+            start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        return json.dumps({"ok": True, "url": url, "pid": proc.pid})
+        return json.dumps({"ok": True, "url": url, "pid": proc.pid, "sock": sock})
     except Exception as e:
         return json.dumps({"ok": False, "message": str(e)})
 
 
+def _socat_vol(sock, vol):
+    """Helper: build socat volume command."""
+    return f'echo \'{{"command": ["set_property", "volume", {vol}]}}\' | socat - {sock} 2>/dev/null'
+
+
 @mcp.tool()
-async def music_stop() -> str:
+async def music_stop(fade_ms: int = 0) -> str:
     """Stop all running mpv instances."""
+    if fade_ms > 0:
+        socks_raw = (await run_cmd("ls /tmp/mpv_*.sock 2>/dev/null", cwd="/tmp")).get("stdout", "").strip()
+        socks = socks_raw.split() if socks_raw else []
+        if socks:
+            steps = 20
+            step_s = fade_ms / steps / 1000
+            for i in range(steps, -1, -1):
+                vol = int((i / steps) * 100)
+                for sock in socks:
+                    await run_cmd(_socat_vol(sock, vol), cwd="/tmp")
+                await asyncio.sleep(step_s)
     r = await run_cmd("pkill mpv", cwd="/tmp")
+    await run_cmd("rm -f /tmp/mpv_*.sock", cwd="/tmp")
     return json.dumps(r)
+
+
+@mcp.tool()
+async def music_crossfade(query: str, fade_ms: int = 2000) -> str:
+    """Crossfade from current track to a new one."""
+    old_socks_raw = (await run_cmd("ls /tmp/mpv_*.sock 2>/dev/null", cwd="/tmp")).get("stdout", "").strip()
+    old_socks = old_socks_raw.split() if old_socks_raw else []
+    old_pids = (await run_cmd("pgrep mpv", cwd="/tmp")).get("stdout", "").split()
+    # Start new track
+    result = await music_play(query, fade_ms=0)
+    res = json.loads(result)
+    new_sock = res.get("sock", "")
+    # Wait for mpv to create socket then set volume 0
+    if new_sock:
+        await asyncio.sleep(1.5)
+        await run_cmd(_socat_vol(new_sock, 0), cwd="/tmp")
+    # Crossfade: old down, new up in parallel
+    steps = 20
+    step_s = fade_ms / steps / 1000
+    for i in range(steps, -1, -1):
+        vol_old = int((i / steps) * 100)
+        vol_new = 100 - vol_old
+        for sock in old_socks:
+            await run_cmd(_socat_vol(sock, vol_old), cwd="/tmp")
+        if new_sock:
+            await run_cmd(_socat_vol(new_sock, vol_new), cwd="/tmp")
+        await asyncio.sleep(step_s)
+    # Kill old processes and clean sockets
+    for pid in old_pids:
+        await run_cmd(f"kill {pid} 2>/dev/null", cwd="/tmp")
+    for sock in old_socks:
+        await run_cmd(f"rm -f {sock} 2>/dev/null", cwd="/tmp")
+    return result
 
 
 @mcp.tool()
