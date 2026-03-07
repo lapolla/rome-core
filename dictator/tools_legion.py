@@ -18,7 +18,7 @@ from mcp.server.fastmcp import Context
 from dictator.core import mcp, run_cmd, run_cmd_stream, ROME_ROOT, ARSENAL_PATH, event_bus, task_registry
 from dictator.rome_log import log_event
 from dictator.events import emit_dispatch_start, emit_progress
-from dictator.emit_helpers import emit_events as _emit_events
+from dictator.emit_helpers import emit_events as _emit_events, emit_dispatch_start_http
 
 FALLBACK_CHAIN = {"GEMINI": "CODEX", "CODEX": "OPENCODE"}
 BUSY_PATTERNS = ["service temporarily unavailable", "overloaded", "rate_limit",
@@ -184,7 +184,8 @@ async def _execute_legion_impl(
     t0 = _time.monotonic()
     capability = capability.upper()
     task_registry.register(task_id, capability)
-    asyncio.ensure_future(emit_dispatch_start(event_bus, task_id, capability))
+    await emit_dispatch_start(event_bus, task_id, capability)
+    emit_dispatch_start_http(task_id, capability)
 
     def default_on_progress(line):
         m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
@@ -276,13 +277,12 @@ async def _execute_legion_impl(
         )
         report_path = task_dir2 / f"report_{task_id}.txt"
         summary_lines = [l for l in proc.stdout.strip().splitlines() if not l.startswith("PROGRESS:")]
-        return {
-            "ok": proc.returncode == 0,
-            "status": "SUCCESS" if proc.returncode == 0 else "FAILED",
-            "report_path": str(report_path),
-            "summary": "\n".join(summary_lines[-3:]),
-            "elapsed_s": _time.monotonic() - t0,
-        }
+        shell_ok = proc.returncode == 0
+        r = {"ok": shell_ok, "status": "SUCCESS" if shell_ok else "FAILED",
+             "report_path": str(report_path), "summary": "\n".join(summary_lines[-3:]),
+             "elapsed_s": _time.monotonic() - t0}
+        await _emit_events(shell_ok, task_id, task_dir2, r, None)
+        return r
 
     cap_args = " ".join(cap.get("args", []))
     quoted_args = " ".join(shlex.quote(a) for a in args)
@@ -325,7 +325,9 @@ async def _execute_legion_impl(
         elapsed = _time.monotonic() - t0
         log_event(tool="execute_legion", task_id=task_id, status="timeout", duration_s=elapsed,
                   message=f"Timed out after {timeout_s}s")
-        return {"ok": False, "message": f"Legion timed out after {timeout_s}s"}
+        r = {"ok": False, "message": f"Legion timed out after {timeout_s}s"}
+        await _emit_events(False, task_id, task_dir, r, None)
+        return r
 
     # Change 1: Auto-retry on empty report
     ok = r.get("ok", False)
@@ -431,7 +433,7 @@ async def _execute_legion_impl(
     result["summary"] = f"[{status_icon}] {task_id} | {capability}{fb} | {model} | {round(elapsed, 1)}s{cost}"
 
     # Event bus
-    _emit_events(ok, task_id, task_dir, result, usage)
+    await _emit_events(ok, task_id, task_dir, result, usage)
     # Cache
     if result.get('ok') and not no_cache:
         try:

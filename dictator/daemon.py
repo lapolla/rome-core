@@ -12,6 +12,7 @@ from typing import Any
 
 import uvicorn
 from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route, WebSocketRoute
 
@@ -72,6 +73,22 @@ async def status_endpoint(request) -> JSONResponse:
         }
     )
 
+
+
+async def event_relay(request: Request) -> JSONResponse:
+    """Receive events from stdio MCP via HTTP POST."""
+    from dictator.events import emit_dispatch_start, emit_complete, emit_error
+    b = await request.json()
+    t, tid, p = b.get("type",""), b.get("task_id",""), b.get("payload",{})
+    if t == "dispatch_start":
+        task_registry.register(tid, p.get("capability","?"))
+        await emit_dispatch_start(event_bus, tid, p.get("capability","?"))
+    elif t == "complete":
+        task_registry.complete(tid, p.get("status","SUCCESS"), p.get("report_path"))
+        await emit_complete(event_bus, tid, p.get("status"), p.get("report_path"), p.get("usage"))
+    elif t == "error":
+        await emit_error(event_bus, tid, p.get("message",""))
+    return JSONResponse({"ok": True})
 
 async def dashboard_placeholder(request) -> HTMLResponse:
     del request
@@ -135,6 +152,7 @@ def create_app() -> Starlette:
             Mount("/mcp", app=mcp.sse_app()),
             WebSocketRoute("/ws", endpoint=rome_ws_endpoint),
             Route("/api/status", endpoint=status_endpoint),
+            Route("/api/event", endpoint=event_relay, methods=["POST"]),
             Mount("/dashboard", app=StaticFiles(directory=str(dashboard_dir), html=True)),
         ],
     )
