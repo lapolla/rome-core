@@ -15,8 +15,10 @@ from pathlib import Path
 
 from mcp.server.fastmcp import Context
 
-from dictator.core import mcp, run_cmd, run_cmd_stream, ROME_ROOT, ARSENAL_PATH
+from dictator.core import mcp, run_cmd, run_cmd_stream, ROME_ROOT, ARSENAL_PATH, event_bus, task_registry
 from dictator.rome_log import log_event
+from dictator.events import emit_dispatch_start, emit_progress
+from dictator.emit_helpers import emit_events as _emit_events
 
 FALLBACK_CHAIN = {"GEMINI": "CODEX", "CODEX": "OPENCODE"}
 BUSY_PATTERNS = ["service temporarily unavailable", "overloaded", "rate_limit",
@@ -181,17 +183,21 @@ async def _execute_legion_impl(
     """Core legion logic. Returns a result dict (not JSON string)."""
     t0 = _time.monotonic()
     capability = capability.upper()
+    task_registry.register(task_id, capability)
+    asyncio.ensure_future(emit_dispatch_start(event_bus, task_id, capability))
 
     def default_on_progress(line):
-        if ctx:
-            m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
-            if m:
-                try:
-                    p = int(m.group(1))
-                    msg = m.group(3).strip()
+        m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
+        if m:
+            try:
+                p = int(m.group(1))
+                msg = m.group(3).strip()
+                task_registry.update_progress(task_id, p, msg)
+                asyncio.ensure_future(emit_progress(event_bus, task_id, p, msg))
+                if ctx:
                     asyncio.create_task(ctx.info(f"{p}% | {msg}"))
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
     actual_on_progress = on_progress or default_on_progress
 
@@ -424,7 +430,9 @@ async def _execute_legion_impl(
     model = usage.get("model", "") if usage and isinstance(usage, dict) else ""
     result["summary"] = f"[{status_icon}] {task_id} | {capability}{fb} | {model} | {round(elapsed, 1)}s{cost}"
 
-    # Cache the result if ok
+    # Event bus
+    _emit_events(ok, task_id, task_dir, result, usage)
+    # Cache
     if result.get('ok') and not no_cache:
         try:
             CACHE_DIR.mkdir(parents=True, exist_ok=True)

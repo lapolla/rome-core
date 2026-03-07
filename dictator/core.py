@@ -44,6 +44,11 @@ PAPYRUS_COMPILER = Path(_cfg.get("papyrus_compiler", "/media/paul-kane/SteamGame
 # ── Server ─────────────────────────────────────────────────────────────
 mcp = FastMCP("asshole")
 
+# ── Event Bus & Task Registry (Phase 1 WS) ────────────────────────────
+from dictator.events import EventBus, TaskRegistry
+event_bus = EventBus(source="dictator")
+task_registry = TaskRegistry()
+
 MAX_BUF = _cfg.get("max_output_bytes", 10 * 1024 * 1024)
 
 
@@ -71,7 +76,7 @@ async def run_cmd(
         stderr = stderr_b.decode(errors="replace")[:max_output]
         if truncated:
             stdout += "\n[ROME: output truncated at 10MB]"
-            log_event("run_cmd", status="truncated", duration_s=elapsed, message=cmd[:200])
+            log_event(tool="run_cmd", status="truncated", duration_s=elapsed, message=cmd[:200])
 
         result: dict
         if proc.returncode == 0:
@@ -86,11 +91,11 @@ async def run_cmd(
         if truncated:
             result["truncated"] = True
 
-        log_event("run_cmd", status="ok" if result["ok"] else "error", duration_s=elapsed, message=cmd[:200])
+        log_event(tool="run_cmd", status="ok" if result["ok"] else "error", duration_s=elapsed, message=cmd[:200])
         return result
     except Exception as e:
         elapsed = _time.monotonic() - t0
-        log_event("run_cmd", status="exception", duration_s=elapsed, message=str(e)[:200])
+        log_event(tool="run_cmd", status="exception", duration_s=elapsed, message=str(e)[:200])
         return {"ok": False, "message": str(e)}
 
 
@@ -116,19 +121,22 @@ async def run_cmd_stream(
 
         async def _stream_stderr():
             while True:
-                line = await proc.stderr.readline()
-                if not line:
+                chunk = await proc.stderr.read(1024)
+                if not chunk:
                     break
                 
                 # Only stream to stderr if no callback is provided to avoid interference
                 if not on_stderr:
-                    sys.stderr.buffer.write(line)
+                    sys.stderr.buffer.write(chunk)
                     sys.stderr.buffer.flush()
                 
-                stderr_chunks.append(line)
+                stderr_chunks.append(chunk)
                 if on_stderr:
                     try:
-                        on_stderr(line.decode(errors="replace").strip())
+                        # Call progress callback if it looks like a progress line
+                        text = chunk.decode(errors="replace")
+                        for line in text.splitlines():
+                            on_stderr(line.strip())
                     except Exception:
                         pass
 
@@ -144,7 +152,7 @@ async def run_cmd_stream(
         stderr = stderr_b.decode(errors="replace")[:max_output]
         if truncated:
             stdout += "\n[ROME: output truncated at 10MB]"
-            log_event("run_cmd_stream", status="truncated", duration_s=elapsed, message=cmd[:200])
+            log_event(tool="run_cmd_stream", status="truncated", duration_s=elapsed, message=cmd[:200])
 
         result: dict
         if proc.returncode == 0:
@@ -159,9 +167,9 @@ async def run_cmd_stream(
         if truncated:
             result["truncated"] = True
 
-        log_event("run_cmd_stream", status="ok" if result["ok"] else "error", duration_s=elapsed, message=cmd[:200])
+        log_event(tool="run_cmd_stream", status="ok" if result["ok"] else "error", duration_s=elapsed, message=cmd[:200])
         return result
     except Exception as e:
         elapsed = _time.monotonic() - t0
-        log_event("run_cmd_stream", status="exception", duration_s=elapsed, message=str(e)[:200])
+        log_event(tool="run_cmd_stream", status="exception", duration_s=elapsed, message=str(e)[:200])
         return {"ok": False, "message": str(e)}
