@@ -126,7 +126,8 @@ def create_app() -> Starlette:
 
         auto_gc()
 
-    dashboard_app = Starlette(routes=[Route("/", endpoint=dashboard_placeholder)])
+    from starlette.staticfiles import StaticFiles
+    dashboard_dir = Path(__file__).parent / "dashboard"
     return Starlette(
         debug=False,
         on_startup=[_startup],
@@ -134,7 +135,7 @@ def create_app() -> Starlette:
             Mount("/mcp", app=mcp.sse_app()),
             WebSocketRoute("/ws", endpoint=rome_ws_endpoint),
             Route("/api/status", endpoint=status_endpoint),
-            Mount("/dashboard", app=dashboard_app),
+            Mount("/dashboard", app=StaticFiles(directory=str(dashboard_dir), html=True)),
         ],
     )
 
