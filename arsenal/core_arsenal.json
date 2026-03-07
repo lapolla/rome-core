@@ -2,26 +2,26 @@
   "capabilities": {
     "GEMINI": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["gemini", "--yolo", "--output-format", "json", "-p"],
+      "args": ["gemini", "--yolo", "--output-format", "json", "-m", "gemini-3-pro-preview", "-p"],
       "timeout": 300,
       "min_version": "2.5",
       "_note": "Google Gemini CLI — -p must be last so user prompt follows it"
     },
     "CENTURION": {
-      "exec": "/home/paul-kane/projects/rome-core/legions/centurion_wrapper.py",
-      "args": ["gemini", "--yolo", "--output-format", "json", "-p"],
+      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
+      "args": ["python3", "/home/paul-kane/projects/rome-core/legions/centurion_wrapper.py", "gemini", "--yolo", "--output-format", "json", "-m", "gemini-3-pro-preview", "-p"],
       "timeout": 600,
-      "_note": "Two-phase: LLM plans, Python executes sub-tasks via real legions. Default planner: Gemini"
+      "_note": "Two-phase: LLM plans, Python executes sub-tasks. Routed through legion_wrapper for progress bars."
     },
     "CENTURION_GEMINI": {
-      "exec": "/home/paul-kane/projects/rome-core/legions/centurion_wrapper.py",
-      "args": ["gemini", "--yolo", "--output-format", "json", "-p"],
+      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
+      "args": ["python3", "/home/paul-kane/projects/rome-core/legions/centurion_wrapper.py", "gemini", "--yolo", "--output-format", "json", "-m", "gemini-3-pro-preview", "-p"],
       "timeout": 600,
       "_note": "Two-phase Centurion with Gemini as planner"
     },
     "CENTURION_CLAUDE": {
-      "exec": "/home/paul-kane/projects/rome-core/legions/centurion_wrapper.py",
-      "args": ["claude", "--dangerously-skip-permissions", "--output-format", "json", "-p"],
+      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
+      "args": ["python3", "/home/paul-kane/projects/rome-core/legions/centurion_wrapper.py", "claude", "--dangerously-skip-permissions", "--output-format", "json", "-p"],
       "timeout": 600,
       "_note": "Two-phase Centurion with Claude as planner"
     },
@@ -41,10 +41,10 @@
     },
     "CODEX": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["codex", "exec", "--full-auto", "--skip-git-repo-check"],
-      "timeout": 120,
+      "args": ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-m", "gpt-5.4"],
+      "timeout": 300,
       "min_version": "0.1",
-      "_note": "OpenAI Codex CLI"
+      "_note": "OpenAI Codex CLI — gpt-5.4, replaces Gemini as main brain"
     },
     "MCP_TOOL_CLIENT": {
       "exec": "python3",
@@ -54,11 +54,10 @@
       "_note": "Internal MCP tool client"
     },
     "SAFE_SHELL": {
-      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["bash", "-c"],
+      "exec": "python3",
+      "args": ["/home/paul-kane/projects/rome-core/legions/shell_executor.py"],
       "timeout": 60,
-      "min_version": "5.0",
-      "_note": "Bash shell wrapper"
+      "_note": "Dedicated bash executor — no LLM wrapper, no JSON parsing"
     }
   },
   "protocol_version": "1.0"

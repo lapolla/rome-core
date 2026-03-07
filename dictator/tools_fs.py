@@ -9,10 +9,15 @@ from dictator.core import mcp, run_cmd, ROOT_DIR
 @mcp.tool()
 async def shell_exec(command: str) -> str:
     """Execute a shell command (cwd = /var/www/ftk_lms)."""
+    from dictator.core import run_cmd_stream
     from dictator.rome_log import log_event
-    log_event("shell_exec", message=command[:200])
-    r = await run_cmd(command, cwd=ROOT_DIR)
-    return json.dumps(r, indent=2)
+    log_event(tool="shell_exec", message=command[:200])
+    r = await run_cmd_stream(command, cwd=ROOT_DIR)
+    out = r.get("stdout", "").strip()
+    if r.get("returncode", 0) != 0:
+        err = r.get("stderr", r.get("message", ""))
+        return f"ERR({r.get('returncode')}): {err}" if err else f"ERR({r.get('returncode')})"
+    return out if out else "OK"
 
 
 @mcp.tool()
@@ -45,7 +50,7 @@ async def write_anywhere(path: str, content: str) -> str:
     """Write a file by absolute path."""
     p = Path(path).resolve()
     p.write_text(content, encoding="utf-8")
-    return json.dumps({"ok": True, "message": f"Wrote {len(content)} bytes to {p}"})
+    return f"OK:{len(content)}B→{p}"
 
 
 @mcp.tool()
@@ -66,6 +71,6 @@ async def list_directory(dir_path: str, recursive: bool = False) -> str:
 
     try:
         walk(abs_path)
-        return json.dumps({"ok": True, "dir_path": dir_path, "entries": entries}, indent=2)
+        return json.dumps({"ok": True, "dir_path": dir_path, "entries": entries})
     except Exception as e:
         return json.dumps({"ok": False, "message": str(e)})

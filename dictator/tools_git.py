@@ -12,7 +12,7 @@ async def git_status(repo_path: str = "") -> str:
     """Show git status (branch + short) for a repo."""
     cwd = Path(repo_path) if repo_path else GIT_ROOT
     r = await run_cmd("git status --short --branch", cwd=cwd)
-    return json.dumps(r, indent=2)
+    return r.get("stdout", "") if r.get("ok") else f"ERR: {r.get('stderr', '')}"
 
 
 @mcp.tool()
@@ -21,8 +21,7 @@ async def git_diff(path: str = "", repo_path: str = "") -> str:
     cwd = Path(repo_path) if repo_path else GIT_ROOT
     cmd = f"git diff -- {path}" if path else "git diff"
     r = await run_cmd(cmd, cwd=cwd)
-    r["command"] = cmd
-    return json.dumps(r, indent=2)
+    return r.get("stdout", "") if r.get("ok") else f"ERR: {r.get('stderr', '')}"
 
 
 @mcp.tool()
@@ -36,11 +35,10 @@ async def git_commit(message: str, files: list[str] | None = None, repo_path: st
 
     r = await run_cmd(add_cmd, cwd=cwd)
     if not r.get("ok"):
-        return json.dumps(r, indent=2)
-
+        return f"ERR(add): {r.get('stderr', '')}"
     commit_cmd = f"git commit -m {shlex.quote(message)}"
     r = await run_cmd(commit_cmd, cwd=cwd)
-    return json.dumps(r, indent=2)
+    return r.get("stdout", "OK") if r.get("ok") else f"ERR: {r.get('stderr', '')}"
 
 
 @mcp.tool()
@@ -48,4 +46,4 @@ async def git_push(branch: str = "master", repo_path: str = "") -> str:
     """Push current branch to origin for a repo."""
     cwd = Path(repo_path) if repo_path else GIT_ROOT
     r = await run_cmd(f"git push origin {shlex.quote(branch)}", cwd=cwd)
-    return json.dumps(r, indent=2)
+    return "OK" if r.get("ok") else f"ERR: {r.get('stderr', '')}"

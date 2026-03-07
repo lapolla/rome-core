@@ -394,7 +394,7 @@ async def _execute_legion_impl(
         "capability": capability,
         "fallback_used": fallback_used,
         "elapsed_s": round(elapsed, 2),
-        "progress": progress,
+        "progress": progress[-1:],
         "usage": usage,
     }
     if ok:
@@ -535,19 +535,7 @@ async def execute_campaign(
     
     ui.finalize(summary)
 
-    # Convert to minimal string return instead of massive JSON
-    out_lines = [summary, ""]
-    for t_id, res_str in task_results.items():
-        try:
-            r = json.loads(res_str) if isinstance(res_str, str) else res_str
-            task_sum = r.get("summary", "")
-            if not task_sum:
-                task_sum = "Success" if r.get("ok") else "Failed"
-            out_lines.append(f"- {t_id}: {task_sum}")
-        except Exception:
-            pass
-            
-    final_output = "\n".join(out_lines)
+    final_output = summary
     est_tokens = len(final_output) // 4
     log_event(tool='token_guard', message='mcp_outbound', task_id=campaign_id, usage={'estimated_output_tokens': est_tokens})
     return final_output
@@ -560,12 +548,16 @@ async def rome_dispatch(
     capability: str,
     prompt: str,
     input_files: list[str] | None = None,
-    no_cache: bool = False
+    no_cache: bool = False,
+    output_path: str | None = None
 ) -> str:
-    """Quick dispatch: writes prompt to file, then executes legion. Keeps approval dialog clean."""
+    """Quick dispatch. output_path: agent writes directly to this path instead of returning content."""
     task_dir = ROME_ROOT / "legions" / task_id
     task_dir.mkdir(parents=True, exist_ok=True)
-    (task_dir / "task.md").write_text(prompt)
+    full_prompt = prompt
+    if output_path:
+        full_prompt += f"\n\nIMPORTANT: Write your complete output directly to {output_path}. Do not include it in your response."
+    (task_dir / "task.md").write_text(full_prompt)
     result = await _execute_legion_impl(
         task_id=task_id,
         capability=capability,
@@ -579,26 +571,23 @@ async def rome_dispatch(
     report_path = result.get('report_path')
     if not report_path:
         path = task_dir / f'report_{task_id}.txt'
-        if result.get('ok') and result.get('output'):
+        if path.exists() and path.stat().st_size > 20:
+            report_path = str(path)
+        elif result.get('ok') and result.get('output'):
             path.write_text(result['output'])
             report_path = str(path)
     
+    if output_path:
+        op = Path(output_path)
+        if op.exists() and op.stat().st_size > 0:
+            return f"OK:{task_id}\nOutput: {output_path} ({op.stat().st_size}B)"
+        return f"ERR:{task_id}\nAgent failed to write to {output_path}"
+    status = "OK" if result.get("ok") else "ERR"
     summary = result.get("summary", "")
-    if report_path and Path(report_path).exists():
-        try:
-            report_text = Path(report_path).read_text()[:500]
-            summary = f"{report_text}\n---\n{summary}"
-        except Exception:
-            pass
-
-    # Return minimal string summary
-    final_summary = summary
-    if report_path:
-        final_summary += f"\nReport: {report_path}"
-
-    est_tokens = len(final_summary) // 4
-    log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
-    return final_summary
+    rp = f"\nReport: {report_path}" if report_path else ""
+    final = f"{status}:{task_id}{rp}\n{summary}"
+    log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': len(final) // 4})
+    return final
 
 
 @mcp.tool()

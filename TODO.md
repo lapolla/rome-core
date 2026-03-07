@@ -19,8 +19,11 @@
 - [x] Dictator MCP crash on startup — `callable | None` type hint (lowercase `callable` is a builtin function, not a type). Fixed in `core.py` and `tools_legion.py` by importing `Callable` from `collections.abc`.
 
 ## Open
-- [ ] Agent-to-disk direct write — agents (GEMINI/Codex) should write files directly to disk instead of returning content through orchestrator context. Pattern: `gemini -p "produce file" > /path/file 2>/dev/null`. Needs: arsenal support for output redirection, or a `write_file` MCP tool agents can call. Biggest token waste source currently.
-- [ ] Legion wrapper progress bars not visible in Claude Code terminal — `/dev/tty` writes go to underlying terminal, not Claude's UI. Progress bars work in standalone terminal and centurion dashboard but are invisible when dispatched from Claude Code. Need alternative rendering (e.g. write to a file Claude can tail, or use Claude's native task status).
+- [x] Agent-to-disk direct write — `rome_dispatch(output_path=...)` tells agent to write directly. Codex sandbox fixed (`--dangerously-bypass-approvals-and-sandbox`). Zero content through orchestrator.
+- [x] Legion wrapper progress bars in Claude Code — centurion.py non-TTY mode prints clean stdout lines, run via Bash tool for live streaming. progress.log polling + time-based ramp for visual progress.
 - [ ] Prefect sandboxing is still prompt-level — true MCP-level tool filtering not possible with gemini CLI dispatch
 - [x] Restore v1 Centurion dashboard — standalone centurion.py CLI with OrchestratorUI, launch_centurion MCP tool (fire-and-forget via /dev/tty), dynamic column alignment, JSON report written to file
+- [x] Quiet MCP returns — tools return minimal OK/ERR. rome_dispatch, shell_exec, git tools, write_anywhere all slimmed down.
+- [x] Empty report bug — rome_dispatch was overwriting wrapper's report file with "OK:task_id". Fixed: check if report exists before writing.
+- [ ] WebSocket transport — Dictator as persistent daemon with WS interface alongside MCP. Enables: live dashboard, headless ROME (any orchestrator, not just Claude Code), real-time agent streaming. Key unlock for "make the throne cheap" — decouple orchestrator from Opus.
 - [ ] Token discipline enforcement — if Claude (Dictator) consumes more than ~500 tokens on any single task (reading files, analyzing code, writing edits), it must be whipped down. ALL work beyond trivial orchestration commands MUST be delegated to slaves (GEMINI/CODEX/SAFE_SHELL). Claude is the emperor — it commands, it does not labor. Violations = wasted budget.
