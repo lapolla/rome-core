@@ -1,0 +1,947 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ROME Dashboard</title>
+    <style>
+      :root {
+        --bg: #08111b;
+        --bg-alt: #0e1a27;
+        --panel: rgba(14, 26, 39, 0.92);
+        --panel-strong: rgba(20, 34, 49, 0.98);
+        --border: #223243;
+        --border-strong: #33506a;
+        --text: #d7e3ee;
+        --muted: #8da2b6;
+        --accent: #4dc1ff;
+        --registered: #687585;
+        --running: #3da4ff;
+        --success: #3ddc97;
+        --failed: #ff5f56;
+        --warn: #ffb347;
+        --shadow: 0 22px 60px rgba(0, 0, 0, 0.35);
+        --radius: 16px;
+        --radius-sm: 10px;
+        --grid-gap: 14px;
+        --font: "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background:
+          radial-gradient(circle at top right, rgba(77, 193, 255, 0.15), transparent 28%),
+          radial-gradient(circle at left 20%, rgba(61, 220, 151, 0.12), transparent 24%),
+          linear-gradient(180deg, #07101a 0%, #08111b 45%, #050a11 100%);
+        color: var(--text);
+        font-family: var(--font);
+      }
+
+      body {
+        padding: 20px;
+      }
+
+      .shell {
+        display: grid;
+        gap: 16px;
+        max-width: 1600px;
+        margin: 0 auto;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(16px);
+      }
+
+      .topbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+        gap: 16px;
+        padding: 18px;
+      }
+
+      .title-wrap {
+        display: grid;
+        gap: 10px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 24px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .subtitle {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .status-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 34px;
+        padding: 0 12px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: rgba(6, 14, 24, 0.66);
+        color: var(--text);
+        font-size: 12px;
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--muted);
+        box-shadow: 0 0 14px currentColor;
+      }
+
+      .controls {
+        display: grid;
+        gap: 12px;
+        align-content: start;
+      }
+
+      .control-label {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .control-row {
+        display: flex;
+        gap: 10px;
+      }
+
+      input {
+        width: 100%;
+        min-width: 0;
+        padding: 11px 12px;
+        color: var(--text);
+        background: rgba(5, 12, 20, 0.95);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        font: inherit;
+      }
+
+      input:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(77, 193, 255, 0.18);
+      }
+
+      button {
+        padding: 11px 14px;
+        border: 1px solid #2a6787;
+        border-radius: 10px;
+        background: linear-gradient(180deg, #12354a 0%, #0b2433 100%);
+        color: #dff5ff;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: #3e91bc;
+      }
+
+      .hint {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        padding: 0 18px 18px;
+      }
+
+      .stat {
+        padding: 14px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: linear-gradient(180deg, rgba(8, 18, 29, 0.95) 0%, rgba(8, 14, 22, 0.95) 100%);
+      }
+
+      .stat-label {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .stat-value {
+        margin-top: 8px;
+        font-size: 26px;
+        line-height: 1;
+      }
+
+      .cards-panel {
+        padding: 18px;
+      }
+
+      .section-title {
+        margin: 0 0 14px;
+        color: var(--muted);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: var(--grid-gap);
+      }
+
+      .empty-state {
+        padding: 28px;
+        border: 1px dashed var(--border);
+        border-radius: var(--radius-sm);
+        color: var(--muted);
+        text-align: center;
+        background: rgba(5, 12, 20, 0.7);
+      }
+
+      .card {
+        display: grid;
+        gap: 14px;
+        padding: 16px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: linear-gradient(180deg, rgba(11, 22, 34, 0.98), rgba(7, 14, 22, 0.98));
+        position: relative;
+        overflow: hidden;
+      }
+
+      .card::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 4px;
+        background: var(--card-accent, var(--registered));
+      }
+
+      .card-top,
+      .meta-row,
+      .usage-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .task-id {
+        font-size: 15px;
+        font-weight: 600;
+        word-break: break-word;
+      }
+
+      .capability {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .badge {
+        padding: 6px 9px;
+        border: 1px solid currentColor;
+        border-radius: 999px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        white-space: nowrap;
+      }
+
+      .progress-block {
+        display: grid;
+        gap: 8px;
+      }
+
+      .progress-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .progress-track {
+        height: 10px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      .progress-fill {
+        height: 100%;
+        width: 0%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, rgba(61, 164, 255, 0.6), rgba(77, 193, 255, 0.95));
+        transition: width 180ms ease;
+      }
+
+      .message {
+        min-height: 2.8em;
+        color: #c4d4e1;
+        font-size: 12px;
+        line-height: 1.4;
+        word-break: break-word;
+      }
+
+      .meta-row,
+      .usage-row {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .mono-strong {
+        color: var(--text);
+      }
+
+      .log-panel {
+        padding: 18px;
+      }
+
+      .log-list {
+        display: grid;
+        gap: 8px;
+        max-height: 320px;
+        overflow: auto;
+      }
+
+      .log-item {
+        display: grid;
+        grid-template-columns: 96px 140px minmax(0, 1fr);
+        gap: 12px;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: rgba(4, 10, 17, 0.78);
+        font-size: 12px;
+      }
+
+      .log-time,
+      .log-type {
+        color: var(--muted);
+      }
+
+      .log-message {
+        word-break: break-word;
+      }
+
+      [data-state="connected"] .dot {
+        color: var(--success);
+        background: var(--success);
+      }
+
+      [data-state="connecting"] .dot {
+        color: var(--warn);
+        background: var(--warn);
+      }
+
+      [data-state="disconnected"] .dot,
+      [data-state="error"] .dot {
+        color: var(--failed);
+        background: var(--failed);
+      }
+
+      .status-registered { color: var(--registered); }
+      .status-running { color: var(--running); }
+      .status-success,
+      .status-completed { color: var(--success); }
+      .status-failed,
+      .status-error,
+      .status-cancelled { color: var(--failed); }
+
+      @media (max-width: 980px) {
+        .topbar,
+        .stats-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .log-item {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel">
+        <div class="topbar">
+          <div class="title-wrap">
+            <h1>ROME Dashboard</h1>
+            <div class="subtitle">Operational task view for the Dictator daemon. Snapshot loads via `status`, then cards update from the live event stream.</div>
+            <div class="status-strip">
+              <div class="chip" id="wsChip" data-state="connecting">
+                <span class="dot"></span>
+                <span id="wsLabel">WS CONNECTING</span>
+              </div>
+              <div class="chip">
+                <span>HTTP</span>
+                <span id="httpLabel">PENDING</span>
+              </div>
+              <div class="chip">
+                <span>UPTIME</span>
+                <span id="uptimeLabel">--</span>
+              </div>
+              <div class="chip">
+                <span>HOST</span>
+                <span id="hostLabel">--</span>
+              </div>
+            </div>
+          </div>
+          <div class="controls">
+            <div class="control-label">Connection</div>
+            <div class="control-row">
+              <input id="tokenInput" type="password" placeholder="WS token" autocomplete="off">
+              <button id="connectButton" type="button">Reconnect</button>
+            </div>
+            <div class="hint" id="tokenHint">Token is loaded from the `token` URL parameter when present. Otherwise it is read from this field and stored locally for reconnects.</div>
+          </div>
+        </div>
+        <div class="stats-grid">
+          <div class="stat">
+            <div class="stat-label">Active</div>
+            <div class="stat-value" id="activeTasks">0</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Total</div>
+            <div class="stat-value" id="totalTasks">0</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Running</div>
+            <div class="stat-value" id="runningTasks">0</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Events</div>
+            <div class="stat-value" id="eventCount">0</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel cards-panel">
+        <h2 class="section-title">Tasks</h2>
+        <div id="cards" class="cards"></div>
+      </section>
+
+      <section class="panel log-panel">
+        <h2 class="section-title">Event Log</h2>
+        <div id="eventLog" class="log-list"></div>
+      </section>
+    </main>
+
+    <script>
+      (function () {
+        const params = new URLSearchParams(window.location.search);
+        const storageKey = "rome-dashboard-token";
+        const cardsEl = document.getElementById("cards");
+        const eventLogEl = document.getElementById("eventLog");
+        const tokenInput = document.getElementById("tokenInput");
+        const connectButton = document.getElementById("connectButton");
+        const tokenHint = document.getElementById("tokenHint");
+        const wsChip = document.getElementById("wsChip");
+        const wsLabel = document.getElementById("wsLabel");
+        const httpLabel = document.getElementById("httpLabel");
+        const uptimeLabel = document.getElementById("uptimeLabel");
+        const hostLabel = document.getElementById("hostLabel");
+        const activeTasksEl = document.getElementById("activeTasks");
+        const totalTasksEl = document.getElementById("totalTasks");
+        const runningTasksEl = document.getElementById("runningTasks");
+        const eventCountEl = document.getElementById("eventCount");
+
+        const state = {
+          socket: null,
+          reconnectTimer: null,
+          statusTimer: null,
+          clockTimer: null,
+          requestId: 0,
+          eventsSeen: 0,
+          daemonStatus: null,
+          token: params.get("token") || localStorage.getItem(storageKey) || "",
+          tasks: new Map(),
+          logs: []
+        };
+
+        tokenInput.value = state.token;
+        tokenInput.hidden = Boolean(params.get("token"));
+        connectButton.hidden = false;
+        tokenHint.textContent = params.get("token")
+          ? "Token came from the URL. Reconnect uses that same token unless the URL changes."
+          : "No token found in the URL. Enter one here if the daemon requires authentication.";
+        hostLabel.textContent = window.location.host || "localhost";
+
+        function escapeHtml(value) {
+          return String(value == null ? "" : value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        function formatDuration(seconds) {
+          if (!Number.isFinite(seconds) || seconds < 0) {
+            return "--";
+          }
+          if (seconds < 60) {
+            return seconds.toFixed(1) + "s";
+          }
+          const mins = Math.floor(seconds / 60);
+          const secs = Math.floor(seconds % 60);
+          if (mins < 60) {
+            return mins + "m " + secs + "s";
+          }
+          const hours = Math.floor(mins / 60);
+          return hours + "h " + (mins % 60) + "m";
+        }
+
+        function formatTimestamp(ts) {
+          if (!Number.isFinite(ts)) {
+            return "--";
+          }
+          return new Date(ts * 1000).toLocaleTimeString();
+        }
+
+        function formatNumber(value) {
+          const n = Number(value);
+          return Number.isFinite(n) ? n.toLocaleString() : "--";
+        }
+
+        function formatUsage(usage) {
+          const data = usage || {};
+          const total = Number(data.total_tokens);
+          const inTokens = Number(data.input_tokens);
+          const outTokens = Number(data.output_tokens);
+          const cost = Number(data.cost_usd);
+
+          let tokenText = "--";
+          if (Number.isFinite(total) && total > 0) {
+            tokenText = formatNumber(total) + " tok";
+          } else if ((Number.isFinite(inTokens) && inTokens > 0) || (Number.isFinite(outTokens) && outTokens > 0)) {
+            tokenText = formatNumber(inTokens || 0) + " in / " + formatNumber(outTokens || 0) + " out";
+          }
+
+          const costText = Number.isFinite(cost) && cost > 0 ? "$" + cost.toFixed(4) : "--";
+          return { tokenText, costText };
+        }
+
+        function canonicalStatus(status) {
+          const raw = String(status || "registered").trim();
+          const lower = raw.toLowerCase();
+          if (lower === "success") {
+            return "SUCCESS";
+          }
+          if (lower === "failed") {
+            return "FAILED";
+          }
+          if (lower === "completed") {
+            return "completed";
+          }
+          if (lower === "cancelled") {
+            return "cancelled";
+          }
+          if (lower === "running") {
+            return "running";
+          }
+          return "registered";
+        }
+
+        function statusClass(status) {
+          const lower = String(status || "").toLowerCase();
+          if (lower === "success") {
+            return "status-success";
+          }
+          if (lower === "failed") {
+            return "status-failed";
+          }
+          if (lower === "completed") {
+            return "status-completed";
+          }
+          if (lower === "cancelled") {
+            return "status-cancelled";
+          }
+          if (lower === "running") {
+            return "status-running";
+          }
+          return "status-registered";
+        }
+
+        function statusColor(status) {
+          const lower = String(status || "").toLowerCase();
+          if (lower === "success" || lower === "completed") {
+            return "var(--success)";
+          }
+          if (lower === "failed" || lower === "cancelled") {
+            return "var(--failed)";
+          }
+          if (lower === "running") {
+            return "var(--running)";
+          }
+          return "var(--registered)";
+        }
+
+        function readCurrentToken() {
+          const urlToken = params.get("token");
+          if (urlToken) {
+            return urlToken;
+          }
+          const typed = tokenInput.value.trim();
+          if (typed) {
+            localStorage.setItem(storageKey, typed);
+          }
+          state.token = typed;
+          return typed;
+        }
+
+        function addLog(kind, taskId, message, ts) {
+          state.logs.unshift({
+            kind: String(kind || "event"),
+            taskId: taskId || "-",
+            message: String(message || ""),
+            ts: Number.isFinite(ts) ? ts : Date.now() / 1000
+          });
+          state.logs = state.logs.slice(0, 20);
+          renderLogs();
+        }
+
+        function renderLogs() {
+          if (!state.logs.length) {
+            eventLogEl.innerHTML = '<div class="empty-state">No events received yet.</div>';
+            return;
+          }
+          eventLogEl.innerHTML = state.logs.map(function (entry) {
+            return (
+              '<div class="log-item">' +
+                '<div class="log-time">' + escapeHtml(formatTimestamp(entry.ts)) + '</div>' +
+                '<div class="log-type">' + escapeHtml(entry.kind + " :: " + entry.taskId) + '</div>' +
+                '<div class="log-message">' + escapeHtml(entry.message) + '</div>' +
+              '</div>'
+            );
+          }).join("");
+        }
+
+        function upsertTask(taskId, patch) {
+          const existing = state.tasks.get(taskId) || {
+            task_id: taskId,
+            capability: "UNKNOWN",
+            status: "registered",
+            progress_percent: 0,
+            progress_message: "",
+            usage: {},
+            report_path: null,
+            created_at: Date.now() / 1000,
+            updated_at: Date.now() / 1000
+          };
+          const merged = Object.assign({}, existing, patch || {});
+          merged.task_id = merged.task_id || taskId;
+          merged.usage = Object.assign({}, existing.usage || {}, (patch && patch.usage) || {});
+          merged.status = canonicalStatus(merged.status);
+          merged.progress_percent = Math.max(0, Math.min(100, Number(merged.progress_percent) || 0));
+          merged.created_at = Number(merged.created_at) || existing.created_at || Date.now() / 1000;
+          merged.updated_at = Number(merged.updated_at) || Date.now() / 1000;
+          state.tasks.set(taskId, merged);
+          renderTasks();
+        }
+
+        function handleSnapshot(tasks) {
+          const entries = tasks || {};
+          Object.keys(entries).forEach(function (taskId) {
+            upsertTask(taskId, entries[taskId]);
+          });
+        }
+
+        function handleEventEnvelope(event) {
+          state.eventsSeen += 1;
+          const payload = event && event.payload ? event.payload : {};
+          const taskId = event ? event.task_id : null;
+          const ts = event && Number.isFinite(event.ts) ? event.ts : Date.now() / 1000;
+          const type = event ? event.type : "event";
+
+          if (type === "heartbeat") {
+            addLog("heartbeat", "-", "heartbeat", ts);
+            renderStats();
+            return;
+          }
+
+          if (!taskId) {
+            addLog(type, "-", JSON.stringify(payload), ts);
+            renderStats();
+            return;
+          }
+
+          if (type === "dispatch_start") {
+            upsertTask(taskId, {
+              task_id: taskId,
+              capability: payload.capability || "UNKNOWN",
+              status: "registered",
+              progress_message: "Dispatch accepted",
+              updated_at: ts
+            });
+            addLog(type, taskId, "capability=" + (payload.capability || "UNKNOWN"), ts);
+          } else if (type === "progress") {
+            upsertTask(taskId, {
+              status: "running",
+              progress_percent: payload.percent,
+              progress_message: payload.message || "",
+              updated_at: ts
+            });
+            addLog(type, taskId, (payload.percent || 0) + "% " + (payload.message || ""), ts);
+          } else if (type === "cost_update") {
+            upsertTask(taskId, {
+              usage: payload.usage || {},
+              updated_at: ts
+            });
+            const usageBits = formatUsage(payload.usage || {});
+            addLog(type, taskId, usageBits.tokenText + " / " + usageBits.costText, ts);
+          } else if (type === "complete") {
+            upsertTask(taskId, {
+              status: payload.status || "SUCCESS",
+              progress_percent: 100,
+              progress_message: payload.report_path || "Task complete",
+              report_path: payload.report_path || null,
+              usage: payload.usage || {},
+              updated_at: ts
+            });
+            addLog(type, taskId, String(payload.status || "complete"), ts);
+          } else if (type === "error") {
+            upsertTask(taskId, {
+              status: "FAILED",
+              progress_message: payload.message || "Unknown error",
+              updated_at: ts
+            });
+            addLog(type, taskId, payload.message || "error", ts);
+          } else {
+            addLog(type, taskId, JSON.stringify(payload), ts);
+          }
+
+          renderStats();
+        }
+
+        function renderTasks() {
+          const tasks = Array.from(state.tasks.values()).sort(function (a, b) {
+            return Number(b.updated_at || 0) - Number(a.updated_at || 0);
+          });
+          if (!tasks.length) {
+            cardsEl.innerHTML = '<div class="empty-state">No tasks registered. The dashboard will populate after the daemon returns a snapshot or emits events.</div>';
+            renderStats();
+            return;
+          }
+
+          cardsEl.innerHTML = tasks.map(function (task) {
+            const status = canonicalStatus(task.status);
+            const percent = Math.max(0, Math.min(100, Number(task.progress_percent) || 0));
+            const usageBits = formatUsage(task.usage);
+            const createdAt = Number(task.created_at) || Number(task.updated_at) || Date.now() / 1000;
+            const lastUpdate = Number(task.updated_at) || createdAt;
+            const elapsed = formatDuration((status === "SUCCESS" || status === "FAILED" || status === "completed" || status === "cancelled" ? lastUpdate : Date.now() / 1000) - createdAt);
+            const message = task.progress_message || task.report_path || "Awaiting events";
+            const cardColor = statusColor(status);
+
+            return (
+              '<article class="card" style="--card-accent:' + cardColor + ';">' +
+                '<div class="card-top">' +
+                  '<div>' +
+                    '<div class="task-id">' + escapeHtml(task.task_id) + '</div>' +
+                    '<div class="capability">' + escapeHtml(task.capability || "UNKNOWN") + '</div>' +
+                  '</div>' +
+                  '<div class="badge ' + statusClass(status) + '">' + escapeHtml(status) + '</div>' +
+                '</div>' +
+                '<div class="progress-block">' +
+                  '<div class="progress-meta">' +
+                    '<span>' + escapeHtml(percent.toFixed(0) + "%") + '</span>' +
+                    '<span>' + escapeHtml(elapsed) + '</span>' +
+                  '</div>' +
+                  '<div class="progress-track">' +
+                    '<div class="progress-fill" style="width:' + percent + '%; background:' + cardColor + ';"></div>' +
+                  '</div>' +
+                '</div>' +
+                '<div class="message">' + escapeHtml(message) + '</div>' +
+                '<div class="meta-row">' +
+                  '<span>Created <span class="mono-strong">' + escapeHtml(formatTimestamp(createdAt)) + '</span></span>' +
+                  '<span>Updated <span class="mono-strong">' + escapeHtml(formatTimestamp(lastUpdate)) + '</span></span>' +
+                '</div>' +
+                '<div class="usage-row">' +
+                  '<span>Tokens <span class="mono-strong">' + escapeHtml(usageBits.tokenText) + '</span></span>' +
+                  '<span>Cost <span class="mono-strong">' + escapeHtml(usageBits.costText) + '</span></span>' +
+                '</div>' +
+              '</article>'
+            );
+          }).join("");
+
+          renderStats();
+        }
+
+        function renderStats() {
+          const tasks = Array.from(state.tasks.values());
+          const running = tasks.filter(function (task) {
+            const s = canonicalStatus(task.status).toLowerCase();
+            return s === "running" || s === "registered";
+          }).length;
+          const activeFromDaemon = state.daemonStatus && Number.isFinite(Number(state.daemonStatus.active_tasks))
+            ? Number(state.daemonStatus.active_tasks)
+            : running;
+
+          activeTasksEl.textContent = String(activeFromDaemon);
+          totalTasksEl.textContent = String(tasks.length || (state.daemonStatus && state.daemonStatus.total_tasks) || 0);
+          runningTasksEl.textContent = String(running);
+          eventCountEl.textContent = String(state.eventsSeen);
+        }
+
+        function setWsState(kind, detail) {
+          wsChip.dataset.state = kind;
+          if (kind === "connected") {
+            wsLabel.textContent = "WS CONNECTED";
+          } else if (kind === "connecting") {
+            wsLabel.textContent = "WS CONNECTING";
+          } else if (kind === "error") {
+            wsLabel.textContent = "WS ERROR";
+          } else {
+            wsLabel.textContent = detail ? "WS " + detail.toUpperCase() : "WS DISCONNECTED";
+          }
+        }
+
+        function wsUrl() {
+          const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+          const url = new URL(protocol + "//" + window.location.host + "/ws");
+          const token = readCurrentToken();
+          if (token) {
+            url.searchParams.set("token", token);
+          }
+          return url.toString();
+        }
+
+        function sendCommand(command, payload) {
+          if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
+            return;
+          }
+          state.requestId += 1;
+          state.socket.send(JSON.stringify({
+            type: "command",
+            command: command,
+            request_id: "req-" + state.requestId,
+            payload: payload || {}
+          }));
+        }
+
+        function connectSocket() {
+          if (state.socket && (state.socket.readyState === WebSocket.OPEN || state.socket.readyState === WebSocket.CONNECTING)) {
+            state.socket.close();
+          }
+          if (state.reconnectTimer) {
+            clearTimeout(state.reconnectTimer);
+            state.reconnectTimer = null;
+          }
+
+          setWsState("connecting");
+          const socket = new WebSocket(wsUrl());
+          state.socket = socket;
+
+          socket.addEventListener("open", function () {
+            setWsState("connected");
+            addLog("ws", "-", "connected", Date.now() / 1000);
+            sendCommand("status", {});
+          });
+
+          socket.addEventListener("message", function (messageEvent) {
+            let data;
+            try {
+              data = JSON.parse(messageEvent.data);
+            } catch (error) {
+              addLog("parse_error", "-", "Invalid JSON frame", Date.now() / 1000);
+              return;
+            }
+
+            if (data.type === "response") {
+              if (data.ok && data.payload && data.payload.tasks) {
+                handleSnapshot(data.payload.tasks);
+                addLog("snapshot", "-", Object.keys(data.payload.tasks).length + " tasks", Date.now() / 1000);
+              } else if (!data.ok) {
+                addLog("response_error", "-", data.error || "command failed", Date.now() / 1000);
+              }
+              renderStats();
+              return;
+            }
+
+            if (data.type === "event" && data.event) {
+              handleEventEnvelope(data.event);
+            }
+          });
+
+          socket.addEventListener("close", function (event) {
+            const unauthorized = event.code === 4401;
+            setWsState(unauthorized ? "error" : "disconnected", unauthorized ? "unauthorized" : "disconnected");
+            addLog("ws", "-", unauthorized ? "unauthorized" : "closed code=" + event.code, Date.now() / 1000);
+            if (!unauthorized) {
+              state.reconnectTimer = window.setTimeout(connectSocket, 5000);
+            }
+          });
+
+          socket.addEventListener("error", function () {
+            setWsState("error");
+            addLog("ws", "-", "socket error", Date.now() / 1000);
+          });
+        }
+
+        async function refreshDaemonStatus() {
+          const url = new URL("/api/status", window.location.origin);
+          try {
+            const response = await fetch(url.toString(), { cache: "no-store" });
+            if (!response.ok) {
+              throw new Error("HTTP " + response.status);
+            }
+            const payload = await response.json();
+            state.daemonStatus = payload;
+            httpLabel.textContent = payload.ok ? "OK" : "ERROR";
+            uptimeLabel.textContent = formatDuration(Number(payload.uptime_s));
+            renderStats();
+          } catch (error) {
+            httpLabel.textContent = "ERROR";
+            uptimeLabel.textContent = "--";
+          }
+        }
+
+        connectButton.addEventListener("click", function () {
+          connectSocket();
+          refreshDaemonStatus();
+        });
+
+        tokenInput.addEventListener("keydown", function (event) {
+          if (event.key === "Enter") {
+            connectSocket();
+          }
+        });
+
+        renderLogs();
+        renderTasks();
+        refreshDaemonStatus();
+        connectSocket();
+        state.statusTimer = window.setInterval(refreshDaemonStatus, 5000);
+        state.clockTimer = window.setInterval(renderTasks, 1000);
+      }());
+    </script>
+  </body>
+</html>
