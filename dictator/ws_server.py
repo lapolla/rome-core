@@ -86,11 +86,6 @@ class ConnectionManager:
         self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket) -> tuple[str, asyncio.Queue[RomeEvent]]:
-        token = _extract_bearer_token(websocket)
-        if _WS_TOKEN and token != _WS_TOKEN:
-            await websocket.close(code=4401, reason="Unauthorized")
-            raise PermissionError("unauthorized")
-
         await websocket.accept()
         subscriber_id, queue = await event_bus.subscribe()
         async with self._lock:
