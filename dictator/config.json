@@ -15,5 +15,8 @@
   "legion_wrapper": "legions/legion_wrapper.py",
   "gc_max_age_days": 7,
   "gc_keep_min": 50,
-  "max_output_bytes": 10485760
+  "max_output_bytes": 10485760,
+  "ws_token": "rome-dev-token",
+  "daemon_host": "127.0.0.1",
+  "daemon_port": 8741
 }
