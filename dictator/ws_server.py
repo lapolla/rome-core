@@ -12,7 +12,7 @@ from starlette.routing import WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from dictator.core import event_bus, task_registry
-from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_error
+from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_dispatch_start, emit_error
 from dictator.tools_legion import _execute_legion_impl
 
 _CFG_PATH = Path(__file__).with_name("config.json")
@@ -129,6 +129,8 @@ async def _dispatch_runner(
     no_cache: bool,
     prompt_file: str,
 ) -> None:
+    task_registry.register(task_id, capability)
+    await emit_dispatch_start(event_bus, task_id, capability)
     try:
         result = await _execute_legion_impl(
             task_id=task_id,

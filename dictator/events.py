@@ -197,6 +197,7 @@ class TaskRegistry:
             if task is None:
                 return None
             task["status"] = status
+            task["progress_percent"] = 100.0
             task["report_path"] = report_path
             task["updated_at"] = time.time()
             return self._snapshot(task)
