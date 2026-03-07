@@ -22,7 +22,7 @@ _PARENT = str(Path(__file__).resolve().parent.parent)
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
 
-from dictator.core import mcp, task_registry
+from dictator.core import mcp, task_registry, event_bus
 from dictator.ws_server import rome_ws_endpoint
 
 _CFG_PATH = Path(__file__).with_name("config.json")
