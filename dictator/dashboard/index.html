@@ -162,6 +162,11 @@
       button:hover {
         border-color: #3e91bc;
       }
+      
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
 
       .hint {
         color: var(--muted);
@@ -171,7 +176,7 @@
 
       .stats-grid {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 12px;
         padding: 0 18px 18px;
       }
@@ -416,11 +421,8 @@
           </div>
           <div class="controls">
             <div class="control-label">Connection</div>
-            <div class="control-row">
-              <input id="tokenInput" type="password" placeholder="WS token" autocomplete="off">
-              <button id="connectButton" type="button">Reconnect</button>
-            </div>
-            <div class="hint" id="tokenHint">Token is loaded from the `token` URL parameter when present. Otherwise it is read from this field and stored locally for reconnects.</div>
+            <button id="connectButton" type="button">Reconnect</button>
+            <div class="hint">Reconnects the live WebSocket stream and refreshes daemon status.</div>
           </div>
         </div>
         <div class="stats-grid">
@@ -440,6 +442,10 @@
             <div class="stat-label">Events</div>
             <div class="stat-value" id="eventCount">0</div>
           </div>
+          <div class="stat">
+            <div class="stat-label">Cost</div>
+            <div class="stat-value" id="totalCost">$0.0000</div>
+          </div>
         </div>
       </section>
 
@@ -456,13 +462,9 @@
 
     <script>
       (function () {
-        const params = new URLSearchParams(window.location.search);
-        const storageKey = "rome-dashboard-token";
         const cardsEl = document.getElementById("cards");
         const eventLogEl = document.getElementById("eventLog");
-        const tokenInput = document.getElementById("tokenInput");
         const connectButton = document.getElementById("connectButton");
-        const tokenHint = document.getElementById("tokenHint");
         const wsChip = document.getElementById("wsChip");
         const wsLabel = document.getElementById("wsLabel");
         const httpLabel = document.getElementById("httpLabel");
@@ -472,6 +474,7 @@
         const totalTasksEl = document.getElementById("totalTasks");
         const runningTasksEl = document.getElementById("runningTasks");
         const eventCountEl = document.getElementById("eventCount");
+        const totalCostEl = document.getElementById("totalCost");
 
         const state = {
           socket: null,
@@ -481,17 +484,13 @@
           requestId: 0,
           eventsSeen: 0,
           daemonStatus: null,
-          token: params.get("token") || localStorage.getItem(storageKey) || "",
           tasks: new Map(),
-          logs: []
+          sessionCosts: new Map(),
+          logs: [],
+          lastLogKey: null,
+          lastLogTs: 0
         };
 
-        tokenInput.value = state.token;
-        tokenInput.hidden = Boolean(params.get("token"));
-        connectButton.hidden = false;
-        tokenHint.textContent = params.get("token")
-          ? "Token came from the URL. Reconnect uses that same token unless the URL changes."
-          : "No token found in the URL. Enter one here if the daemon requires authentication.";
         hostLabel.textContent = window.location.host || "localhost";
 
         function escapeHtml(value) {
@@ -604,28 +603,26 @@
           return "var(--registered)";
         }
 
-        function readCurrentToken() {
-          const urlToken = params.get("token");
-          if (urlToken) {
-            return urlToken;
-          }
-          const typed = tokenInput.value.trim();
-          if (typed) {
-            localStorage.setItem(storageKey, typed);
-          }
-          state.token = typed;
-          return typed;
-        }
-
         function addLog(kind, taskId, message, ts) {
+          const eventTs = Number.isFinite(ts) ? ts : Date.now() / 1000;
+          const logKey = [String(kind || "event"), taskId || "-", String(message || "")].join("::");
+          if (state.lastLogKey === logKey && Math.abs(eventTs - state.lastLogTs) < 2) {
+            return;
+          }
+          state.lastLogKey = logKey;
+          state.lastLogTs = eventTs;
           state.logs.unshift({
             kind: String(kind || "event"),
             taskId: taskId || "-",
             message: String(message || ""),
-            ts: Number.isFinite(ts) ? ts : Date.now() / 1000
+            ts: eventTs
           });
           state.logs = state.logs.slice(0, 20);
           renderLogs();
+        }
+
+        function shouldLogEvent(type) {
+          return type !== "progress" && type !== "cost_update" && type !== "heartbeat";
         }
 
         function renderLogs() {
@@ -664,6 +661,14 @@
           merged.created_at = Number(merged.created_at) || existing.created_at || Date.now() / 1000;
           merged.updated_at = Number(merged.updated_at) || Date.now() / 1000;
           state.tasks.set(taskId, merged);
+
+          if (merged.usage && 'cost_usd' in merged.usage) {
+            const costVal = Number(merged.usage.cost_usd);
+            if (Number.isFinite(costVal)) {
+              state.sessionCosts.set(taskId, costVal);
+            }
+          }
+
           renderTasks();
         }
 
@@ -687,7 +692,9 @@
           }
 
           if (!taskId) {
-            addLog(type, "-", JSON.stringify(payload), ts);
+            if (shouldLogEvent(type)) {
+              addLog(type, "-", JSON.stringify(payload), ts);
+            }
             renderStats();
             return;
           }
@@ -700,7 +707,9 @@
               progress_message: "Dispatch accepted",
               updated_at: ts
             });
-            addLog(type, taskId, "capability=" + (payload.capability || "UNKNOWN"), ts);
+            if (shouldLogEvent(type)) {
+              addLog(type, taskId, "capability=" + (payload.capability || "UNKNOWN"), ts);
+            }
           } else if (type === "progress") {
             upsertTask(taskId, {
               status: "running",
@@ -708,14 +717,11 @@
               progress_message: payload.message || "",
               updated_at: ts
             });
-            addLog(type, taskId, (payload.percent || 0) + "% " + (payload.message || ""), ts);
           } else if (type === "cost_update") {
             upsertTask(taskId, {
               usage: payload.usage || {},
               updated_at: ts
             });
-            const usageBits = formatUsage(payload.usage || {});
-            addLog(type, taskId, usageBits.tokenText + " / " + usageBits.costText, ts);
           } else if (type === "complete") {
             upsertTask(taskId, {
               status: payload.status || "SUCCESS",
@@ -725,16 +731,22 @@
               usage: payload.usage || {},
               updated_at: ts
             });
-            addLog(type, taskId, String(payload.status || "complete"), ts);
+            if (shouldLogEvent(type)) {
+              addLog(type, taskId, String(payload.status || "complete"), ts);
+            }
           } else if (type === "error") {
             upsertTask(taskId, {
               status: "FAILED",
               progress_message: payload.message || "Unknown error",
               updated_at: ts
             });
-            addLog(type, taskId, payload.message || "error", ts);
+            if (shouldLogEvent(type)) {
+              addLog(type, taskId, payload.message || "error", ts);
+            }
           } else {
-            addLog(type, taskId, JSON.stringify(payload), ts);
+            if (shouldLogEvent(type)) {
+              addLog(type, taskId, JSON.stringify(payload), ts);
+            }
           }
 
           renderStats();
@@ -759,15 +771,23 @@
             const elapsed = formatDuration((status === "SUCCESS" || status === "FAILED" || status === "completed" || status === "cancelled" ? lastUpdate : Date.now() / 1000) - createdAt);
             const message = task.progress_message || task.report_path || "Awaiting events";
             const cardColor = statusColor(status);
+            
+            var retryHtml = "";
+            if (status === "FAILED") {
+              retryHtml = '<button type="button" class="retry-btn" style="margin-left: 8px; font-size: 11px; padding: 4px 8px;">Retry</button>';
+            }
 
             return (
-              '<article class="card" style="--card-accent:' + cardColor + ';">' +
+              '<article class="card" data-task-id="' + escapeHtml(task.task_id) + '" data-capability="' + escapeHtml(task.capability || "UNKNOWN") + '" style="--card-accent:' + cardColor + ';">' +
                 '<div class="card-top">' +
                   '<div>' +
                     '<div class="task-id">' + escapeHtml(task.task_id) + '</div>' +
                     '<div class="capability">' + escapeHtml(task.capability || "UNKNOWN") + '</div>' +
                   '</div>' +
-                  '<div class="badge ' + statusClass(status) + '">' + escapeHtml(status) + '</div>' +
+                  '<div style="display:flex; align-items:center;">' +
+                    '<div class="badge ' + statusClass(status) + '">' + escapeHtml(status) + '</div>' +
+                    retryHtml +
+                  '</div>' +
                 '</div>' +
                 '<div class="progress-block">' +
                   '<div class="progress-meta">' +
@@ -808,6 +828,12 @@
           totalTasksEl.textContent = String(tasks.length || (state.daemonStatus && state.daemonStatus.total_tasks) || 0);
           runningTasksEl.textContent = String(running);
           eventCountEl.textContent = String(state.eventsSeen);
+
+          let totalCost = 0;
+          state.sessionCosts.forEach(function(cost) {
+            totalCost += cost;
+          });
+          totalCostEl.textContent = "$" + totalCost.toFixed(4);
         }
 
         function setWsState(kind, detail) {
@@ -825,12 +851,7 @@
 
         function wsUrl() {
           const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-          const url = new URL(protocol + "//" + window.location.host + "/ws");
-          const token = readCurrentToken();
-          if (token) {
-            url.searchParams.set("token", token);
-          }
-          return url.toString();
+          return protocol + "//" + window.location.host + "/ws";
         }
 
         function sendCommand(command, payload) {
@@ -891,12 +912,9 @@
           });
 
           socket.addEventListener("close", function (event) {
-            const unauthorized = event.code === 4401;
-            setWsState(unauthorized ? "error" : "disconnected", unauthorized ? "unauthorized" : "disconnected");
-            addLog("ws", "-", unauthorized ? "unauthorized" : "closed code=" + event.code, Date.now() / 1000);
-            if (!unauthorized) {
-              state.reconnectTimer = window.setTimeout(connectSocket, 5000);
-            }
+            setWsState("disconnected", "disconnected");
+            addLog("ws", "-", "closed code=" + event.code, Date.now() / 1000);
+            state.reconnectTimer = window.setTimeout(connectSocket, 5000);
           });
 
           socket.addEventListener("error", function () {
@@ -927,10 +945,30 @@
           connectSocket();
           refreshDaemonStatus();
         });
-
-        tokenInput.addEventListener("keydown", function (event) {
-          if (event.key === "Enter") {
-            connectSocket();
+        
+        cardsEl.addEventListener("click", function(e) {
+          if (e.target && e.target.classList.contains("retry-btn")) {
+            var btn = e.target;
+            var card = btn.closest(".card");
+            if (card) {
+              var taskId = card.getAttribute("data-task-id");
+              var capability = card.getAttribute("data-capability");
+              if (taskId && capability) {
+                btn.textContent = "Retrying...";
+                btn.disabled = true;
+                var payload = {
+                  type: "dispatch",
+                  payload: {
+                    task_id: taskId + "_retry",
+                    capability: capability,
+                    prompt: "..."
+                  }
+                };
+                if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+                  state.socket.send(JSON.stringify(payload));
+                }
+              }
+            }
           }
         });
 
