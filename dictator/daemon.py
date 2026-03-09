@@ -5,15 +5,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
+# Enable ROME daemon features in ws_server and other modules
+os.environ["ROME_DAEMON"] = "1"
+
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route, WebSocketRoute
 
 # When invoked as `python3 dictator/daemon.py`, ensure the parent dir
@@ -75,9 +79,15 @@ async def status_endpoint(request) -> JSONResponse:
 
 
 
+async def clear_finished(request) -> JSONResponse:
+    del request
+    n = task_registry.clear_finished()
+    return JSONResponse({"ok": True, "cleared": n})
+
+
 async def event_relay(request: Request) -> JSONResponse:
     """Receive events from stdio MCP via HTTP POST."""
-    from dictator.events import emit_dispatch_start, emit_complete, emit_error
+    from dictator.events import emit_dispatch_start, emit_complete, emit_error, emit_progress
     b = await request.json()
     t, tid, p = b.get("type",""), b.get("task_id",""), b.get("payload",{})
     if t == "dispatch_start":
@@ -86,6 +96,9 @@ async def event_relay(request: Request) -> JSONResponse:
     elif t == "complete":
         task_registry.complete(tid, p.get("status","SUCCESS"), p.get("report_path"))
         await emit_complete(event_bus, tid, p.get("status"), p.get("report_path"), p.get("usage"))
+    elif t == "progress":
+        task_registry.update_progress(tid, p.get("percent",0), p.get("message",""))
+        await emit_progress(event_bus, tid, p.get("percent",0), p.get("message",""))
     elif t == "error":
         await emit_error(event_bus, tid, p.get("message",""))
     return JSONResponse({"ok": True})
@@ -135,6 +148,16 @@ async def dashboard_placeholder(request) -> HTMLResponse:
     )
 
 
+async def dashboard_index(request) -> FileResponse:
+    del request
+    dashboard_path = Path(__file__).parent / "dashboard" / "index.html"
+    return FileResponse(
+        str(dashboard_path),
+        media_type="text/html; charset=utf-8",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 def create_app() -> Starlette:
     import_tool_modules()
 
@@ -153,6 +176,9 @@ def create_app() -> Starlette:
             WebSocketRoute("/ws", endpoint=rome_ws_endpoint),
             Route("/api/status", endpoint=status_endpoint),
             Route("/api/event", endpoint=event_relay, methods=["POST"]),
+            Route("/api/clear", endpoint=clear_finished, methods=["POST"]),
+            Route("/dashboard", endpoint=dashboard_index),
+            Route("/dashboard/", endpoint=dashboard_index),
             Mount("/dashboard", app=StaticFiles(directory=str(dashboard_dir), html=True)),
         ],
     )
@@ -167,13 +193,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import os
+    os.environ["ROME_DAEMON"] = "1"
     args = parse_args(argv)
     uvicorn.run(create_app(), host=args.host, port=args.port)
     return 0
 
 
-app = create_app()
-
-
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# Create app lazily only when needed (via uvicorn in main())
+# Don't create at module level to ensure ROME_DAEMON is set
