@@ -116,3 +116,28 @@ def send_command_sync(command: str, payload: dict[str, Any], timeout: float = 5.
         return asyncio.run(_run())
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+async def send_command_async(command: str, payload: dict[str, Any], timeout: float = 5.0) -> dict[str, Any]:
+    """Async version of send_command_sync — awaitable, safe inside a running event loop."""
+    import websockets
+    try:
+        async with websockets.connect(_WS_URL) as ws:
+            req_id = uuid.uuid4().hex[:8]
+            await ws.send(json.dumps({
+                "type": "command",
+                "command": command,
+                "request_id": req_id,
+                "payload": payload,
+            }))
+            deadline = asyncio.get_event_loop().time() + timeout
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    return {"ok": False, "error": "timeout"}
+                raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                msg = json.loads(raw)
+                if msg.get("type") == "response" and msg.get("request_id") == req_id:
+                    return msg.get("payload", {})
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

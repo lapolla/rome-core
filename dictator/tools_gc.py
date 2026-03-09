@@ -54,8 +54,8 @@ async def gc_legions(max_age_days: int = 7) -> str:
 @mcp.tool()
 async def reset_tasks() -> str:
     """Clear all tasks from registry (including REGISTERED zombies). Resets dashboard."""
-    from dictator.ws_client import send_command_sync
-    result = send_command_sync("reset", {})
+    from dictator.ws_client import send_command_async
+    result = await send_command_async("reset", {})
     log_event(tool="reset_tasks", message=f"cleared={result.get('cleared', '?')}")
     return json.dumps(result)
 

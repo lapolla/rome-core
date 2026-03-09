@@ -521,7 +521,8 @@ async def execute_campaign(
                     ui.update(tid, f"ERR: Dependency {dep} failed")
                     emit_dispatch_start_http(tid, t["capability"])  # register it
                     emit_progress_http(tid, 0, f"Dependency {dep} failed")
-                    # emit complete as failed
+                    from dictator.ws_client import send_event
+                    send_event("complete", tid, {"status": "FAILED", "report_path": None, "usage": {}})
                     events[tid_short].set()
                     return {"ok": False, "error": f"Dependency {dep} failed", "task_id": tid}
         result = await run_task(t)
