@@ -14,9 +14,10 @@ async def shell_exec(command: str) -> str:
     log_event(tool="shell_exec", message=command[:200])
     r = await run_cmd_stream(command, cwd=ROOT_DIR)
     out = r.get("stdout", "").strip()
-    if r.get("returncode", 0) != 0:
+    if not r.get("ok", False):
         err = r.get("stderr", r.get("message", ""))
-        return f"ERR({r.get('returncode')}): {err}" if err else f"ERR({r.get('returncode')})"
+        exit_code = r.get("exit_code", "?")
+        return f"ERR({exit_code}): {err}" if err else f"ERR({exit_code})"
     return out if out else "OK"
 
 
@@ -50,7 +51,7 @@ async def write_anywhere(path: str, content: str) -> str:
     """Write a file by absolute path."""
     p = Path(path).resolve()
     p.write_text(content, encoding="utf-8")
-    return f"OK:{len(content)}B→{p}"
+    return f"OK:{len(content)}B->{p}"
 
 
 @mcp.tool()

@@ -1,0 +1,1 @@
+{"campaign_id": "test-bars", "tasks": [{"id": "task1", "capability": "GEMINI", "args": ["Echo: bar test 1 OK"]}, {"id": "task2", "capability": "GEMINI", "args": ["Echo: bar test 2 OK"]}]}

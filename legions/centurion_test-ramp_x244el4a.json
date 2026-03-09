@@ -1,0 +1,1 @@
+{"campaign_id": "test-ramp", "tasks": [{"id": "ramp1", "capability": "GEMINI", "args": ["Write a haiku about moving progress bars. Output only the haiku."]}, {"id": "ramp2", "capability": "GEMINI", "args": ["Write a haiku about patience. Output only the haiku."]}]}

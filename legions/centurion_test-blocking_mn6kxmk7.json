@@ -1,0 +1,1 @@
+{"campaign_id": "test-blocking", "tasks": [{"id": "blk1", "capability": "GEMINI", "args": ["Write a haiku about progress bars finally working. Output only the haiku."]}, {"id": "blk2", "capability": "GEMINI", "args": ["Write a haiku about persistence paying off. Output only the haiku."]}]}

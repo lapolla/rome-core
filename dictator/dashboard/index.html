@@ -487,7 +487,7 @@
                 <span id="wsLabel">WS CONNECTING</span>
               </div>
               <div class="chip">
-                <span>HTTP</span>
+                <span>DAEMON</span>
                 <span id="httpLabel">PENDING</span>
               </div>
               <div class="chip">
@@ -916,7 +916,7 @@
           const tasks = Array.from(state.tasks.values());
           const running = tasks.filter(function (task) {
             const s = canonicalStatus(task.status).toLowerCase();
-            return s === "running" || s === "registered";
+            return s === "running";
           }).length;
           const activeFromDaemon = state.daemonStatus && Number.isFinite(Number(state.daemonStatus.active_tasks))
             ? Number(state.daemonStatus.active_tasks)
@@ -982,6 +982,7 @@
             setWsState("connected");
             addLog("ws", "-", "connected", Date.now() / 1000);
             sendCommand("status", {});
+            sendCommand("status", { summary: true });
           });
 
           socket.addEventListener("message", function (messageEvent) {
@@ -1001,7 +1002,11 @@
                 return;
               }
 
-              if (data.ok && data.payload && data.payload.tasks) {
+              if (data.ok && data.payload && data.payload.active_tasks !== undefined) {
+                state.daemonStatus = data.payload;
+                httpLabel.textContent = "OK";
+                uptimeLabel.textContent = formatDuration(Number(data.payload.uptime_s));
+              } else if (data.ok && data.payload && data.payload.tasks) {
                 handleSnapshot(data.payload.tasks);
                 addLog("snapshot", "-", Object.keys(data.payload.tasks).length + " tasks", Date.now() / 1000);
               } else if (!data.ok) {
@@ -1028,22 +1033,12 @@
           });
         }
 
-        async function refreshDaemonStatus() {
-          const url = new URL("/api/status", window.location.origin);
-          try {
-            const response = await fetch(url.toString(), { cache: "no-store" });
-            if (!response.ok) {
-              throw new Error("HTTP " + response.status);
-            }
-            const payload = await response.json();
-            state.daemonStatus = payload;
-            httpLabel.textContent = payload.ok ? "OK" : "ERROR";
-            uptimeLabel.textContent = formatDuration(Number(payload.uptime_s));
-            renderStats();
-          } catch (error) {
-            httpLabel.textContent = "ERROR";
-            uptimeLabel.textContent = "--";
+        function refreshDaemonStatus() {
+          if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
+            httpLabel.textContent = "OFFLINE";
+            return;
           }
+          sendCommand("status", { summary: true });
         }
 
         connectButton.addEventListener("click", function () {

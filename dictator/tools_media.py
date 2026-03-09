@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import shlex
 import subprocess
 from pathlib import Path
@@ -11,20 +12,40 @@ from dictator.core import mcp, run_cmd, MO2_DOWNLOADS
 
 @mcp.tool()
 async def music_play(query: str, fade_ms: int = 500) -> str:
-    """Play music via yt-dlp + mpv. Accepts a URL or search query."""
+    """Play music via mpv using its internal ytdl engine. Accepts a URL or search query."""
     try:
         is_url = query.startswith("http")
-        ytdl_query = query if is_url else f"ytsearch:{query}"
-        r = await run_cmd(f"yt-dlp --no-download --print webpage_url {shlex.quote(ytdl_query)}", cwd="/tmp")
-        if not r.get("ok"):
-            return json.dumps({"ok": False, "message": r.get("stderr", "yt-dlp failed")})
-        url = r["stdout"].strip()
+        # Direct mpv call using ytdl:// for searches is much faster and avoids pre-fetch timeouts
+        ytdl_target = query if is_url else f"ytdl://ytsearch:{query}"
+        
         sock = f"/tmp/mpv_{id(object()):x}.sock"
+        
+        # Ensure environment context for audio sink
+        env = os.environ.copy()
+        uid = os.getuid()
+        if "XDG_RUNTIME_DIR" not in env:
+            env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+        if "PULSE_SERVER" not in env:
+            env["PULSE_SERVER"] = f"unix:/run/user/{uid}/pulse/native"
+
+        # Launch mpv directly
+        cmd = [
+            "mpv", ytdl_target,
+            "--no-video",
+            "--volume=100",
+            f"--input-ipc-server={sock}",
+            "--gapless-audio=yes"
+        ]
+        
         proc = subprocess.Popen(
-            ["mpv", url, "--no-video", "--volume=100", f"--input-ipc-server={sock}"],
-            start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            cmd,
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env
         )
-        return json.dumps({"ok": True, "url": url, "pid": proc.pid, "sock": sock})
+        
+        return json.dumps({"ok": True, "target": ytdl_target, "pid": proc.pid, "sock": sock})
     except Exception as e:
         return json.dumps({"ok": False, "message": str(e)})
 

@@ -34,25 +34,23 @@ class LegionaryUI:
             self._progress_f = open(self._progress_path, "w")
         except Exception:
             self._progress_f = None
-        # Write progress to /dev/tty to bypass pipe capture
-        try:
-            self._tty = open("/dev/tty", "w")
-        except Exception:
-            self._tty = sys.stderr
+        silent_raw = str(os.environ.get("ROME_SILENT", "")).strip().lower()
+        self._silent = silent_raw in {"1", "true", "yes"}
 
     def log(self, percent, msg):
         self.percent = percent
         elapsed = time.time() - self.global_start
         # Centurion-style visual on stderr
         filled = int(self.bar_width * self.percent / 100)
-        bar = "\u2588" * filled + "\u2591" * (self.bar_width - filled)
+        bar = "█" * filled + "░" * (self.bar_width - filled)
         display_id = self.task_id.split("_")[-1] if "_" in self.task_id else self.task_id
         vis = (
             f"\r\033[K[ROME:{display_id:<14}] {bar}"
             f"  {self.percent:3}% [{elapsed:5.1f}s] >> {msg[:30]}"
         )
-        self._tty.write(vis)
-        self._tty.flush()
+        if not self._silent:
+            sys.stderr.write(vis)
+            sys.stderr.flush()
         # File log for dictator/centurion to read back
         hb = self.hb_chars[self.hb_idx % len(self.hb_chars)]
         self.hb_idx += 1
@@ -74,18 +72,14 @@ class LegionaryUI:
             f"\r\033[K[ROME:{display_id:<14}] {color}{bar}"
             f"  [{status:7}] [{elapsed:5.1f}s]\033[0m >> Mission complete."
         )
-        self._tty.write(vis + "\n")
-        self._tty.flush()
+        if not self._silent:
+            sys.stderr.write(vis + "\n")
+            sys.stderr.flush()
 
     def close(self):
         if self._progress_f:
             try:
                 self._progress_f.close()
-            except Exception:
-                pass
-        if self._tty and self._tty is not sys.stderr:
-            try:
-                self._tty.close()
             except Exception:
                 pass
 
@@ -254,12 +248,22 @@ def main():
     
     _log_event(tool="legion_wrapper", task_id=task_id, message=f"Starting: {' '.join(command)}"[:200])
 
+    # Capture initial task.md state to detect Gemini overwriting/appending to it
+    task_md_path = "task.md"
+    initial_task_content = ""
+    if os.path.exists(task_md_path):
+        try:
+            with open(task_md_path, "r") as f:
+                initial_task_content = f.read()
+        except: pass
+
     ui = LegionaryUI(task_id, global_start)
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=0,
+        start_new_session=True,
         env={**os.environ, "PYTHONUNBUFFERED": "1", "ROME_TASK_ID": task_id}
     )
     
@@ -302,11 +306,65 @@ def main():
         else:
             f.write(final_text)
 
+    # Validation Step: check for empty/broken reports
+    def is_empty_content(content):
+        if not content: return True
+        cleaned = content.replace("`", "").strip()
+        if len(cleaned) == 0: return True
+        # Bare ROME exit signal with no real content counts as empty
+        if re.fullmatch(r'(OK|ERR):[a-zA-Z0-9_\-]+', cleaned): return True
+        return False
+
+    try:
+        with open(artifact_path, "r") as f:
+            report_content = f.read()
+    except:
+        report_content = ""
+
+    if is_empty_content(report_content):
+        # Check for bug signature: output is just the OK signal
+        if final_text.strip() == f"OK:{task_id}":
+            signals["metadata"]["bug_signature"] = "true"
+
+        # Try to recover from task.md
+        if os.path.exists(task_md_path):
+            try:
+                with open(task_md_path, "r") as f:
+                    current_task_content = f.read()
+                
+                recovered_content = None
+                # Case 1: Appended to task.md
+                if len(current_task_content) > len(initial_task_content):
+                    recovered_content = current_task_content[len(initial_task_content):].strip()
+                
+                # Case 2: Overwrote task.md or contains tags
+                if is_empty_content(recovered_content):
+                    task_signals = parse_rome_signals(current_task_content)
+                    if task_signals["primary_artifact"]:
+                        recovered_content = task_signals["primary_artifact"]
+                    elif len(current_task_content) > 100: # Heuristic fallback
+                         # Only if it's substantially different from initial
+                         if current_task_content.strip() != initial_task_content.strip():
+                             recovered_content = current_task_content.strip()
+                
+                if not is_empty_content(recovered_content):
+                    with open(artifact_path, "w") as f:
+                        f.write(recovered_content)
+                    signals["metadata"]["recovered_from_task_md"] = "true"
+                    report_content = recovered_content
+            except Exception as e:
+                _log_event(tool="legion_wrapper", task_id=task_id, message=f"Recovery failed: {e}")
+
     # Determine final status
     exit_code = process.returncode
     status = "SUCCESS" if exit_code == 0 else "FAILED"
     if signals["status_override"]:
         status = signals["status_override"]
+
+    # Final check for empty report
+    if is_empty_content(report_content) and status == "SUCCESS":
+        status = "FAILED"
+        signals["metadata"]["failure_reason"] = "empty_report"
 
     # Generate ROME v2.0 Manifest
     manifest = {

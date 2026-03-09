@@ -1,0 +1,8 @@
+{
+  "campaign_id": "dashboard-test",
+  "tasks": [
+    {"id": "PING_A", "capability": "SAFE_SHELL", "args": ["echo hello && sleep 2 && echo done"]},
+    {"id": "PING_B", "capability": "SAFE_SHELL", "args": ["echo world && sleep 3 && echo done"]},
+    {"id": "PING_C", "capability": "SAFE_SHELL", "args": ["echo fast && sleep 1 && echo done"]}
+  ]
+}

@@ -54,11 +54,11 @@ Tasks in a campaign can now define dependencies. The Orchestrator (`centurion_v2
 The Suture capability no longer performs simple concatenation. It:
 1.  Collects all `manifest.json` files from a campaign.
 2.  Validates exported symbols and file paths.
-3.  Uses a "Blueprint" template to inject artifacts into their final destination files (e.g., `src/CommandDispatcher.cpp`).
-4.  Resolves namespace collisions and ensures correct include ordering.
+3.  Uses a "Blueprint" template to inject artifacts into their final destination files.
+4.  Resolves naming collisions and ensures correct logic ordering.
 
 ## 6. Slave Roles (v2.0)
-*   **GEMINI (Senate/Architect):** High-level logic, complex C++, and Suture consolidation.
+*   **GEMINI (Senate/Architect):** High-level logic, complex Python, and Suture consolidation.
 *   **CLAUDE (Security/Review):** Code review, security audits, and edge-case detection.
 *   **OPENCODE (I/O Slave):** File system operations, shell scripting, and boilerplate generation.
 *   **CODEX (Test Slave):** Unit test generation and verification.

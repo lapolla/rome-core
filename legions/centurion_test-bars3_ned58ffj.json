@@ -1,0 +1,1 @@
+{"campaign_id": "test-bars3", "tasks": [{"id": "task1", "capability": "GEMINI", "args": ["Write a haiku about progress bars. Output only the haiku."]}, {"id": "task2", "capability": "GEMINI", "args": ["Write a haiku about token costs. Output only the haiku."]}]}

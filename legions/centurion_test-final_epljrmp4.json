@@ -1,0 +1,1 @@
+{"campaign_id": "test-final", "tasks": [{"id": "fin1", "capability": "GEMINI", "args": ["Write a haiku about victory. Output only the haiku."]}, {"id": "fin2", "capability": "GEMINI", "args": ["Write a haiku about persistence. Output only the haiku."]}]}

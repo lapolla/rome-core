@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from dictator.core import mcp, ROME_ROOT
-from dictator.tools_legion import execute_legion
+from dictator.tools_legion import _execute_legion_impl
 
 
 @mcp.tool()
@@ -35,11 +35,13 @@ async def execute_prefect(domain: str, task: str, timeout_s: int = 600) -> str:
 
     task_id = f"prefect_{domain}_{int(time.time())}"
 
-    result_json = await execute_legion(
+    result = await _execute_legion_impl(
         task_id=task_id,
         capability="GEMINI",
         args=[full_prompt],
+        ctx=None,
     )
+    result_json = json.dumps(result, indent=2)
 
     # Post-run audit (Phase 13) — check for tool usage outside whitelist
     if "*" not in tools:

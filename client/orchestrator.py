@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ROME Headless Orchestrator Client.
-Runs standalone using a cheap model (Claude 3 Haiku or Gemini 1.5 Flash).
+Runs standalone using Claude Sonnet 4.6 or Gemini 1.5 Flash.
 Connects to ROME daemon WS to dispatch tasks and stream progress.
 """
 
@@ -44,7 +44,7 @@ def orchestrate_task(task_description: str) -> list:
     try:
         if anthropic_key:
             req_data = {
-                "model": "claude-3-haiku-20240307",
+                "model": "claude-sonnet-4-6",
                 "max_tokens": 1024,
                 "system": SYSTEM_PROMPT,
                 "messages": [{"role": "user", "content": task_description}]

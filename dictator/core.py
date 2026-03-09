@@ -43,6 +43,7 @@ PAPYRUS_COMPILER = Path(_cfg.get("papyrus_compiler", "/media/paul-kane/SteamGame
 
 # ── Server ─────────────────────────────────────────────────────────────
 mcp = FastMCP("asshole")
+DAEMON_START_TIME = _time.monotonic()
 
 # ── Event Bus & Task Registry (Phase 1 WS) ────────────────────────────
 from dictator.events import EventBus, TaskRegistry
@@ -67,6 +68,7 @@ async def run_cmd(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            start_new_session=True,
         )
         stdout_b, stderr_b = await proc.communicate()
         elapsed = _time.monotonic() - t0
@@ -115,6 +117,7 @@ async def run_cmd_stream(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            start_new_session=True,
         )
 
         stderr_chunks = []
@@ -124,11 +127,6 @@ async def run_cmd_stream(
                 chunk = await proc.stderr.read(1024)
                 if not chunk:
                     break
-                
-                # Only stream to stderr if no callback is provided to avoid interference
-                if not on_stderr:
-                    sys.stderr.buffer.write(chunk)
-                    sys.stderr.buffer.flush()
                 
                 stderr_chunks.append(chunk)
                 if on_stderr:

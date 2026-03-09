@@ -9,7 +9,7 @@ from typing import Any
 from starlette.routing import WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from dictator.core import event_bus, task_registry
+from dictator.core import event_bus, task_registry, DAEMON_START_TIME
 from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_dispatch_start, emit_error
 from dictator.tools_legion import _execute_legion_impl
 
@@ -179,14 +179,15 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"task {task_id} is already running")
         _ACTIVE_TASKS[task_id] = task
 
-    return {
-        "task_id": task_id,
-        "capability": capability,
-        "accepted": True,
-    }
+    return {"task_id": task_id, "capability": capability, "accepted": True}
 
 
 async def handle_status(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("summary"):
+        tasks = task_registry.get_all()
+        active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
+        return {"ok": True, "active_tasks": active, "total_tasks": len(tasks),
+                "uptime_s": round(time.monotonic() - DAEMON_START_TIME, 3)}
     task_id = str(payload.get("task_id") or "").strip()
     if task_id:
         task = task_registry.get(task_id)
@@ -218,16 +219,41 @@ async def handle_read_report(payload: dict[str, Any]) -> dict[str, Any]:
     report_path = str(payload.get("report_path") or "").strip()
     if not report_path:
         raise ValueError("payload.report_path is required")
-    
     rp = Path(report_path)
     if not rp.exists():
         return {"report_path": report_path, "content": "File not found or no report generated."}
-    
     try:
         content = rp.read_text(encoding="utf-8")
         return {"report_path": report_path, "content": content}
     except Exception as exc:
         return {"report_path": report_path, "content": f"Error reading report: {exc}"}
+
+
+async def handle_reset(_: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, "cleared": task_registry.clear_all()}
+
+
+async def handle_clear(_: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, "cleared": task_registry.clear_finished()}
+
+
+async def handle_event(payload: dict[str, Any]) -> dict[str, Any]:
+    from dictator.events import emit_dispatch_start, emit_complete, emit_error, emit_progress
+    t = payload.get("type", "")
+    tid = str(payload.get("task_id") or "")
+    p = payload.get("payload", {})
+    if t == "dispatch_start":
+        task_registry.register(tid, p.get("capability", "?"))
+        await emit_dispatch_start(event_bus, tid, p.get("capability", "?"))
+    elif t == "complete":
+        task_registry.complete(tid, p.get("status", "SUCCESS"), p.get("report_path"))
+        await emit_complete(event_bus, tid, p.get("status"), p.get("report_path"), p.get("usage"))
+    elif t == "progress":
+        task_registry.update_progress(tid, p.get("percent", 0), p.get("message", ""))
+        await emit_progress(event_bus, tid, p.get("percent", 0), p.get("message", ""))
+    elif t == "error":
+        await emit_error(event_bus, tid, p.get("message", ""))
+    return {"ok": True}
 
 
 async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
@@ -247,6 +273,9 @@ async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
         "cancel": handle_cancel,
         "ping": _handle_ping,
         "read_report": handle_read_report,
+        "reset": handle_reset,
+        "clear": handle_clear,
+        "event": handle_event,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -286,6 +315,5 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
 
 
 routes = [WebSocketRoute("/ws", endpoint=rome_ws_endpoint)]
-
 
 __all__ = ["ConnectionManager", "manager", "rome_ws_endpoint", "routes"]

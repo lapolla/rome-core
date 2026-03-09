@@ -1,4 +1,4 @@
-"""GC and stats tools: gc_legions, legion_stats."""
+"""GC and stats tools: gc_legions, legion_stats, reset_tasks."""
 
 import json
 import shutil
@@ -25,7 +25,6 @@ async def gc_legions(max_age_days: int = 7) -> str:
             except OSError:
                 pass
 
-    # Sort newest first
     dirs.sort(key=lambda x: x[1], reverse=True)
 
     now = time.time()
@@ -35,7 +34,6 @@ async def gc_legions(max_age_days: int = 7) -> str:
 
     for i, (p, mtime) in enumerate(dirs):
         age_s = now - mtime
-        # Always keep newest 50 + anything < 24h old
         if i < 50 or age_s < 86400:
             kept += 1
         elif age_s > max_age_days * 86400:
@@ -49,8 +47,17 @@ async def gc_legions(max_age_days: int = 7) -> str:
         else:
             kept += 1
 
-    log_event("gc_legions", message=f"deleted={deleted} kept={kept} freed={freed_bytes}")
+    log_event(tool="gc_legions", message=f"deleted={deleted} kept={kept} freed={freed_bytes}")
     return json.dumps({"ok": True, "deleted": deleted, "kept": kept, "freed_bytes": freed_bytes})
+
+
+@mcp.tool()
+async def reset_tasks() -> str:
+    """Clear all tasks from registry (including REGISTERED zombies). Resets dashboard."""
+    from dictator.ws_client import send_command_sync
+    result = send_command_sync("reset", {})
+    log_event(tool="reset_tasks", message=f"cleared={result.get('cleared', '?')}")
+    return json.dumps(result)
 
 
 @mcp.tool()
@@ -79,7 +86,6 @@ async def legion_stats(period_hours: int = 24) -> str:
                 except (json.JSONDecodeError, TypeError):
                     continue
 
-                # Parse ISO timestamp (e.g. "2026-02-25T14:30:00+0000")
                 ts_str = entry.get("timestamp", "")
                 try:
                     ts = datetime.fromisoformat(ts_str)
@@ -132,8 +138,14 @@ async def legion_stats(period_hours: int = 24) -> str:
 
 
 def auto_gc(rome_root: Path = ROME_ROOT):
-    """Startup GC: keep newest 50 + <24h, delete rest. Called from entry point."""
+    """Startup GC: keep newest 50 + <24h, delete rest. Also resets zombie tasks. Called from entry point."""
     import sys
+    from dictator.ws_client import send_command_sync
+    try:
+        send_command_sync("reset", {}, timeout=2.0)
+    except Exception:
+        pass  # Daemon may not be up yet; safe to ignore
+
     legions_dir = rome_root / "legions"
     if not legions_dir.exists():
         return 0, 0

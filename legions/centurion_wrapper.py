@@ -5,11 +5,19 @@ import subprocess
 import time
 import sys
 import re
+from dashboard import Dashboard
 
 # Constants
 ROME_ROOT = os.environ.get("ROME_ROOT", "/home/paul-kane/projects/rome-core")
 ARSENAL_PATH = os.path.join(ROME_ROOT, "arsenal", "core_arsenal.json")
 TASK_DIR = os.environ.get("ROME_TASK_DIR", ".")
+
+FALLBACK_CHAIN = {
+    "GEMINI":     ["GEMINI", "GEMINI", "CODEX"],
+    "SAFE_SHELL": ["SAFE_SHELL", "SAFE_SHELL"],
+    "CODEX":      ["CODEX", "GEMINI"],
+}
+MAX_RETRIES = 3
 
 # Best-effort import of Rome log
 try:
@@ -30,49 +38,23 @@ def run_cmd(cmd, task_id="unknown", cwd=None, timeout=300):
     except Exception as e:
         return {"ok": False, "error": str(e), "exit_code": 1}
 
-class CenturionUI:
-    def __init__(self, task_id, global_start):
-        self.task_id = task_id
-        self.global_start = global_start
-        self.hb_chars = ["|", "/", "-", "\\"]
-        self.hb_idx = 0
-        self.progress_path = os.path.join(TASK_DIR, "progress.log")
-
-    def log(self, percent, msg):
-        elapsed = time.time() - self.global_start
-        hb = self.hb_chars[self.hb_idx % 4]
-        self.hb_idx += 1
-        line = f"{percent}% {hb} [{elapsed:.1f}s] {msg}"
-        sys.stderr.write(line + "\n")
-        sys.stderr.flush()
-        try:
-            with open(self.progress_path, "a") as f:
-                f.write(line + "\n")
-        except: pass
-
 def extract_json(text):
     if not text: return None
     stripped = text.strip()
-    # Step 1: Unwrap agent JSON envelopes
-    # Gemini: {"response": "...", "stats": {...}}
-    # Claude: {"result": "...", "usage": {...}}
     try:
         envelope = json.loads(stripped[stripped.find("{"):])
         if "response" in envelope and "stats" in envelope:
-            stripped = envelope["response"]  # unwrap Gemini
+            stripped = envelope["response"]
         elif "result" in envelope and "usage" in envelope:
-            stripped = envelope["result"]  # unwrap Claude
+            stripped = envelope["result"]
     except: pass
-    # Step 2: Strip markdown code fences
     stripped = re.sub(r"```json\s*", "", stripped)
     stripped = re.sub(r"```\s*", "", stripped)
-    # Step 3: Try direct parse
     try:
         parsed = json.loads(stripped.strip())
         if isinstance(parsed, dict) and "subtasks" in parsed:
             return parsed
     except: pass
-    # Step 4: Find first { ... } block with brace matching
     depth = 0
     start = None
     for i, c in enumerate(stripped):
@@ -91,25 +73,26 @@ def extract_json(text):
     return None
 
 def main():
-    if len(sys.argv) < 5: sys.exit(1)
-    task_id, global_start = sys.argv[1], float(sys.argv[2])
-    planner_args = sys.argv[3:-1]
+    if len(sys.argv) < 3:
+        print("Usage: centurion_wrapper.py <planner_cli_args> <prompt>", file=sys.stderr)
+        sys.exit(1)
+    planner_args = sys.argv[1:-1]
     user_prompt = sys.argv[-1]
-    
-    ui = CenturionUI(task_id, global_start)
-    ui.log(5, "Phase 1: Planning...")
+    task_id = os.environ.get("ROME_TASK_ID", f"centurion_{int(time.time())}")
+    global_start = time.time()
+
+    print(f"Phase 1: Planning for {task_id}...", file=sys.stderr)
     
     plan_prompt = f"""You are a ROME Centurion planner. Decompose this task into sub-tasks.
 OUTPUT ONLY valid JSON:
 {{"subtasks": [{{"id": "s1", "capability": "CODEX|OPENCODE|SAFE_SHELL", "description": "what", "args": ["full prompt for worker"]}}], "reasoning": "why"}}
 TASK: {user_prompt}"""
     
-    # Execute planner
     r = run_cmd(planner_args + [plan_prompt], task_id)
     plan = extract_json(r.get("stdout", ""))
     
     if not plan or "subtasks" not in plan:
-        ui.log(10, "Plan failed or invalid JSON, falling back to GEMINI...")
+        print("Plan failed or invalid JSON, falling back to GEMINI...", file=sys.stderr)
         plan = {"subtasks": [{"id": "fallback", "capability": "GEMINI", "description": "Fallback", "args": [user_prompt]}]}
 
     # Load Arsenal
@@ -120,54 +103,96 @@ TASK: {user_prompt}"""
     except:
         caps = {}
 
+    subtask_ids = [f"{task_id}_{sub.get('id')}" for sub in plan["subtasks"]]
+    dashboard = Dashboard(subtask_ids, task_id)
+    
     subtask_results = []
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
     
-    ui.log(20, f"Phase 2: Executing {len(plan['subtasks'])} subtasks...")
-    
     legions_dir = os.path.join(ROME_ROOT, "legions")
     for i, sub in enumerate(plan["subtasks"]):
-        cap_name = sub.get("capability")
-        sub_id = f"{task_id}_{sub.get('id')}"
-        ui.log(int(20 + (i/len(plan['subtasks']))*70), f"Running {sub_id} ({cap_name})...")
+        original_cap = sub.get("capability")
+        sub_id = subtask_ids[i]
+        
+        attempt = 0
+        success = False
+        last_sr = None
+        last_manifest = {}
+        
+        while attempt < MAX_RETRIES:
+            cap_name = original_cap
+            if original_cap in FALLBACK_CHAIN:
+                chain = FALLBACK_CHAIN[original_cap]
+                if attempt < len(chain):
+                    cap_name = chain[attempt]
+                else:
+                    cap_name = chain[-1]
+            
+            status = "RUNNING" if attempt == 0 else f"RETRY {attempt}/{MAX_RETRIES-1}"
+            dashboard.update(sub_id, status, time.time() - global_start, f"Using {cap_name}...")
 
-        if cap_name not in caps:
-            subtask_results.append({"id": sub_id, "ok": False, "error": f"Capability {cap_name} not found"})
-            continue
+            if cap_name not in caps:
+                last_sr = {"ok": False, "error": f"Capability {cap_name} not found", "exit_code": 1}
+                attempt += 1
+                continue
 
-        cap = caps[cap_name]
-        # Each subtask gets its own directory
-        sub_dir = os.path.join(legions_dir, sub_id)
-        os.makedirs(sub_dir, exist_ok=True)
+            cap = caps[cap_name]
+            sub_dir = os.path.join(legions_dir, sub_id)
+            os.makedirs(sub_dir, exist_ok=True)
 
-        # Command: legion_wrapper.py TASK_ID START_TIME ARGS...
-        cmd = [cap["exec"], sub_id, str(time.time())] + cap.get("args", []) + sub.get("args", [])
-        timeout = cap.get("timeout", 120)
+            cmd = [cap["exec"], sub_id, str(time.time())] + cap.get("args", []) + sub.get("args", [])
+            timeout = cap.get("timeout", 120)
 
-        sr = run_cmd(cmd, sub_id, cwd=sub_dir, timeout=timeout)
+            sr = run_cmd(cmd, sub_id, cwd=sub_dir, timeout=timeout)
+            last_sr = sr
 
-        # Load subtask manifest from its own directory
-        sub_manifest = {}
-        sub_manifest_path = os.path.join(sub_dir, "manifest.json")
-        if os.path.exists(sub_manifest_path):
-            try:
-                with open(sub_manifest_path) as f:
-                    sub_manifest = json.load(f)
-                usage = sub_manifest.get("usage")
-                if usage:
-                    for k in ["input_tokens", "output_tokens", "total_tokens"]:
-                        total_usage[k] += usage.get(k, 0)
-                    total_usage["cost_usd"] += usage.get("cost_usd") or 0.0
-            except: pass
+            sub_manifest = {}
+            sub_manifest_path = os.path.join(sub_dir, "manifest.json")
+            if os.path.exists(sub_manifest_path):
+                try:
+                    with open(sub_manifest_path) as f:
+                        sub_manifest = json.load(f)
+                    last_manifest = sub_manifest
+                    usage = sub_manifest.get("usage")
+                    if usage:
+                        for k in ["input_tokens", "output_tokens", "total_tokens"]:
+                            total_usage[k] += usage.get(k, 0)
+                        total_usage["cost_usd"] += usage.get("cost_usd") or 0.0
+                except: pass
+
+            if sr.get("ok"):
+                success = True
+                dashboard.update(sub_id, "SUCCESS", time.time() - global_start, sub.get("description", "Complete"))
+                break
+            else:
+                attempt += 1
+                if attempt < MAX_RETRIES:
+                    dashboard.update(sub_id, "RETRYING", time.time() - global_start, f"Attempt {attempt} failed")
+                else:
+                    dashboard.update(sub_id, "FAILED", time.time() - global_start, "Max retries reached")
 
         subtask_results.append({
             "id": sub_id,
-            "ok": sr.get("ok", False),
-            "exit_code": sr.get("exit_code", 1),
-            "manifest": sub_manifest
+            "ok": success,
+            "exit_code": last_sr.get("exit_code", 1) if last_sr else 1,
+            "manifest": last_manifest
         })
 
-    ui.log(95, "Phase 3: Synthesizing...")
+    # Prepare results for dashboard.finish
+    finish_results = {}
+    for res in subtask_results:
+        summary = "Success" if res["ok"] else "Failed"
+        if res.get("manifest") and res["manifest"].get("reason"):
+             summary = res["manifest"]["reason"]
+        
+        finish_results[res["id"]] = {
+            "status": "SUCCESS" if res["ok"] else "FAILED",
+            "summary": summary
+        }
+    
+    dashboard.finish(finish_results)
+
+    # Synthesis
     report_path = os.path.join(TASK_DIR, f"report_{task_id}.txt")
     try:
         with open(report_path, "w") as f:

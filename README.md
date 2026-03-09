@@ -20,7 +20,7 @@ ROME provides 10 specialized modules containing 47 powerful tools to dominate an
 *   📁 **Filesystem:** Advanced file manipulation and directory management.
 *   🌿 **Git:** Deep repository integration and automated source control.
 *   💧 **Drupal:** Specialized CMS orchestration and site management.
-*   🐲 **Skyrim Modding:** Automated mod deployment and conflict resolution.
+*   🐲 **Skyrim Interaction:** Automated state reading and console-based control.
 *   🖥️ **Desktop Automation:** Direct interaction with host OS and applications.
 *   🎬 **Media:** Sophisticated media processing and transformation.
 *   🛡️ **Legion Orchestration:** Management of worker state and lifecycle.

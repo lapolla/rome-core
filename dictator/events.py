@@ -208,6 +208,24 @@ class TaskRegistry:
             task = self._tasks.get(task_id)
             return self._snapshot(task) if task is not None else None
 
+    def clear_finished(self) -> int:
+        """Remove all non-active tasks. Returns count removed."""
+        with self._lock:
+            to_remove = [
+                tid for tid, t in self._tasks.items()
+                if t.get("status") not in ("registered", "running")
+            ]
+            for tid in to_remove:
+                self._tasks.pop(tid, None)
+            return len(to_remove)
+
+    def clear_all(self) -> int:
+        """Remove all tasks regardless of status. Returns count removed."""
+        with self._lock:
+            count = len(self._tasks)
+            self._tasks.clear()
+            return count
+
     def get_all(self) -> dict[str, dict[str, Any]]:
         with self._lock:
             self._cleanup_locked()
@@ -215,11 +233,21 @@ class TaskRegistry:
 
     def _cleanup_locked(self, now: float | None = None) -> None:
         cutoff = time.time() if now is None else now
-        expired = [
-            task_id
-            for task_id, task in self._tasks.items()
-            if cutoff - float(task.get("updated_at", task.get("created_at", cutoff))) > self._ttl_seconds
-        ]
+        expired = []
+        for task_id, task in self._tasks.items():
+            status = str(task.get("status", "")).upper()
+            
+            if status in ("SUCCESS", "OK"):
+                ttl = 30  # Remove successful tasks quickly (30 seconds)
+            elif status in ("FAILED", "ERROR", "TIMEOUT", "ERR"):
+                ttl = 86400  # Keep failed tasks for 24 hours
+            else:
+                ttl = self._ttl_seconds  # Default 1 hour for active/pending tasks
+                
+            age = cutoff - float(task.get("updated_at", task.get("created_at", cutoff)))
+            if age > ttl:
+                expired.append(task_id)
+
         for task_id in expired:
             self._tasks.pop(task_id, None)
 

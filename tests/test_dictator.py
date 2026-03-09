@@ -1,10 +1,7 @@
-"""Tests for dictator.py MCP tools — direct function calls, no framework gymnastics."""
+"""Tests for ROME dictator modules — direct function calls, no framework gymnastics."""
 
-import asyncio
 import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -12,17 +9,9 @@ import pytest
 # Ensure project root is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dictator.dictator import (
-    run_cmd,
-    fs_read,
-    fs_write,
-    read_anywhere,
-    write_anywhere,
-    list_directory,
-    execute_legion,
-    execute_campaign,
-    ROOT_DIR,
-)
+from dictator.core import run_cmd
+from dictator.tools_fs import fs_read, fs_write, read_anywhere, write_anywhere, list_directory
+from dictator.tools_legion import _execute_legion_impl, execute_campaign
 from legions.legion_wrapper import parse_rome_signals, parse_usage
 
 
@@ -46,8 +35,8 @@ async def test_run_cmd_failing():
 @pytest.mark.asyncio
 async def test_fs_read_write_roundtrip(tmp_path, monkeypatch):
     """Round-trip through fs_write → fs_read using a temp ROOT_DIR."""
-    import dictator.dictator as d
-    monkeypatch.setattr(d, "ROOT_DIR", tmp_path)
+    import dictator.tools_fs as fs_mod
+    monkeypatch.setattr(fs_mod, "ROOT_DIR", tmp_path)
 
     result = await fs_write("test.txt", "imperial data")
     assert "imperial data" not in json.dumps({"err": True})  # no error
@@ -61,8 +50,8 @@ async def test_fs_read_write_roundtrip(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_fs_read_path_traversal(tmp_path, monkeypatch):
-    import dictator.dictator as d
-    monkeypatch.setattr(d, "ROOT_DIR", tmp_path)
+    import dictator.tools_fs as fs_mod
+    monkeypatch.setattr(fs_mod, "ROOT_DIR", tmp_path)
 
     result = await fs_read("../../etc/passwd")
     parsed = json.loads(result)
@@ -72,8 +61,8 @@ async def test_fs_read_path_traversal(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_fs_write_path_traversal(tmp_path, monkeypatch):
-    import dictator.dictator as d
-    monkeypatch.setattr(d, "ROOT_DIR", tmp_path)
+    import dictator.tools_fs as fs_mod
+    monkeypatch.setattr(fs_mod, "ROOT_DIR", tmp_path)
 
     result = await fs_write("../../tmp/evil.txt", "nope")
     parsed = json.loads(result)
@@ -87,8 +76,7 @@ async def test_fs_write_path_traversal(tmp_path, monkeypatch):
 async def test_read_write_anywhere_roundtrip(tmp_path):
     target = str(tmp_path / "anywhere.txt")
     r = await write_anywhere(target, "absolute power")
-    parsed = json.loads(r)
-    assert parsed["ok"] is True
+    assert r.startswith("OK:")
 
     content = await read_anywhere(target)
     assert content == "absolute power"
@@ -107,17 +95,23 @@ async def test_list_directory():
 
 @pytest.mark.asyncio
 async def test_execute_legion_invalid_capability():
-    r = await execute_legion(task_id="TEST_INVALID", capability="NONEXISTENT", args=["echo", "hi"])
-    assert "not found" in r
+    r = await _execute_legion_impl(
+        task_id="TEST_INVALID",
+        capability="NONEXISTENT",
+        args=["echo", "hi"],
+        ctx=None,
+    )
+    assert r["ok"] is False
+    assert "not found" in r["message"]
 
 
 # ── execute_campaign empty ────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_execute_campaign_empty():
-    r = json.loads(await execute_campaign(campaign_id="EMPTY_TEST", tasks=[]))
-    assert r["campaign_id"] == "EMPTY_TEST"
-    assert r["results"] == {}
+    r = await execute_campaign(ctx=None, campaign_id="EMPTY_TEST", tasks=[])
+    assert "Campaign: EMPTY_TEST" in r
+    assert "0/0 succeeded" in r
 
 
 # ── parse_rome_signals ────────────────────────────────────────────────

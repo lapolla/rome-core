@@ -17,7 +17,7 @@ async def rome_tail(n: int = 20) -> str:
     log_path = ROME_ROOT / "logs" / "rome.jsonl"
 
     if not log_path.exists():
-        return json.dumps({"ok": False, "error": f"Log file not found at {log_path}"})
+        return f"Error: Log file not found at {log_path}"
 
     lines = collections.deque(maxlen=n)
     try:
@@ -26,7 +26,7 @@ async def rome_tail(n: int = 20) -> str:
                 if line.strip():
                     lines.append(line)
     except Exception as e:
-        return json.dumps({"ok": False, "error": str(e)})
+        return f"Error: {e}"
 
     entries = []
     for line in lines:
@@ -50,7 +50,7 @@ async def rome_tail(n: int = 20) -> str:
         except (json.JSONDecodeError, TypeError, AttributeError):
             continue
 
-    return json.dumps({"ok": True, "count": len(entries), "entries": entries})
+    return f"Last {len(entries)} entries:\n" + "\n".join(entries)
 
 
 @mcp.tool()
@@ -58,7 +58,7 @@ async def rome_costs(period_hours: int = 24) -> str:
     """Aggregates token usage and cost from rome.jsonl."""
     log_path = ROME_ROOT / "logs" / "rome.jsonl"
     if not log_path.exists():
-        return json.dumps({"ok": False, "error": "Log file not found"}, indent=2)
+        return "Error: Log file not found"
 
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=period_hours)
@@ -108,18 +108,16 @@ async def rome_costs(period_hours: int = 24) -> str:
                 except (json.JSONDecodeError, ValueError):
                     continue
     except Exception as e:
-        return json.dumps({"ok": False, "error": str(e)}, indent=2)
+        return f"Error: {e}"
 
-    return json.dumps(
-        {
-            "ok": True,
-            "period_hours": period_hours,
-            "models": dict(models),
-            "tool_calls": dict(tool_calls),
-            "totals": totals,
-        },
-        indent=2,
-    )
+    lines = [f"Period: {period_hours}h | Tasks: {sum(tool_calls.values())}"]
+    lines.append(f"Tokens: {totals['input_tokens']} in / {totals['output_tokens']} out")
+    if totals["cost_usd"] > 0:
+        lines.append(f"Est. cost: ${totals['cost_usd']:.4f}")
+    if models:
+        for m, u in models.items():
+            lines.append(f"  {m}: {u['input_tokens']}in/{u['output_tokens']}out ${u['cost_usd']:.4f}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -134,15 +132,17 @@ async def rome_health() -> str:
             arsenal = json.load(f)
 
         for name, info in arsenal.get("capabilities", {}).items():
+            exec_bin = info.get("exec", "")
             cli_args = info.get("args", [])
-            if not cli_args:
-                continue
-            cli_name = cli_args[0]
-            r = await run_cmd(f"which {cli_name}")
-            available = r.get("ok", False)
+            r = await run_cmd(f"which {exec_bin}")
+            bin_ok = r.get("ok", False)
+            bin_path = r.get("stdout", "").strip() if bin_ok else ""
+            script = cli_args[0] if cli_args else ""
+            script_ok = os.path.isfile(script) if script and script.startswith("/") else True
+            available = bin_ok and script_ok
             capabilities[name] = {
                 "available": available,
-                "path": r.get("stdout", "").strip() if available else "",
+                "path": bin_path,
             }
         checks["arsenal_load"] = True
     except Exception as e:
@@ -158,7 +158,16 @@ async def rome_health() -> str:
     config_path = Path(__file__).parent / "config.json"
     checks["config_exists"] = config_path.exists()
 
-    return json.dumps({"ok": True, "capabilities": capabilities, "checks": checks}, indent=2)
+    # Build clean summary
+    lines = []
+    ok_caps = [n for n, c in capabilities.items() if c['available']]
+    bad_caps = [n for n, c in capabilities.items() if not c['available']]
+    lines.append(f"Capabilities: {len(ok_caps)}/{len(capabilities)} available")
+    if bad_caps:
+        lines.append(f"Unavailable: {', '.join(bad_caps)}")
+    for k, v in checks.items():
+        lines.append(f"{k}: {'OK' if v is True else v}")
+    return '\n'.join(lines)
 
 
 @mcp.tool()
@@ -169,7 +178,7 @@ async def rome_find(query: str, max_results: int = 10) -> str:
     legions_dir = ROME_ROOT / "legions"
 
     if not legions_dir.exists():
-        return json.dumps({"ok": False, "error": "Legions directory not found"}, indent=2)
+        return "Error: Legions directory not found"
 
     for task_dir in legions_dir.iterdir():
         if not task_dir.is_dir():
@@ -226,7 +235,13 @@ async def rome_find(query: str, max_results: int = 10) -> str:
         if len(matches) >= max_results:
             break
 
-    return json.dumps({"ok": True, "query": query, "matches": matches[:max_results]}, indent=2)
+    results = matches[:max_results]
+    if not results:
+        return f"No matches for '{query}'"
+    lines = [f"Found {len(results)} matches for '{query}':"]
+    for m in results:
+        lines.append(f"  [{m.get('task_id','')}] {m.get('file','')}: {m.get('excerpt','')[:80]}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -234,7 +249,7 @@ async def senate_query(question: str) -> str:
     """Ask the Senate which architect sector handles a concern."""
     architects_dir = ROME_ROOT / "senate" / "architects"
     if not architects_dir.exists():
-        return json.dumps({"ok": False, "error": "Senate architects directory not found"}, indent=2)
+        return "Error: Senate architects directory not found"
 
     question_lower = question.lower()
     matches = []
@@ -257,7 +272,12 @@ async def senate_query(question: str) -> str:
             except Exception:
                 continue
 
-    return json.dumps({"ok": True, "question": question, "matches": matches}, indent=2)
+    if not matches:
+        return f"No sectors matched '{question}'"
+    lines = [f"Sectors matching '{question}':"]
+    for m in matches:
+        lines.append(f"  {m['sector']}: {m['manifesto'][:100]}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -265,7 +285,7 @@ async def senate_brain(sector_id: int, mission: str) -> str:
     """Spawn a Senate brain — binds an LLM soul to a sector manifesto and executes a mission."""
     manifesto_path = ROME_ROOT / "senate" / "architects" / f"T{sector_id}.md"
     if not manifesto_path.exists():
-        return json.dumps({"ok": False, "error": f"Sector T{sector_id} has no manifesto."})
+        return f"Error: Sector T{sector_id} has no manifesto."
 
     manifesto = manifesto_path.read_text(encoding="utf-8")
 
@@ -277,11 +297,12 @@ async def senate_brain(sector_id: int, mission: str) -> str:
         "Provide a concrete action plan or answer. Be specific and actionable."
     )
 
-    from dictator.tools_legion import execute_legion
+    from dictator.tools_legion import _execute_legion_impl
     task_id = f"senate_T{sector_id}_{int(_time.time())}"
-    result_json = await execute_legion(
+    result = await _execute_legion_impl(
         task_id=task_id,
         capability="GEMINI",
         args=[imperial_prompt],
+        ctx=None,
     )
-    return result_json
+    return json.dumps(result, indent=2)
