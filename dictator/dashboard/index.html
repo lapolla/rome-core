@@ -1071,17 +1071,11 @@
               if (retryTaskId && retryCapability) {
                 btn.textContent = "Retrying...";
                 btn.disabled = true;
-                var payload = {
-                  type: "dispatch",
-                  payload: {
-                    task_id: retryTaskId + "_retry",
-                    capability: retryCapability,
-                    prompt: "..."
-                  }
-                };
-                if (state.socket && state.socket.readyState === WebSocket.OPEN) {
-                  state.socket.send(JSON.stringify(payload));
-                }
+                sendCommand("dispatch", {
+                  task_id: retryTaskId + "_retry",
+                  capability: retryCapability,
+                  prompt: "..."
+                });
               }
             }
             return;
