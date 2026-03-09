@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
-from pathlib import Path
 from typing import Any
 
 from starlette.routing import WebSocketRoute
@@ -15,15 +13,7 @@ from dictator.core import event_bus, task_registry
 from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_dispatch_start, emit_error
 from dictator.tools_legion import _execute_legion_impl
 
-_CFG_PATH = Path(__file__).with_name("config.json")
 _HEARTBEAT_SECONDS = 15
-
-try:
-    _cfg = json.loads(_CFG_PATH.read_text()) if _CFG_PATH.exists() else {}
-except Exception:
-    _cfg = {}
-
-_WS_TOKEN = str(_cfg.get("ws_token") or "")
 _ACTIVE_TASKS: dict[str, asyncio.Task[Any]] = {}
 _ACTIVE_TASKS_LOCK = asyncio.Lock()
 
@@ -52,16 +42,6 @@ def _response(request_id: str | None, ok: bool, payload: dict[str, Any] | None =
     if error:
         body["error"] = error
     return body
-
-
-def _extract_bearer_token(websocket: WebSocket) -> str | None:
-    auth = websocket.headers.get("authorization", "")
-    if auth.lower().startswith("bearer "):
-        token = auth[7:].strip()
-        if token:
-            return token
-    query_token = websocket.query_params.get("token")
-    return query_token.strip() if query_token else None
 
 
 async def _emit_heartbeat(websocket: WebSocket) -> None:
@@ -129,8 +109,10 @@ async def _dispatch_runner(
     no_cache: bool,
     prompt_file: str,
 ) -> None:
-    task_registry.register(task_id, capability)
-    await emit_dispatch_start(event_bus, task_id, capability)
+    import os
+    if os.environ.get("ROME_DAEMON"):
+        task_registry.register(task_id, capability)
+        await emit_dispatch_start(event_bus, task_id, capability)
     try:
         result = await _execute_legion_impl(
             task_id=task_id,
@@ -142,22 +124,26 @@ async def _dispatch_runner(
         )
         usage = result.get("usage")
         if usage is not None:
-            task_registry.update_usage(task_id, usage)
-            await emit_cost_update(event_bus, task_id, usage)
+            if os.environ.get("ROME_DAEMON"):
+                task_registry.update_usage(task_id, usage)
+                await emit_cost_update(event_bus, task_id, usage)
 
         status = "completed" if result.get("ok") else "failed"
         report_path = result.get("report_path")
-        task_registry.complete(task_id, status, report_path)
-        await emit_complete(event_bus, task_id, status, report_path, usage)
+        if os.environ.get("ROME_DAEMON"):
+            task_registry.complete(task_id, status, report_path)
+            await emit_complete(event_bus, task_id, status, report_path, usage)
         if not result.get("ok"):
             await emit_error(event_bus, task_id, str(result.get("error") or result.get("message") or "dispatch_failed"))
     except asyncio.CancelledError:
-        task_registry.complete(task_id, "cancelled", None)
-        await emit_complete(event_bus, task_id, "cancelled", None, None)
+        if os.environ.get("ROME_DAEMON"):
+            task_registry.complete(task_id, "cancelled", None)
+            await emit_complete(event_bus, task_id, "cancelled", None, None)
         raise
     except Exception as exc:
-        task_registry.complete(task_id, "failed", None)
-        await emit_error(event_bus, task_id, str(exc))
+        if os.environ.get("ROME_DAEMON"):
+            task_registry.complete(task_id, "failed", None)
+            await emit_error(event_bus, task_id, str(exc))
     finally:
         async with _ACTIVE_TASKS_LOCK:
             current = _ACTIVE_TASKS.get(task_id)
@@ -227,6 +213,23 @@ async def _handle_ping(_: dict[str, Any]) -> dict[str, Any]:
     return {"pong": True, "ts": time.time()}
 
 
+async def handle_read_report(payload: dict[str, Any]) -> dict[str, Any]:
+    from pathlib import Path
+    report_path = str(payload.get("report_path") or "").strip()
+    if not report_path:
+        raise ValueError("payload.report_path is required")
+    
+    rp = Path(report_path)
+    if not rp.exists():
+        return {"report_path": report_path, "content": "File not found or no report generated."}
+    
+    try:
+        content = rp.read_text(encoding="utf-8")
+        return {"report_path": report_path, "content": content}
+    except Exception as exc:
+        return {"report_path": report_path, "content": f"Error reading report: {exc}"}
+
+
 async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
     if message.get("type") != "command":
         raise ValueError("message.type must be 'command'")
@@ -243,6 +246,7 @@ async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
         "status": handle_status,
         "cancel": handle_cancel,
         "ping": _handle_ping,
+        "read_report": handle_read_report,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -267,8 +271,6 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
                 await websocket.send_json(_response(request_id, True, payload))
             except ValueError as exc:
                 await websocket.send_json(_response(request_id, False, error=str(exc)))
-    except PermissionError:
-        return
     except WebSocketDisconnect:
         pass
     finally:

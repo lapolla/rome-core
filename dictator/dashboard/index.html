@@ -237,6 +237,13 @@
         background: linear-gradient(180deg, rgba(11, 22, 34, 0.98), rgba(7, 14, 22, 0.98));
         position: relative;
         overflow: hidden;
+        cursor: pointer;
+        transition: transform 150ms ease, box-shadow 150ms ease;
+      }
+
+      .card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
       }
 
       .card::before {
@@ -356,6 +363,80 @@
         word-break: break-word;
       }
 
+      /* Modal Styles */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        backdrop-filter: blur(4px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 200ms ease;
+      }
+
+      .modal-overlay.active {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .modal-content {
+        background: var(--panel-strong);
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        width: 90%;
+        max-width: 1000px;
+        max-height: 90vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .modal-header {
+        padding: 18px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .modal-title {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      .modal-close {
+        background: transparent;
+        border: none;
+        color: var(--muted);
+        font-size: 24px;
+        cursor: pointer;
+        padding: 0;
+        line-height: 1;
+      }
+
+      .modal-close:hover {
+        color: var(--text);
+      }
+
+      .modal-body {
+        padding: 18px;
+        overflow: auto;
+      }
+
+      .modal-body pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        font-family: var(--font);
+        font-size: 13px;
+        color: #c4d4e1;
+      }
+
       [data-state="connected"] .dot {
         color: var(--success);
         background: var(--success);
@@ -460,6 +541,18 @@
       </section>
     </main>
 
+    <div id="reportModal" class="modal-overlay">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="modalTitle" class="modal-title">Task Report</h2>
+          <button id="modalClose" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <pre id="modalBodyContent">Loading...</pre>
+        </div>
+      </div>
+    </div>
+
     <script>
       (function () {
         const cardsEl = document.getElementById("cards");
@@ -475,6 +568,11 @@
         const runningTasksEl = document.getElementById("runningTasks");
         const eventCountEl = document.getElementById("eventCount");
         const totalCostEl = document.getElementById("totalCost");
+
+        const reportModal = document.getElementById("reportModal");
+        const modalTitle = document.getElementById("modalTitle");
+        const modalBodyContent = document.getElementById("modalBodyContent");
+        const modalClose = document.getElementById("modalClose");
 
         const state = {
           socket: null,
@@ -896,6 +994,13 @@
             }
 
             if (data.type === "response") {
+              if (data.ok && data.payload && data.payload.content !== undefined) {
+                if (reportModal.classList.contains("active")) {
+                  modalBodyContent.textContent = data.payload.content;
+                }
+                return;
+              }
+
               if (data.ok && data.payload && data.payload.tasks) {
                 handleSnapshot(data.payload.tasks);
                 addLog("snapshot", "-", Object.keys(data.payload.tasks).length + " tasks", Date.now() / 1000);
@@ -945,22 +1050,32 @@
           connectSocket();
           refreshDaemonStatus();
         });
-        
+
+        modalClose.addEventListener("click", function() {
+          reportModal.classList.remove("active");
+        });
+
+        reportModal.addEventListener("click", function(e) {
+          if (e.target === reportModal) {
+            reportModal.classList.remove("active");
+          }
+        });
+
         cardsEl.addEventListener("click", function(e) {
           if (e.target && e.target.classList.contains("retry-btn")) {
             var btn = e.target;
-            var card = btn.closest(".card");
-            if (card) {
-              var taskId = card.getAttribute("data-task-id");
-              var capability = card.getAttribute("data-capability");
-              if (taskId && capability) {
+            var retryCard = btn.closest(".card");
+            if (retryCard) {
+              var retryTaskId = retryCard.getAttribute("data-task-id");
+              var retryCapability = retryCard.getAttribute("data-capability");
+              if (retryTaskId && retryCapability) {
                 btn.textContent = "Retrying...";
                 btn.disabled = true;
                 var payload = {
                   type: "dispatch",
                   payload: {
-                    task_id: taskId + "_retry",
-                    capability: capability,
+                    task_id: retryTaskId + "_retry",
+                    capability: retryCapability,
                     prompt: "..."
                   }
                 };
@@ -968,6 +1083,24 @@
                   state.socket.send(JSON.stringify(payload));
                 }
               }
+            }
+            return;
+          }
+
+          var card = e.target.closest(".card");
+          if (card) {
+            var taskId = card.getAttribute("data-task-id");
+            var task = state.tasks.get(taskId);
+            if (task && task.report_path) {
+              modalTitle.textContent = "Report: " + taskId;
+              modalBodyContent.textContent = "Loading report...";
+              reportModal.classList.add("active");
+              
+              sendCommand("read_report", { report_path: task.report_path });
+            } else if (task) {
+              modalTitle.textContent = "Report: " + taskId;
+              modalBodyContent.textContent = "No report available";
+              reportModal.classList.add("active");
             }
           }
         });
