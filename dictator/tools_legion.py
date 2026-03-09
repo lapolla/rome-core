@@ -18,7 +18,7 @@ from mcp.server.fastmcp import Context
 from dictator.core import mcp, run_cmd, run_cmd_stream, ROME_ROOT, ARSENAL_PATH, event_bus, task_registry
 from dictator.rome_log import log_event
 from dictator.events import emit_dispatch_start, emit_progress
-from dictator.emit_helpers import emit_events as _emit_events, emit_dispatch_start_http
+from dictator.emit_helpers import emit_events as _emit_events, emit_dispatch_start_http, emit_progress_http
 
 FALLBACK_CHAIN = {"GEMINI": "CODEX", "CODEX": "OPENCODE"}
 BUSY_PATTERNS = ["service temporarily unavailable", "overloaded", "rate_limit",
@@ -195,6 +195,7 @@ async def _execute_legion_impl(
                 msg = m.group(3).strip()
                 task_registry.update_progress(task_id, p, msg)
                 asyncio.ensure_future(emit_progress(event_bus, task_id, p, msg))
+                emit_progress_http(task_id, p, msg)
                 if ctx:
                     asyncio.create_task(ctx.info(f"{p}% | {msg}"))
             except Exception:
@@ -474,6 +475,7 @@ async def execute_campaign(
                     try:
                         p = int(m.group(1))
                         msg = f"[{tid}] {m.group(3).strip()}"
+                        emit_progress_http(tid, p, msg)
                         asyncio.create_task(ctx.info(f"{p}% | {msg}"))
                     except Exception:
                         pass
