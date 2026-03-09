@@ -1,7 +1,7 @@
 # ROME Core — Imperial Directives (v2.3)
 
 ## Project
-SKSE64 command dispatch framework for Skyrim SE, with a modular Python MCP server (Dictator), worker legion scripts, and a Senate architecture brain.
+Model-agnostic Python MCP orchestration framework with a modular server (Dictator), worker legion scripts, and a Senate architecture brain.
 
 ## Architecture
 - **`dictator/dictator.py`** — Thin entry point (FastMCP); imports modular tools and performs `auto_gc` on startup.
@@ -16,8 +16,8 @@ SKSE64 command dispatch framework for Skyrim SE, with a modular Python MCP serve
 - **CENTURION Hierarchy** — Emperor (User) > Dictator (any LLM) > Centurion (any LLM) > Legionnaires (any LLM).
 
 ## Build & OS
-- **OS**: Linux (Ubuntu 22.04+) with wine/proton for SKSE/Skyrim interaction.
-- **Build**: SKSE plugin cross-compiled via msvc-wine targeting Windows (CMake 3.20+, CommonLibSSE-NG).
+- **OS**: Linux (Ubuntu 22.04+).
+- **Runtime**: Python 3.10+, Node.js (v18+ for MCP).
 
 ## MCP Server (Asshole)
 Exposes 47 tools across 10 modules:
@@ -52,6 +52,8 @@ Exposes 47 tools across 10 modules:
 - **Autonomous Agents**: `execute_prefect` provides domain-scoped (drupal, skyrim, git, investigate, full) autonomous control.
 - **Tool Audit**: Post-run log analysis to ensure agents stay within their tool whitelist.
 - **Clean Dispatch**: `rome_dispatch` hides bulky prompts in files to keep the approval UI clean.
+- **Fire-and-Forget**: `rome_dispatch(fire_and_forget=True)` starts task in background, returns immediately with `DISPATCHED:{task_id}`. Prevents MCP connection drops on long-running tasks.
+- **Output Path Fallback**: `rome_dispatch(output_path=...)` copies report file to output_path if agent cannot write directly (e.g. GEMINI CLI).
 
 ## Coding Conventions
 - **Type hints**: Use `Callable` from `collections.abc`, never lowercase `callable` (it's a builtin function, not a type — causes `TypeError` at import time with `|` union syntax).

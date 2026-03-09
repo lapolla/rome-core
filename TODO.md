@@ -25,5 +25,7 @@
 - [x] Restore v1 Centurion dashboard — standalone centurion.py CLI with OrchestratorUI, launch_centurion MCP tool (fire-and-forget via /dev/tty), dynamic column alignment, JSON report written to file
 - [x] Quiet MCP returns — tools return minimal OK/ERR. rome_dispatch, shell_exec, git tools, write_anywhere all slimmed down.
 - [x] Empty report bug — rome_dispatch was overwriting wrapper's report file with "OK:task_id". Fixed: check if report exists before writing.
-- [ ] WebSocket transport — Dictator as persistent daemon with WS interface alongside MCP. Enables: live dashboard, headless ROME (any orchestrator, not just Claude Code), real-time agent streaming. Key unlock for "make the throne cheap" — decouple orchestrator from Opus.
+- [x] WebSocket transport — daemon.py with Starlette/Uvicorn, EventBus, TaskRegistry, WS server, live dashboard at :8741/dashboard/.
+- [x] Fire-and-forget dispatch — `rome_dispatch(fire_and_forget=True)` prevents MCP timeout drops on long tasks.
+- [x] Output path fallback — `rome_dispatch(output_path=...)` copies report to output_path when agent cannot write directly.
 - [ ] Token discipline enforcement — if Claude (Dictator) consumes more than ~500 tokens on any single task (reading files, analyzing code, writing edits), it must be whipped down. ALL work beyond trivial orchestration commands MUST be delegated to slaves (GEMINI/CODEX/SAFE_SHELL). Claude is the emperor — it commands, it does not labor. Violations = wasted budget.

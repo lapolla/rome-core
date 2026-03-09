@@ -559,15 +559,40 @@ async def rome_dispatch(
     prompt: str,
     input_files: list[str] | None = None,
     no_cache: bool = False,
-    output_path: str | None = None
+    output_path: str | None = None,
+    fire_and_forget: bool = False
 ) -> str:
-    """Quick dispatch. output_path: agent writes directly to this path instead of returning content."""
+    """Quick dispatch. output_path: agent writes directly. fire_and_forget: returns immediately, task runs in background."""
     task_dir = ROME_ROOT / "legions" / task_id
     task_dir.mkdir(parents=True, exist_ok=True)
     full_prompt = prompt
     if output_path:
         full_prompt += f"\n\nIMPORTANT: Write your complete output directly to {output_path}. Do not include it in your response."
     (task_dir / "task.md").write_text(full_prompt)
+
+    if fire_and_forget:
+        async def _bg_run():
+            try:
+                result = await _execute_legion_impl(
+                    task_id=task_id, capability=capability,
+                    args=[prompt if capability == "SAFE_SHELL" else "Read and execute the task in task.md in your current working directory. Output results with [ROME_STATUS: SUCCESS] or [ROME_STATUS: FAILED]."],
+                    input_files=input_files, no_cache=no_cache, ctx=ctx)
+                rp = result.get('report_path')
+                if not rp:
+                    p = task_dir / f'report_{task_id}.txt'
+                    if p.exists() and p.stat().st_size > 20: rp = str(p)
+                    elif result.get('ok') and result.get('output'): p.write_text(result['output']); rp = str(p)
+                if output_path and rp:
+                    op = Path(output_path)
+                    if not (op.exists() and op.stat().st_size > 0):
+                        r = Path(rp)
+                        if r.exists() and r.stat().st_size > 20: shutil.copy2(str(r), str(op))
+                log_event(tool='rome_dispatch', message='bg_complete', task_id=task_id, usage={'status': 'OK' if result.get('ok') else 'ERR'})
+            except Exception as e:
+                log_event(tool='rome_dispatch', message=f'bg_error: {e}', task_id=task_id)
+        asyncio.create_task(_bg_run())
+        return f"DISPATCHED:{task_id}"
+
     result = await _execute_legion_impl(
         task_id=task_id,
         capability=capability,
@@ -589,6 +614,10 @@ async def rome_dispatch(
     
     if output_path:
         op = Path(output_path)
+        if not (op.exists() and op.stat().st_size > 0) and report_path:
+            rp = Path(report_path)
+            if rp.exists() and rp.stat().st_size > 20:
+                shutil.copy2(str(rp), str(op))
         if op.exists() and op.stat().st_size > 0:
             return f"OK:{task_id}\nOutput: {output_path} ({op.stat().st_size}B)"
         return f"ERR:{task_id}\nAgent failed to write to {output_path}"
