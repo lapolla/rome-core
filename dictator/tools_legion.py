@@ -94,8 +94,22 @@ def _is_busy(r: dict) -> bool:
     return any(p in text for p in BUSY_PATTERNS)
 
 
-def _cache_key(capability: str, args: list) -> str:
-    return hashlib.sha256(f"{capability}:{':'.join(args)}".encode()).hexdigest()[:16]
+def _cache_key(capability: str, args: list, task_dir=None) -> str:
+    key_str = f"{capability}:{':'.join(args)}"
+    if task_dir:
+        t_md = task_dir / "task.md"
+        if t_md.exists():
+            try:
+                key_str += ":" + t_md.read_text()
+            except Exception:
+                pass
+    for arg in args:
+        if isinstance(arg, str) and arg.endswith(".md") and Path(arg).exists():
+            try:
+                key_str += ":" + Path(arg).read_text()
+            except Exception:
+                pass
+    return hashlib.sha256(key_str.encode()).hexdigest()[:16]
 
 
 def _recommend_capability_impl(task_description: str) -> dict:
@@ -290,7 +304,7 @@ async def _execute_legion_impl(
     command = f"{cap['exec']} {task_id} {_time.time()} {cap_args} {quoted_args}"
 
     # Result Caching (Phase 12)
-    cache_file = CACHE_DIR / f"{_cache_key(capability, args)}.json"
+    cache_file = CACHE_DIR / f"{_cache_key(capability, args, task_dir)}.json"
     if not no_cache and cache_file.exists():
         try:
             cached = json.loads(cache_file.read_text())
@@ -454,7 +468,7 @@ async def execute_campaign(
 ) -> str:
     """
     Execute multiple ROME tasks in parallel.
-    Each task dict: { 'id': str, 'capability': str, 'args': list[str], 'input_files': list[str] }
+    Each task dict: { 'id': str, 'capability': str, 'args': list[str], 'input_files': list[str], 'depends_on': list[str] (optional) }
     """
     t0 = _time.monotonic()
     log_event(tool="execute_campaign", task_id=campaign_id, message=f"{len(tasks)} tasks")
@@ -462,6 +476,9 @@ async def execute_campaign(
     # --- Centurion Dashboard V2: Real-time Orchestrator UI ---
     task_ids = [f"{campaign_id}_{t['id']}" for t in tasks]
     ui = OrchestratorUI(task_ids)
+
+    events = {t["id"]: asyncio.Event() for t in tasks}
+    task_result_map = {}
 
     async def run_task(t):
         tid = f"{campaign_id}_{t['id']}"
@@ -480,6 +497,8 @@ async def execute_campaign(
                     except Exception:
                         pass
 
+        emit_dispatch_start_http(tid, t["capability"])
+
         return await _execute_legion_impl(
             task_id=tid,
             capability=t['capability'],
@@ -489,8 +508,34 @@ async def execute_campaign(
             ctx=ctx
         )
 
+    async def run_task_with_deps(t):
+        tid_short = t["id"]
+        tid = f"{campaign_id}_{tid_short}"
+        # Wait for dependencies
+        for dep in t.get("depends_on", []):
+            if dep in events:
+                await events[dep].wait()
+                if task_result_map.get(dep) != "SUCCESS":
+                    # Mark as failed due to dep failure
+                    task_result_map[tid_short] = "FAILED"
+                    ui.update(tid, f"ERR: Dependency {dep} failed")
+                    emit_dispatch_start_http(tid, t["capability"])  # register it
+                    emit_progress_http(tid, 0, f"Dependency {dep} failed")
+                    # emit complete as failed
+                    events[tid_short].set()
+                    return {"ok": False, "error": f"Dependency {dep} failed", "task_id": tid}
+        result = await run_task(t)
+        # Record outcome for dependents
+        try:
+            r = result if isinstance(result, dict) else json.loads(result)
+            task_result_map[tid_short] = "SUCCESS" if r.get("ok") else "FAILED"
+        except Exception:
+            task_result_map[tid_short] = "FAILED"
+        events[tid_short].set()
+        return result
+
     # Campaign Error Isolation (Phase 8)
-    results = await asyncio.gather(*(run_task(t) for t in tasks), return_exceptions=True)
+    results = await asyncio.gather(*(run_task_with_deps(t) for t in tasks), return_exceptions=True)
 
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
     has_usage = False

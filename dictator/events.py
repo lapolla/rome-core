@@ -237,6 +237,12 @@ class TaskRegistry:
         for task_id, task in self._tasks.items():
             status = str(task.get("status", "")).upper()
             
+            age = cutoff - float(task.get("updated_at", task.get("created_at", cutoff)))
+
+            if status == "REGISTERED" and age > 60:
+                task["status"] = "expired"
+                status = "EXPIRED"
+
             if status in ("SUCCESS", "OK"):
                 ttl = 30  # Remove successful tasks quickly (30 seconds)
             elif status in ("FAILED", "ERROR", "TIMEOUT", "ERR"):
@@ -244,7 +250,6 @@ class TaskRegistry:
             else:
                 ttl = self._ttl_seconds  # Default 1 hour for active/pending tasks
                 
-            age = cutoff - float(task.get("updated_at", task.get("created_at", cutoff)))
             if age > ttl:
                 expired.append(task_id)
 

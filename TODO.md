@@ -28,4 +28,3 @@
 - [x] WebSocket transport — daemon.py with Starlette/Uvicorn, EventBus, TaskRegistry, WS server, live dashboard at :8741/dashboard/.
 - [x] Fire-and-forget dispatch — `rome_dispatch(fire_and_forget=True)` prevents MCP timeout drops on long tasks.
 - [x] Output path fallback — `rome_dispatch(output_path=...)` copies report to output_path when agent cannot write directly.
-- [ ] Token discipline enforcement — if Claude (Dictator) consumes more than ~500 tokens on any single task (reading files, analyzing code, writing edits), it must be whipped down. ALL work beyond trivial orchestration commands MUST be delegated to slaves (GEMINI/CODEX/SAFE_SHELL). Claude is the emperor — it commands, it does not labor. Violations = wasted budget.

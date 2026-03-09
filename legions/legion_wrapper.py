@@ -140,6 +140,61 @@ class LegionaryUI:
         except:
             pass
 
+# Model pricing tables (USD per 1M tokens)
+# Source: platform.claude.com/docs/en/docs/about-claude/pricing + ai.google.dev/gemini-api/docs/pricing
+# Updated: March 2026
+
+_CLAUDE_PRICING = {
+    # model substring → (input_per_1m, output_per_1m)
+    "claude-opus-4-6":    (5.00,  25.00),
+    "claude-opus-4-5":    (5.00,  25.00),
+    "claude-sonnet-4-6":  (3.00,  15.00),
+    "claude-sonnet-4-5":  (3.00,  15.00),
+    "claude-sonnet-4":    (3.00,  15.00),
+    "claude-haiku-4-5":   (1.00,   5.00),
+    "claude-haiku-3-5":   (0.80,   4.00),
+    "claude-haiku-3":     (0.25,   1.25),
+    "claude-opus-3":      (15.00, 75.00),
+}
+
+def _calc_claude_cost(model: str, input_tokens: int, output_tokens: int) -> float | None:
+    model_lower = model.lower().replace(".", "-")
+    for key, (inp_rate, out_rate) in _CLAUDE_PRICING.items():
+        if key in model_lower:
+            return round(
+                (input_tokens / 1_000_000) * inp_rate +
+                (output_tokens / 1_000_000) * out_rate,
+                6,
+            )
+    return None
+
+# Gemini model pricing (USD per 1M tokens)
+_GEMINI_PRICING = {
+    # (input_per_1m, output_per_1m) USD — lower tier (<=200k tokens)
+    # Source: ai.google.dev/gemini-api/docs/pricing, March 2026
+    "gemini-3.1-pro": (2.00, 12.00),
+    "gemini-3-pro": (2.00, 12.00),
+    "gemini-3-flash": (0.50, 3.00),
+    "gemini-2.5-pro": (1.25, 10.00),
+    "gemini-2.5-flash-lite": (0.10, 0.40),
+    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-2.0-flash-lite": (0.075, 0.30),
+    "gemini-2.0-flash": (0.10, 0.40),
+    "gemini-1.5-pro": (1.25, 5.00),
+    "gemini-1.5-flash": (0.075, 0.30),
+}
+
+def _calc_gemini_cost(model, input_tokens, output_tokens):
+    model_lower = model.lower()
+    for key, (inp_rate, out_rate) in _GEMINI_PRICING.items():
+        if key in model_lower:
+            return round(
+                (input_tokens / 1_000_000) * inp_rate +
+                (output_tokens / 1_000_000) * out_rate,
+                6,
+            )
+    return None
+
 def parse_usage(text):
     """Dual-mode: try to extract usage stats from JSON output (Claude/Gemini).
     Returns (response_text, usage_dict) or (original_text, None) if not JSON."""
@@ -172,7 +227,7 @@ def parse_usage(text):
             "output_tokens": u.get("output_tokens", 0),
             "total_tokens": u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0)
                             + u.get("cache_creation_input_tokens", 0) + u.get("output_tokens", 0),
-            "cost_usd": data.get("total_cost_usd"),
+            "cost_usd": data.get("total_cost_usd") or _calc_claude_cost(model, u.get("input_tokens", 0), u.get("output_tokens", 0)),
         }
         return data.get("result", ""), usage
 
@@ -194,7 +249,7 @@ def parse_usage(text):
             "input_tokens": total_in,
             "output_tokens": total_out,
             "total_tokens": total_all,
-            "cost_usd": None,
+            "cost_usd": _calc_gemini_cost(model_name, total_in, total_out),
         }
         return data.get("response", ""), usage
 

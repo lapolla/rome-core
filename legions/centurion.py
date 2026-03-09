@@ -256,8 +256,24 @@ async def main_async(campaign):
     ui_thread = threading.Thread(target=ui_loop, daemon=True)
     ui_thread.start()
 
-    # --- Run tasks in parallel ---
-    task_coroutines = [run_task(t, arsenal, ui, global_start, results) for t in tasks]
+    # --- Run tasks with dependencies ---
+    events = {t["id"]: asyncio.Event() for t in tasks}
+
+    async def run_task_with_deps(t):
+        tid = t["id"]
+        for dep in t.get("depends_on", []):
+            if dep in events:
+                await events[dep].wait()
+                if results.get(dep, {}).get("status") != "SUCCESS":
+                    results[tid] = {"status": "FAILED", "exit_code": 1, "error": "Dependency failed"}
+                    ui.update(tid, f"ERR: Dependency {dep} failed")
+                    events[tid].set()
+                    return
+        
+        await run_task(t, arsenal, ui, global_start, results)
+        events[tid].set()
+
+    task_coroutines = [run_task_with_deps(t) for t in tasks]
     await asyncio.gather(*task_coroutines)
 
     stop_event.set()
