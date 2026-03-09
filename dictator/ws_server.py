@@ -246,8 +246,11 @@ async def handle_event(payload: dict[str, Any]) -> dict[str, Any]:
         task_registry.register(tid, p.get("capability", "?"))
         await emit_dispatch_start(event_bus, tid, p.get("capability", "?"))
     elif t == "complete":
+        usage = p.get("usage")
+        if usage:
+            task_registry.update_usage(tid, usage)
         task_registry.complete(tid, p.get("status", "SUCCESS"), p.get("report_path"))
-        await emit_complete(event_bus, tid, p.get("status"), p.get("report_path"), p.get("usage"))
+        await emit_complete(event_bus, tid, p.get("status"), p.get("report_path"), usage)
     elif t == "progress":
         task_registry.update_progress(tid, p.get("percent", 0), p.get("message", ""))
         await emit_progress(event_bus, tid, p.get("percent", 0), p.get("message", ""))

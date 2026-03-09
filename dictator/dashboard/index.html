@@ -564,9 +564,9 @@
         const httpLabel = document.getElementById("httpLabel");
         const uptimeLabel = document.getElementById("uptimeLabel");
         const hostLabel = document.getElementById("hostLabel");
-        const activeTasksEl = document.getElementById("activeTasks");
-        const totalTasksEl = document.getElementById("totalTasks");
         const runningTasksEl = document.getElementById("runningTasks");
+        const queuedTasksEl = document.getElementById("queuedTasks");
+        const failedTasksEl = document.getElementById("failedTasks");
         const eventCountEl = document.getElementById("eventCount");
         const totalCostEl = document.getElementById("totalCost");
 
@@ -928,13 +928,18 @@
             const s = canonicalStatus(task.status).toLowerCase();
             return s === "running";
           }).length;
-          const activeFromDaemon = state.daemonStatus && Number.isFinite(Number(state.daemonStatus.active_tasks))
-            ? Number(state.daemonStatus.active_tasks)
-            : running;
+          const queued = tasks.filter(function (task) {
+            return canonicalStatus(task.status).toLowerCase() === "registered";
+          }).length;
+          const failed = tasks.filter(function (task) {
+            const s = canonicalStatus(task.status).toLowerCase();
+            return s === "failed" || s === "error";
+          }).length;
 
-          activeTasksEl.textContent = String(activeFromDaemon);
-          totalTasksEl.textContent = String(tasks.length || (state.daemonStatus && state.daemonStatus.total_tasks) || 0);
           runningTasksEl.textContent = String(running);
+          queuedTasksEl.textContent = String(queued);
+          failedTasksEl.textContent = String(failed);
+          failedTasksEl.style.color = failed > 0 ? "var(--error)" : "";
           eventCountEl.textContent = String(state.eventsSeen);
 
           let totalCost = 0;

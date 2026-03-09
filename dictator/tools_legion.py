@@ -310,7 +310,9 @@ async def _execute_legion_impl(
             cached = json.loads(cache_file.read_text())
             if _time.time() - cached.get('timestamp', 0) < CACHE_TTL:
                 log_event(tool="execute_legion", message="cache hit", task_id=task_id)
-                return json.loads(cached["result"])
+                result = json.loads(cached["result"])
+                await _emit_events(result.get("ok", True), task_id, task_dir, result, None)
+                return result
         except Exception:
             pass
 
