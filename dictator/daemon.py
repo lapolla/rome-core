@@ -93,7 +93,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     os.environ["ROME_DAEMON"] = "1"
     args = parse_args(argv)
-    uvicorn.run(create_app(), host=args.host, port=args.port)
+    import socket
+    cfg = uvicorn.Config(create_app(), host=args.host, port=args.port)
+    cfg.socket_options = [(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)]
+    server = uvicorn.Server(cfg)
+    server.run()
     return 0
 
 

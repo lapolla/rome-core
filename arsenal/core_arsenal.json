@@ -3,7 +3,7 @@
     "GEMINI": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
       "args": ["gemini", "--yolo", "--output-format", "json", "-m", "gemini-3-pro-preview", "-p"],
-      "timeout": 300,
+      "timeout": 600,
       "min_version": "2.5",
       "_note": "Google Gemini CLI — -p must be last so user prompt follows it"
     },

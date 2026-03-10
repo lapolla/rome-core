@@ -620,6 +620,14 @@ async def rome_dispatch(
         full_prompt += f"\n\nIMPORTANT: Write your complete output directly to {output_path}. Do not include it in your response."
     (task_dir / "task.md").write_text(full_prompt)
 
+    # Auto fire-and-forget for long-running capabilities (timeout > 120s)
+    # Prevents MCP transport timeout from killing the connection
+    if not fire_and_forget:
+        arsenal = json.loads(ARSENAL_PATH.read_text())
+        cap = arsenal.get("capabilities", {}).get(capability, {})
+        if cap.get("timeout", 300) > 120:
+            fire_and_forget = True
+
     if fire_and_forget:
         async def _bg_run():
             try:
