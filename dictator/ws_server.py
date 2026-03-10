@@ -108,6 +108,7 @@ async def _dispatch_runner(
     input_files: list[str] | None,
     no_cache: bool,
     prompt_file: str,
+    output_path: str | None = None,
 ) -> None:
     import os
     if os.environ.get("ROME_DAEMON"):
@@ -130,6 +131,14 @@ async def _dispatch_runner(
 
         status = "completed" if result.get("ok") else "failed"
         report_path = result.get("report_path")
+        if output_path and report_path:
+            import shutil
+            from pathlib import Path
+            rp = Path(report_path)
+            op = Path(output_path)
+            if rp.exists() and rp.stat().st_size > 20:
+                if not (op.exists() and op.stat().st_size > 0):
+                    shutil.copy2(str(rp), str(op))
         if os.environ.get("ROME_DAEMON"):
             task_registry.complete(task_id, status, report_path)
             await emit_complete(event_bus, task_id, status, report_path, usage)
@@ -158,6 +167,7 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     input_files = payload.get("input_files") or None
     no_cache = bool(payload.get("no_cache", False))
     prompt_file = str(payload.get("prompt_file") or "")
+    output_path = str(payload.get("output_path") or "") or None
 
     if not task_id:
         raise ValueError("payload.task_id is required")
@@ -169,7 +179,7 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("payload.input_files must be a list when provided")
 
     task = asyncio.create_task(
-        _dispatch_runner(task_id, capability, prompt, input_files, no_cache, prompt_file),
+        _dispatch_runner(task_id, capability, prompt, input_files, no_cache, prompt_file, output_path),
         name=f"rome-ws-dispatch-{task_id}",
     )
     async with _ACTIVE_TASKS_LOCK:

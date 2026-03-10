@@ -200,6 +200,10 @@ async def _execute_legion_impl(
     task_registry.register(task_id, capability)
     await emit_dispatch_start(event_bus, task_id, capability)
     emit_dispatch_start_http(task_id, capability)
+    # Immediately mark as running so dashboard doesn't sit at REGISTERED
+    task_registry.update_progress(task_id, 0, "Starting...")
+    await emit_progress(event_bus, task_id, 0, "Starting...")
+    emit_progress_http(task_id, 0, "Starting...")
 
     def default_on_progress(line):
         m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
@@ -629,27 +633,16 @@ async def rome_dispatch(
             fire_and_forget = True
 
     if fire_and_forget:
-        async def _bg_run():
-            try:
-                result = await _execute_legion_impl(
-                    task_id=task_id, capability=capability,
-                    args=[prompt if capability == "SAFE_SHELL" else "Read and execute the task in task.md in your current working directory. Output results with [ROME_STATUS: SUCCESS] or [ROME_STATUS: FAILED]."],
-                    input_files=input_files, no_cache=no_cache, ctx=ctx)
-                rp = result.get('report_path')
-                if not rp:
-                    p = task_dir / f'report_{task_id}.txt'
-                    if p.exists() and p.stat().st_size > 20: rp = str(p)
-                    elif result.get('ok') and result.get('output'): p.write_text(result['output']); rp = str(p)
-                if output_path and rp:
-                    op = Path(output_path)
-                    if not (op.exists() and op.stat().st_size > 0):
-                        r = Path(rp)
-                        if r.exists() and r.stat().st_size > 20: shutil.copy2(str(r), str(op))
-                log_event(tool='rome_dispatch', message='bg_complete', task_id=task_id, usage={'status': 'OK' if result.get('ok') else 'ERR'})
-            except Exception as e:
-                log_event(tool='rome_dispatch', message=f'bg_error: {e}', task_id=task_id)
-        asyncio.create_task(_bg_run())
-        return f"DISPATCHED:{task_id}"
+        # Delegate to daemon process — MCP stays lightweight
+        from dictator.ws_client import send_command_async
+        payload = {"task_id": task_id, "capability": capability,
+                   "prompt_file": str(task_dir / "task.md"),
+                   "input_files": input_files, "no_cache": no_cache,
+                   "output_path": output_path}
+        resp = await send_command_async("dispatch", payload)
+        if resp.get("accepted"):
+            return f"DISPATCHED:{task_id}"
+        return f"ERR:{task_id}\n{resp.get('error', 'daemon rejected')}"
 
     result = await _execute_legion_impl(
         task_id=task_id,
