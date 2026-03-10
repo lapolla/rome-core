@@ -13,6 +13,11 @@ import threading
 import uuid
 from typing import Any
 
+try:
+    from dictator.rome_log import log_event
+except ImportError:
+    def log_event(**kwargs): pass
+
 _WS_URL = "ws://127.0.0.1:8741/ws"
 
 
@@ -57,7 +62,7 @@ class _EventSender:
         try:
             self._queue.put_nowait(msg)
         except queue.Full:
-            pass
+            log_event(tool='ws_client', status='dropped', message=f'queue full, dropped {msg.get("payload",{}).get("type","?")}:{msg.get("payload",{}).get("task_id","?")}')
 
 
 _sender: _EventSender | None = None

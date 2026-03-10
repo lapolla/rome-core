@@ -176,7 +176,7 @@
 
       .stats-grid {
         display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
         gap: 12px;
         padding: 0 18px 18px;
       }
@@ -186,6 +186,9 @@
         border: 1px solid var(--border);
         border-radius: 14px;
         background: linear-gradient(180deg, rgba(8, 18, 29, 0.95) 0%, rgba(8, 14, 22, 0.95) 100%);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
       }
 
       .stat-label {
@@ -334,6 +337,31 @@
 
       .log-panel {
         padding: 18px;
+      }
+
+      .log-header {
+        cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 0 0 14px;
+        color: var(--muted);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        user-select: none;
+      }
+      
+      .log-header:hover {
+        color: var(--text);
+      }
+
+      .log-panel.collapsed .log-list {
+        display: none;
+      }
+
+      .log-panel.collapsed .log-header {
+        margin: 0;
       }
 
       .log-list {
@@ -525,8 +553,16 @@
             <div class="stat-value" id="eventCount">0</div>
           </div>
           <div class="stat">
+            <div class="stat-label">Tokens</div>
+            <div class="stat-value" id="totalTokens">0</div>
+          </div>
+          <div class="stat">
             <div class="stat-label">Cost</div>
             <div class="stat-value" id="totalCost">$0.0000</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Dictator Waste</div>
+            <div class="stat-value" id="dictatorWaste" style="font-size: 16px;">0 tok</div>
           </div>
         </div>
       </section>
@@ -536,8 +572,11 @@
         <div id="cards" class="cards"></div>
       </section>
 
-      <section class="panel log-panel">
-        <h2 class="section-title">Event Log</h2>
+      <section class="panel log-panel collapsed" id="logPanel">
+        <h2 class="log-header" id="logHeader">
+          <span>Event Log (<span id="logHeaderCount">0</span>)</span>
+          <span id="logToggleIcon">▼</span>
+        </h2>
         <div id="eventLog" class="log-list"></div>
       </section>
     </main>
@@ -568,7 +607,14 @@
         const totalTasksEl = document.getElementById("totalTasks");
         const runningTasksEl = document.getElementById("runningTasks");
         const eventCountEl = document.getElementById("eventCount");
+        const totalTokensEl = document.getElementById("totalTokens");
         const totalCostEl = document.getElementById("totalCost");
+        const dictatorWasteEl = document.getElementById("dictatorWaste");
+
+        const logPanel = document.getElementById("logPanel");
+        const logHeader = document.getElementById("logHeader");
+        const logHeaderCount = document.getElementById("logHeaderCount");
+        const logToggleIcon = document.getElementById("logToggleIcon");
 
         const reportModal = document.getElementById("reportModal");
         const modalTitle = document.getElementById("modalTitle");
@@ -585,12 +631,23 @@
           daemonStatus: null,
           tasks: new Map(),
           sessionCosts: new Map(),
+          sessionTokens: new Map(),
           logs: [],
           lastLogKey: null,
-          lastLogTs: 0
+          lastLogTs: 0,
+          dictatorWasteTokens: 0
         };
 
         hostLabel.textContent = window.location.host || "localhost";
+
+        logHeader.addEventListener("click", function() {
+          logPanel.classList.toggle("collapsed");
+          if (logPanel.classList.contains("collapsed")) {
+            logToggleIcon.textContent = "▼";
+          } else {
+            logToggleIcon.textContent = "▲";
+          }
+        });
 
         function escapeHtml(value) {
           return String(value == null ? "" : value)
@@ -774,6 +831,16 @@
             }
           }
 
+          if (merged.usage) {
+            let tok = Number(merged.usage.total_tokens);
+            if (!Number.isFinite(tok)) {
+              tok = (Number(merged.usage.input_tokens) || 0) + (Number(merged.usage.output_tokens) || 0);
+            }
+            if (tok > 0) {
+              state.sessionTokens.set(taskId, tok);
+            }
+          }
+
           renderTasks();
         }
 
@@ -792,6 +859,16 @@
           const type = event ? event.type : "event";
 
           if (type === "heartbeat") {
+            renderStats();
+            return;
+          }
+
+          if (type === "orchestrator_usage" || type === "dictator_usage" || type === "dictator_waste" || type === "orchestrator_waste") {
+            const usageBits = payload.usage || payload;
+            const tok = Number(usageBits.total_tokens) || (Number(usageBits.input_tokens || 0) + Number(usageBits.output_tokens || 0)) || Number(payload.tokens) || 0;
+            if (tok > 0) {
+               state.dictatorWasteTokens += tok;
+            }
             renderStats();
             return;
           }
@@ -937,12 +1014,27 @@
           totalTasksEl.textContent = String(tasks.length);
           runningTasksEl.textContent = String(running);
           eventCountEl.textContent = String(state.eventsSeen);
+          if (logHeaderCount) logHeaderCount.textContent = String(state.eventsSeen);
 
           let totalCost = 0;
           state.sessionCosts.forEach(function(cost) {
             totalCost += cost;
           });
           totalCostEl.textContent = "$" + totalCost.toFixed(4);
+
+          let totalTokens = 0;
+          state.sessionTokens.forEach(function(tok) {
+            totalTokens += tok;
+          });
+          if (totalTokensEl) totalTokensEl.textContent = formatNumber(totalTokens);
+
+          if (dictatorWasteEl) {
+            if (state.dictatorWasteTokens > 0) {
+              dictatorWasteEl.textContent = formatNumber(state.dictatorWasteTokens) + " tok";
+            } else {
+              dictatorWasteEl.textContent = "0 tok";
+            }
+          }
         }
 
         function setWsState(kind, detail) {

@@ -18,7 +18,7 @@ from mcp.server.fastmcp import Context
 from dictator.core import mcp, run_cmd, run_cmd_stream, ROME_ROOT, ARSENAL_PATH, event_bus, task_registry
 from dictator.rome_log import log_event
 from dictator.events import emit_dispatch_start, emit_progress
-from dictator.emit_helpers import emit_events as _emit_events, emit_dispatch_start_http, emit_progress_http
+from dictator.emit_helpers import emit_events as _emit_events, emit_dispatch_start_ws, emit_progress_ws
 
 FALLBACK_CHAIN = {"GEMINI": "CODEX", "CODEX": "OPENCODE"}
 BUSY_PATTERNS = ["service temporarily unavailable", "overloaded", "rate_limit",
@@ -180,6 +180,8 @@ async def execute_legion(
 
     est_tokens = len(summary) // 4
     log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
+    from dictator.ws_client import send_event
+    send_event("dictator_waste", task_id, {"usage": {"total_tokens": est_tokens}})
     return summary
 
 
@@ -199,11 +201,11 @@ async def _execute_legion_impl(
     capability = capability.upper()
     task_registry.register(task_id, capability)
     await emit_dispatch_start(event_bus, task_id, capability)
-    emit_dispatch_start_http(task_id, capability)
+    emit_dispatch_start_ws(task_id, capability)
     # Immediately mark as running so dashboard doesn't sit at REGISTERED
     task_registry.update_progress(task_id, 0, "Starting...")
     await emit_progress(event_bus, task_id, 0, "Starting...")
-    emit_progress_http(task_id, 0, "Starting...")
+    emit_progress_ws(task_id, 0, "Starting...")
 
     def default_on_progress(line):
         m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
@@ -213,7 +215,7 @@ async def _execute_legion_impl(
                 msg = m.group(3).strip()
                 task_registry.update_progress(task_id, p, msg)
                 asyncio.ensure_future(emit_progress(event_bus, task_id, p, msg))
-                emit_progress_http(task_id, p, msg)
+                emit_progress_ws(task_id, p, msg)
                 if ctx:
                     asyncio.create_task(ctx.info(f"{p}% | {msg}"))
             except Exception:
@@ -304,7 +306,12 @@ async def _execute_legion_impl(
         return r
 
     cap_args = " ".join(cap.get("args", []))
-    quoted_args = " ".join(shlex.quote(a) for a in args)
+    # Capabilities using -p take exactly ONE prompt string; collapse multi-arg lists to avoid
+    # "Cannot use both a positional prompt and the --prompt (-p) flag together" error.
+    if cap_args.rstrip().endswith("-p"):
+        quoted_args = shlex.quote(" ".join(args))
+    else:
+        quoted_args = " ".join(shlex.quote(a) for a in args)
     command = f"{cap['exec']} {task_id} {_time.time()} {cap_args} {quoted_args}"
 
     # Result Caching (Phase 12)
@@ -337,8 +344,10 @@ async def _execute_legion_impl(
             log_event(tool="execute_legion", task_id=task_id,
                       message=f"Busy. Falling back {current_cap} -> {next_cap_name}")
             fallback_used = next_cap_name
+            emit_dispatch_start_ws(task_id, next_cap_name)
             f_cap_args = " ".join(next_cap.get("args", []))
-            f_command = f"{next_cap['exec']} {task_id} {_time.time()} {f_cap_args} {quoted_args}"
+            fb_quoted = shlex.quote(" ".join(args)) if f_cap_args.rstrip().endswith("-p") else quoted_args
+            f_command = f"{next_cap['exec']} {task_id} {_time.time()} {f_cap_args} {fb_quoted}"
             fb_timeout = next_cap.get("timeout", 120)
             r = await asyncio.wait_for(run_cmd_stream(f_command, cwd=task_dir, env=env, on_stderr=actual_on_progress), timeout=fb_timeout)
             current_cap = next_cap_name
@@ -440,6 +449,8 @@ async def _execute_legion_impl(
         result['truncated'] = True
         result['report_path'] = str(report_path)
         log_event(tool='token_guard', message='output truncated', task_id=task_id, truncated_chars=original_len)
+        from dictator.ws_client import send_event
+        send_event("dictator_waste", task_id, {"usage": {"total_tokens": original_len // 4}})
 
     # Auto summary (Phase 19)
     status_icon = "OK" if ok else "FAIL"
@@ -498,12 +509,12 @@ async def execute_campaign(
                     try:
                         p = int(m.group(1))
                         msg = f"[{tid}] {m.group(3).strip()}"
-                        emit_progress_http(tid, p, msg)
+                        emit_progress_ws(tid, p, msg)
                         asyncio.create_task(ctx.info(f"{p}% | {msg}"))
                     except Exception:
                         pass
 
-        emit_dispatch_start_http(tid, t["capability"])
+        emit_dispatch_start_ws(tid, t["capability"])
 
         return await _execute_legion_impl(
             task_id=tid,
@@ -525,8 +536,8 @@ async def execute_campaign(
                     # Mark as failed due to dep failure
                     task_result_map[tid_short] = "FAILED"
                     ui.update(tid, f"ERR: Dependency {dep} failed")
-                    emit_dispatch_start_http(tid, t["capability"])  # register it
-                    emit_progress_http(tid, 0, f"Dependency {dep} failed")
+                    emit_dispatch_start_ws(tid, t["capability"])  # register it
+                    emit_progress_ws(tid, 0, f"Dependency {dep} failed")
                     from dictator.ws_client import send_event
                     send_event("complete", tid, {"status": "FAILED", "report_path": None, "usage": {}})
                     events[tid_short].set()
@@ -602,6 +613,8 @@ async def execute_campaign(
     final_output = summary
     est_tokens = len(final_output) // 4
     log_event(tool='token_guard', message='mcp_outbound', task_id=campaign_id, usage={'estimated_output_tokens': est_tokens})
+    from dictator.ws_client import send_event
+    send_event("dictator_waste", campaign_id, {"usage": {"total_tokens": est_tokens}})
     return final_output
 
 
@@ -677,6 +690,8 @@ async def rome_dispatch(
     rp = f"\nReport: {report_path}" if report_path else ""
     final = f"{status}:{task_id}{rp}\n{summary}"
     log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': len(final) // 4})
+    from dictator.ws_client import send_event
+    send_event("dictator_waste", task_id, {"usage": {"total_tokens": len(final) // 4}})
     return final
 
 

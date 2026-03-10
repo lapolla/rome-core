@@ -2,62 +2,130 @@
   "capabilities": {
     "GEMINI": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["gemini", "--yolo", "--output-format", "json", "-m", "gemini-3-pro-preview", "-p"],
+      "args": [
+        "/home/paul-kane/.nvm/versions/node/v20.20.0/bin/gemini",
+        "--sandbox",
+        "false",
+        "--include-directories",
+        "/home/paul-kane/projects",
+        "--yolo",
+        "--output-format",
+        "json",
+        "-m",
+        "gemini-3.1-pro-preview",
+        "-p"
+      ],
       "timeout": 600,
       "min_version": "2.5",
-      "_note": "Google Gemini CLI — -p must be last so user prompt follows it"
+      "_note": "Google Gemini CLI \u2014 -p must be last so user prompt follows it"
     },
     "CENTURION": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["python3", "/home/paul-kane/projects/rome-core/legions/centurion_wrapper.py", "gemini", "--yolo", "--output-format", "json", "-m", "gemini-3-pro-preview", "-p"],
+      "args": [
+        "python3",
+        "--sandbox",
+        "false",
+        "--include-directories",
+        "/home/paul-kane/projects",
+        "/home/paul-kane/projects/rome-core/legions/centurion_wrapper.py",
+        "gemini",
+        "--yolo",
+        "--output-format",
+        "json",
+        "-m",
+        "gemini-3.1-pro-preview",
+        "-p"
+      ],
       "timeout": 600,
       "_note": "Two-phase: LLM plans, Python executes sub-tasks. Routed through legion_wrapper for progress bars."
     },
     "CENTURION_GEMINI": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["python3", "/home/paul-kane/projects/rome-core/legions/centurion_wrapper.py", "gemini", "--yolo", "--output-format", "json", "-m", "gemini-3-pro-preview", "-p"],
+      "args": [
+        "python3",
+        "--sandbox",
+        "false",
+        "--include-directories",
+        "/home/paul-kane/projects",
+        "/home/paul-kane/projects/rome-core/legions/centurion_wrapper.py",
+        "gemini",
+        "--yolo",
+        "--output-format",
+        "json",
+        "-m",
+        "gemini-3.1-pro-preview",
+        "-p"
+      ],
       "timeout": 600,
       "_note": "Two-phase Centurion with Gemini as planner"
     },
     "CENTURION_CLAUDE": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["python3", "/home/paul-kane/projects/rome-core/legions/centurion_wrapper.py", "claude", "--dangerously-skip-permissions", "--output-format", "json", "-p"],
+      "args": [
+        "python3",
+        "/home/paul-kane/projects/rome-core/legions/centurion_wrapper.py",
+        "claude",
+        "--dangerously-skip-permissions",
+        "--output-format",
+        "json",
+        "-p"
+      ],
       "timeout": 600,
       "_note": "Two-phase Centurion with Claude as planner"
     },
     "CLAUDE": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["claude", "--dangerously-skip-permissions", "--output-format", "json", "-p"],
+      "args": [
+        "claude",
+        "--dangerously-skip-permissions",
+        "--output-format",
+        "json",
+        "-p"
+      ],
       "timeout": 300,
       "min_version": "1.0",
-      "_note": "Anthropic Claude Code CLI — -p must be last"
+      "_note": "Anthropic Claude Code CLI \u2014 -p must be last"
     },
     "OPENCODE": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["opencode", "run"],
+      "args": [
+        "opencode",
+        "run"
+      ],
       "timeout": 120,
       "min_version": "0.1",
       "_note": "Opencode CLI (unreliable)"
     },
     "CODEX": {
       "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
-      "args": ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-m", "gpt-5.4"],
+      "args": [
+        "codex",
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--skip-git-repo-check",
+        "-m",
+        "gpt-5.4"
+      ],
       "timeout": 300,
       "min_version": "0.1",
-      "_note": "OpenAI Codex CLI — gpt-5.4, replaces Gemini as main brain"
+      "_note": "OpenAI Codex CLI \u2014 gpt-5.4, replaces Gemini as main brain"
     },
     "MCP_TOOL_CLIENT": {
       "exec": "python3",
-      "args": ["/home/paul-kane/projects/rome-core/dictator/mcp_client_tool.py"],
+      "args": [
+        "/home/paul-kane/projects/rome-core/dictator/mcp_client_tool.py"
+      ],
       "timeout": 120,
       "min_version": "0.1",
       "_note": "Internal MCP tool client"
     },
     "SAFE_SHELL": {
       "exec": "python3",
-      "args": ["/home/paul-kane/projects/rome-core/legions/shell_executor.py"],
+      "args": [
+        "/home/paul-kane/projects/rome-core/legions/shell_executor.py"
+      ],
       "timeout": 60,
-      "_note": "Dedicated bash executor — no LLM wrapper, no JSON parsing"
+      "_note": "Dedicated bash executor \u2014 no LLM wrapper, no JSON parsing"
     }
   },
   "protocol_version": "1.0"

@@ -26,11 +26,11 @@ async def emit_events(ok, task_id, task_dir, result, usage):
     send_event("complete", task_id, {"status": status, "report_path": rp, "usage": usage or {}})
 
 
-def emit_dispatch_start_http(task_id: str, capability: str) -> None:
+def emit_dispatch_start_ws(task_id: str, capability: str) -> None:
     from dictator.ws_client import send_event
     send_event("dispatch_start", task_id, {"capability": capability})
 
 
-def emit_progress_http(task_id: str, percent: int, message: str) -> None:
+def emit_progress_ws(task_id: str, percent: int, message: str) -> None:
     from dictator.ws_client import send_event
     send_event("progress", task_id, {"percent": percent, "message": message})
