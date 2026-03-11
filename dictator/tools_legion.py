@@ -28,6 +28,24 @@ CACHE_DIR = ROME_ROOT / "legions" / ".cache"
 CACHE_TTL = 3600  # 1 hour
 MAX_OUTPUT_CHARS = 2000
 
+def _extract_mcp_usage(ctx: Context | None) -> dict | None:
+    if not ctx:
+        return None
+    actual_usage = None
+    if hasattr(ctx, "usage"):
+        actual_usage = getattr(ctx, "usage")
+    elif hasattr(ctx, "meta") and isinstance(getattr(ctx, "meta"), dict):
+        actual_usage = getattr(ctx, "meta").get("usage")
+    elif hasattr(ctx, "request_context") and ctx.request_context:
+        meta = getattr(ctx.request_context, "meta", None)
+        if meta:
+            if hasattr(meta, "model_extra") and meta.model_extra:
+                actual_usage = meta.model_extra.get("usage")
+            elif hasattr(meta, "usage"):
+                actual_usage = getattr(meta, "usage")
+            elif isinstance(meta, dict):
+                actual_usage = meta.get("usage")
+    return actual_usage
 
 class OrchestratorUI:
     def __init__(self, task_ids):
@@ -178,10 +196,21 @@ async def execute_legion(
     if result.get("error"):
         summary += f"\nError: {result['error']}"
 
-    est_tokens = len(summary) // 4
-    log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
+    actual_usage = _extract_mcp_usage(ctx)
+    if actual_usage:
+        usage_payload = {
+            "input_tokens": actual_usage.get("input_tokens", 0),
+            "output_tokens": actual_usage.get("output_tokens", 0),
+            "total_tokens": actual_usage.get("total_tokens", 0)
+        }
+        log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage=usage_payload)
+    else:
+        est_tokens = len(summary) // 4
+        usage_payload = {"total_tokens": est_tokens, "estimated": True}
+        log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
+
     from dictator.ws_client import send_event
-    send_event("dictator_waste", task_id, {"usage": {"total_tokens": est_tokens}})
+    send_event("dictator_waste", task_id, {"usage": usage_payload})
     return summary
 
 
@@ -292,7 +321,9 @@ async def _execute_legion_impl(
         # Get the actual shell command from args
         shell_cmd = args[0] if args else ""
         shell_script = str(Path(__file__).parent.parent / "legions" / "shell_executor.py")
-        proc = _sp.run(
+        import asyncio as _asyncio
+        proc = await _asyncio.to_thread(
+            _sp.run,
             ["python3", shell_script, task_id, str(_time2.time()), shell_cmd],
             capture_output=True, text=True, timeout=70
         )
@@ -611,10 +642,21 @@ async def execute_campaign(
     ui.finalize(summary)
 
     final_output = summary
-    est_tokens = len(final_output) // 4
-    log_event(tool='token_guard', message='mcp_outbound', task_id=campaign_id, usage={'estimated_output_tokens': est_tokens})
+    actual_usage = _extract_mcp_usage(ctx)
+    if actual_usage:
+        usage_payload = {
+            "input_tokens": actual_usage.get("input_tokens", 0),
+            "output_tokens": actual_usage.get("output_tokens", 0),
+            "total_tokens": actual_usage.get("total_tokens", 0)
+        }
+        log_event(tool='token_guard', message='mcp_outbound', task_id=campaign_id, usage=usage_payload)
+    else:
+        est_tokens = len(final_output) // 4
+        usage_payload = {"total_tokens": est_tokens, "estimated": True}
+        log_event(tool='token_guard', message='mcp_outbound', task_id=campaign_id, usage={'estimated_output_tokens': est_tokens})
+
     from dictator.ws_client import send_event
-    send_event("dictator_waste", campaign_id, {"usage": {"total_tokens": est_tokens}})
+    send_event("dictator_waste", campaign_id, {"usage": usage_payload})
     return final_output
 
 
@@ -689,9 +731,21 @@ async def rome_dispatch(
     summary = result.get("summary", "")
     rp = f"\nReport: {report_path}" if report_path else ""
     final = f"{status}:{task_id}{rp}\n{summary}"
-    log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': len(final) // 4})
+    actual_usage = _extract_mcp_usage(ctx)
+    if actual_usage:
+        usage_payload = {
+            "input_tokens": actual_usage.get("input_tokens", 0),
+            "output_tokens": actual_usage.get("output_tokens", 0),
+            "total_tokens": actual_usage.get("total_tokens", 0)
+        }
+        log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage=usage_payload)
+    else:
+        est_tokens = len(final) // 4
+        usage_payload = {"total_tokens": est_tokens, "estimated": True}
+        log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
+
     from dictator.ws_client import send_event
-    send_event("dictator_waste", task_id, {"usage": {"total_tokens": len(final) // 4}})
+    send_event("dictator_waste", task_id, {"usage": usage_payload})
     return final
 
 

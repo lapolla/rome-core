@@ -7,32 +7,28 @@ import argparse
 import json
 import os
 import sys
-import time
 from pathlib import Path
-from typing import Any
 
-# Enable ROME daemon features in ws_server and other modules
 os.environ["ROME_DAEMON"] = "1"
 
-import uvicorn
-from starlette.applications import Starlette
-from starlette.responses import FileResponse
-from starlette.routing import Mount, Route, WebSocketRoute
-
-# When invoked as `python3 dictator/daemon.py`, ensure the parent dir
-# (rome-core/) is on sys.path so `from dictator.xxx` imports work.
 _PARENT = str(Path(__file__).resolve().parent.parent)
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
 
-from dictator.core import mcp
+import uvicorn
+from contextlib import asynccontextmanager
+from starlette.applications import Starlette
+from starlette.responses import FileResponse
+from starlette.routing import Mount, Route, WebSocketRoute
+
+from dictator.core import mcp, task_registry
 from dictator.ws_server import rome_ws_endpoint
 
 _CFG_PATH = Path(__file__).with_name("config.json")
 _VERSION = "2.5"
 
 
-def load_config() -> dict[str, Any]:
+def load_config() -> dict:
     if not _CFG_PATH.exists():
         return {}
     try:
@@ -42,27 +38,27 @@ def load_config() -> dict[str, Any]:
 
 
 def import_tool_modules() -> None:
-    import dictator.tools_fs       # noqa: F401
-    import dictator.tools_git      # noqa: F401
-    import dictator.tools_drupal   # noqa: F401
-    import dictator.tools_legion   # noqa: F401
-    import dictator.tools_skyrim   # noqa: F401
-    import dictator.tools_desktop  # noqa: F401
-    import dictator.tools_media    # noqa: F401
-    import dictator.tools_gc       # noqa: F401
-    import dictator.tools_stats    # noqa: F401
-    import dictator.tools_prefect  # noqa: F401
-    import dictator.tools_docs     # noqa: F401
+    import dictator.tools_fs, dictator.tools_git, dictator.tools_drupal  # noqa
+    import dictator.tools_legion, dictator.tools_skyrim  # noqa
+    import dictator.tools_desktop, dictator.tools_media  # noqa
+    import dictator.tools_gc, dictator.tools_stats  # noqa
+    import dictator.tools_prefect, dictator.tools_docs  # noqa
 
 
 async def dashboard_index(request) -> FileResponse:
     del request
-    dashboard_path = Path(__file__).parent / "dashboard" / "index.html"
-    return FileResponse(
-        str(dashboard_path),
-        media_type="text/html; charset=utf-8",
-        headers={"Cache-Control": "no-store"},
-    )
+    p = Path(__file__).parent / "dashboard" / "index.html"
+    return FileResponse(str(p), media_type="text/html; charset=utf-8",
+                        headers={"Cache-Control": "no-store"})
+
+
+@asynccontextmanager
+async def lifespan(app):
+    swept = task_registry.sweep_orphans()
+    if swept:
+        import logging
+        logging.getLogger("rome.daemon").warning("Swept %d orphaned task(s) to failed on startup", swept)
+    yield
 
 
 def create_app() -> Starlette:
@@ -71,6 +67,7 @@ def create_app() -> Starlette:
     from starlette.staticfiles import StaticFiles
     dashboard_dir = Path(__file__).parent / "dashboard"
     return Starlette(
+        lifespan=lifespan,
         debug=False,
         routes=[
             Mount("/mcp", app=mcp.sse_app()),
@@ -93,6 +90,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     os.environ["ROME_DAEMON"] = "1"
     args = parse_args(argv)
+
     import socket
     cfg = uvicorn.Config(create_app(), host=args.host, port=args.port)
     cfg.socket_options = [(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)]

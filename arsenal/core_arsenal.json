@@ -12,7 +12,9 @@
         "--output-format",
         "json",
         "-m",
-        "gemini-3.1-pro-preview",
+        "gemini-2.5-flash",
+        "--allowed-mcp-server-names",
+        "asshole",
         "-p"
       ],
       "timeout": 600,
@@ -33,7 +35,9 @@
         "--output-format",
         "json",
         "-m",
-        "gemini-3.1-pro-preview",
+        "gemini-2.5-flash",
+        "--allowed-mcp-server-names",
+        "asshole",
         "-p"
       ],
       "timeout": 600,
@@ -53,7 +57,9 @@
         "--output-format",
         "json",
         "-m",
-        "gemini-3.1-pro-preview",
+        "gemini-2.5-flash",
+        "--allowed-mcp-server-names",
+        "asshole",
         "-p"
       ],
       "timeout": 600,
@@ -124,7 +130,7 @@
       "args": [
         "/home/paul-kane/projects/rome-core/legions/shell_executor.py"
       ],
-      "timeout": 60,
+      "timeout": 600,
       "_note": "Dedicated bash executor \u2014 no LLM wrapper, no JSON parsing"
     }
   },

@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+import time
 import threading
+import sys
 import uuid
 from typing import Any
 
@@ -41,7 +43,7 @@ class _EventSender:
         delay = 1.0
         while True:
             try:
-                async with websockets.connect(_WS_URL) as ws:
+                async with websockets.connect(_WS_URL, open_timeout=30) as ws:
                     delay = 1.0
                     while True:
                         try:
@@ -55,6 +57,7 @@ class _EventSender:
                             self._queue.put_nowait(msg)
                             raise
             except Exception:
+                sys.stderr.write(f"WS send error. Reconnecting in {delay:.1f}s...\n")
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 16.0)
 
@@ -63,6 +66,15 @@ class _EventSender:
             self._queue.put_nowait(msg)
         except queue.Full:
             log_event(tool='ws_client', status='dropped', message=f'queue full, dropped {msg.get("payload",{}).get("type","?")}:{msg.get("payload",{}).get("task_id","?")}')
+
+    def flush(self, timeout: float = 5.0) -> None:
+        """Blocks until the queue is empty or timeout expires."""
+        deadline = time.time() + timeout
+        while not self._queue.empty():
+            if time.time() >= deadline:
+                break
+            time.sleep(0.05)
+        time.sleep(0.05)
 
 
 _sender: _EventSender | None = None
@@ -92,13 +104,18 @@ def send_event(event_type: str, task_id: str, payload: dict[str, Any]) -> None:
     })
 
 
+def flush(timeout: float = 5.0) -> None:
+    """Blocks until the event queue is empty or timeout expires."""
+    _get_sender().flush(timeout)
+
+
 def send_command_sync(command: str, payload: dict[str, Any], timeout: float = 5.0) -> dict[str, Any]:
     """Short-lived WS connection for sync commands (reset, clear, status).
     Safe to call from any thread — uses asyncio.run() on a fresh loop."""
     import websockets
 
     async def _run() -> dict[str, Any]:
-        async with websockets.connect(_WS_URL) as ws:
+        async with websockets.connect(_WS_URL, open_timeout=30) as ws:
             req_id = uuid.uuid4().hex[:8]
             await ws.send(json.dumps({
                 "type": "command",
@@ -127,7 +144,7 @@ async def send_command_async(command: str, payload: dict[str, Any], timeout: flo
     """Async version of send_command_sync — awaitable, safe inside a running event loop."""
     import websockets
     try:
-        async with websockets.connect(_WS_URL) as ws:
+        async with websockets.connect(_WS_URL, open_timeout=30) as ws:
             req_id = uuid.uuid4().hex[:8]
             await ws.send(json.dumps({
                 "type": "command",

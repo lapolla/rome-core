@@ -187,7 +187,7 @@ def test_parse_usage_gemini_json():
     assert usage["input_tokens"] == 500
     assert usage["output_tokens"] == 30
     assert usage["total_tokens"] == 560
-    assert usage["cost_usd"] is None
+    assert usage["cost_usd"] == 0.000225
 
 
 def test_parse_usage_raw_text():

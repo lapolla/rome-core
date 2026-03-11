@@ -148,10 +148,29 @@ class TaskRegistry:
     def __init__(self, ttl_seconds: int = TASK_TTL_SECONDS) -> None:
         self._ttl_seconds = ttl_seconds
         self._tasks: dict[str, dict[str, Any]] = {}
+        self._session_waste_tokens = 0
+        self._replay_event_count = 0
         self._lock = threading.Lock()
 
-    def register(self, task_id: str, capability: str) -> dict[str, Any]:
-        now = time.time()
+    def add_waste(self, tokens: int) -> int:
+        with self._lock:
+            self._session_waste_tokens += tokens
+            return self._session_waste_tokens
+
+    def get_waste(self) -> int:
+        with self._lock:
+            return self._session_waste_tokens
+
+    def increment_replay_event_count(self) -> None:
+        with self._lock:
+            self._replay_event_count += 1
+
+    def get_replay_event_count(self) -> int:
+        with self._lock:
+            return self._replay_event_count
+
+    def register(self, task_id: str, capability: str, timestamp: float | None = None) -> dict[str, Any]:
+        now = time.time() if timestamp is None else timestamp
         with self._lock:
             self._cleanup_locked(now)
             task = {
@@ -207,6 +226,18 @@ class TaskRegistry:
             self._cleanup_locked()
             task = self._tasks.get(task_id)
             return self._snapshot(task) if task is not None else None
+
+    def sweep_orphans(self) -> int:
+        """Mark any registered/running tasks as failed (called on daemon startup)."""
+        swept = 0
+        with self._lock:
+            for task in self._tasks.values():
+                if task.get("status") in {"registered", "running"}:
+                    task["status"] = "failed"
+                    task["progress_message"] = "Daemon restarted"
+                    task["updated_at"] = time.time()
+                    swept += 1
+        return swept
 
     def clear_finished(self) -> int:
         """Remove all non-active tasks. Returns count removed."""

@@ -1,30 +1,36 @@
-# ROME Core — Imperial Directives (v2.3)
+# ROME Core — Imperial Directives (v2.4)
 
 ## Project
-Model-agnostic Python MCP orchestration framework with a modular server (Dictator), worker legion scripts, and a Senate architecture brain.
+
+Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon exposes MCP-over-SSE for Claude Code, WebSocket for external clients/dashboard, and dispatches AI workers (Legions) in parallel.
 
 ## Architecture
-- **`dictator/dictator.py`** — Thin entry point (FastMCP); imports modular tools and performs `auto_gc` on startup.
-- **`dictator/core.py`** — Central registry (config, run_cmd, run_cmd_stream, mcp instance).
-- **`dictator/config.json`** — Externalized path constants (17 keys: root_dir, git_root, rome_root, etc.).
-- **`dictator/rome_log.py`** — Centralized JSON-line logger with 50MB auto-rotation (`logs/rome.jsonl`).
-- **`legions/legion_wrapper.py`** — Subprocess harness: progress tracking (tool-call detection), ROME signal parsing, usage extraction (Claude/Gemini JSON), manifest generation.
-- **`legions/`** — Worker scripts and task artifact dirs (cleansed via `gc_legions`).
-- **`arsenal/core_arsenal.json`** — Capability registry defining agent CLIs, args, and timeouts.
-- **`senate/`** — brain.py (soul spawner) + architects/ (sector manifestos).
-- **`tests/`** — pytest suite covering tools, signals, and usage parsing.
-- **CENTURION Hierarchy** — Emperor (User) > Dictator (any LLM) > Centurion (any LLM) > Legionnaires (any LLM).
 
-## Build & OS
-- **OS**: Linux (Ubuntu 22.04+).
-- **Runtime**: Python 3.10+, Node.js (v18+ for MCP).
+- **`dictator/daemon.py`** — ASGI app (Starlette + Uvicorn); mounts FastMCP SSE at `/mcp`, WS at `/ws`, dashboard at `/dashboard/`. Port 8741.
+- **`dictator/dictator.py`** — Legacy stdio entry point (kept for fallback).
+- **`dictator/core.py`** — Central registry: config, `run_cmd`, `run_cmd_stream`, EventBus, mcp instance. All subprocesses use `start_new_session=True` (process group isolation).
+- **`dictator/config.json`** — Externalized path constants (17 keys: root_dir, git_root, rome_root, ws_token, daemon_port, etc.).
+- **`dictator/events.py`** — `RomeEvent` dataclass + `EventBus` pub/sub (bounded asyncio queues per subscriber).
+- **`dictator/ws_server.py`** — WS connection manager + command dispatcher (dispatch, cancel, status, reset, clear, ping, heartbeat).
+- **`dictator/ws_client.py`** — Internal WS sender. Two modes: fire-and-forget sender + sync command client. All `websockets.connect()` calls use `open_timeout=30`.
+- **`dictator/rome_log.py`** — JSON-line logger with 50MB auto-rotation (`logs/rome.jsonl`).
+- **`dictator/task_registry.py`** — In-memory task state store (status, capability, started_at, progress, usage, report path). `clear_all()` and `clear_finished()` methods.
+- **`legions/legion_wrapper.py`** — Subprocess harness for LLM workers; parses ROME signals, usage (Claude/Gemini JSON), manifests, progress bars.
+- **`legions/shell_executor.py`** — Dedicated bash executor for SAFE_SHELL. No JSON, no parse_usage, no task.md.
+- **`legions/centurion_wrapper.py`** — Campaign orchestrator: inline ANSI dashboard + retry loop (max 3 per task through fallback chain).
+- **`legions/dashboard.py`** — Inline ANSI TUI. Cursor-control row rewrites. No `/dev/tty`.
+- **`arsenal/core_arsenal.json`** — Capability registry (CLIs, args, timeouts).
+- **`senate/brain.py`** — Soul spawner: loads sector manifesto + dispatches GEMINI legion.
+- **`senate/architects/`** — 64 sector manifestos (T0.md–T63.md).
+- **`client/orchestrator.py`** — Headless CLI: Haiku/Flash → subtask JSON → WS dispatch → JSONL stdout.
+- **`tests/`** — pytest suite: tools, signals, usage parsing, WS protocol, EventBus.
 
-## MCP Server (Asshole)
-Exposes 47 tools across 10 modules:
+## MCP Server (47 tools, 10 modules)
+
 - **`tools_fs`**: shell_exec, fs_read, fs_write, list_directory, read_anywhere, write_anywhere
-- **`tools_git`**: git_status, git_diff, git_commit, git_push
+- **`tools_git`**: git_status, git_diff, git_commit, git_push *(all accept `repo_path` param)*
 - **`tools_drupal`**: rsync_ftk_modules, drush_run, drupal_fj_run
-- **`tools_legion`**: execute_legion, execute_campaign, rome_dispatch, recommend_capability, launch_centurion (fire-and-forget campaign with visual ANSI dashboard in terminal via /dev/tty)
+- **`tools_legion`**: execute_legion, execute_campaign, rome_dispatch, recommend_capability, launch_centurion
 - **`tools_skyrim`**: skyrim_console, skyrim_read_state, skyrim_face_actor, skyrim_follow_actor, skyrim_pivot, skyrim_compound_move, compile_papyrus
 - **`tools_desktop`**: desktop_screenshot, desktop_click, desktop_type_text, desktop_press_key, desktop_find_window, desktop_focus_window, desktop_get_mouse_location, desktop_notify
 - **`tools_media`**: music_play, music_stop, music_status, http_fetch, fetch_mo2_mod
@@ -33,27 +39,45 @@ Exposes 47 tools across 10 modules:
 - **`tools_prefect`**: execute_prefect
 
 ## ROME Protocol Rules (v2.3)
+
 1. **Atomic Changes**: Surgical commits, one concern per commit.
-2. **Sub-division**: If a task exceeds 45s, divide into smaller logical units.
-3. **Manifesto Compliance**: All Legion tasks must be governed by manifestos in `legions/TASK_*/`.
+2. **Sub-division**: Tasks exceeding 45s should be split into smaller units.
+3. **Manifesto Compliance**: Legion tasks governed by manifestos in `legions/TASK_*/`.
 4. **Naming**: Adhere to Imperial metaphors (Dictator, Legion, Senate, Centurion).
-5. **Observability**: Use `rome_tail` to monitor progress and `rome_costs` for budget tracking.
+5. **Observability**: Use `rome_tail` to monitor progress, `rome_costs` for budget tracking.
 
 ## Legion & Campaign Features
-- **Failover Chain**: Automatic chained failover (GEMINI → CODEX → OPENCODE) on rate limits or service unavailability.
-- **Result Caching**: 1-hour TTL caching for Legion results in `legions/.cache`.
-- **Prompt Patches**: Inject capability-specific coding rules from `dictator/legion_patches.json`.
-- **Campaign Error Isolation**: `execute_campaign` uses `return_exceptions=True` for robust parallel execution.
-- **Usage Aggregation**: Real-time extraction and aggregation of token/cost metrics from Claude/Gemini JSON.
-- **Auto Summary**: Legion and Campaign reports include concise one-line status summaries.
-- **Centurion Hierarchy**: ROME v3 nested orchestration — Centurion capability dispatches CODEX/OPENCODE as Legionnaires via shell commands within its session.
+
+- **Failover Chain**: GEMINI → CODEX → OPENCODE on rate limits / failures. SAFE_SHELL retries once.
+- **Result Caching**: 1-hour TTL in `legions/.cache`. `rome_dispatch(no_cache=True)` bypasses.
+- **Prompt Patches**: Capability-specific rules injected from `dictator/legion_patches.json`.
+- **Token Discipline**: MAX_OUTPUT_CHARS=2000 truncation in `_execute_legion_impl`; full output in report file.
+- **Progress Trimming**: Progress arrays trimmed to first 3 + last 3 entries in MCP responses.
+- **Campaign Error Isolation**: `execute_campaign` uses `return_exceptions=True`.
+- **Usage Aggregation**: Claude/Gemini JSON usage extracted by `legion_wrapper`, written to manifest.
+- **Fire-and-Forget**: `rome_dispatch(fire_and_forget=True)` → returns `DISPATCHED:{task_id}` immediately; task runs in background asyncio.Task.
+- **Output Path Fallback**: `rome_dispatch(output_path=...)` copies report to output_path after completion (required for GEMINI CLI which cannot write directly).
+- **SAFE_SHELL Routing**: `capability == "SAFE_SHELL"` bypasses legion_wrapper entirely; calls shell_executor.py via `asyncio.to_thread()` (prevents blocking the event loop).
+- **Auto GC**: `auto_gc()` fires on every MCP server startup — runs `gc_legions` + `reset_tasks` to clear zombie tasks.
+- **Centurion Hierarchy**: CENTURION capability dispatches CODEX/OPENCODE as sub-legionnaires within its session.
+
+## WS Protocol Notes
+
+- All daemon communication is pure WebSocket. No HTTP API routes (`/api/*` returns 404).
+- `ws_client.py` uses `open_timeout=30` on all `websockets.connect()` calls (prevents handshake timeout under load).
+- `reset` command clears all tasks in the registry including REGISTERED zombies.
+- RUNNING dashboard counter excludes REGISTERED state (only counts truly running tasks).
+- Heartbeat every 10–15s.
 
 ## Prefect Agents
-- **Autonomous Agents**: `execute_prefect` provides domain-scoped (drupal, skyrim, git, investigate, full) autonomous control.
-- **Tool Audit**: Post-run log analysis to ensure agents stay within their tool whitelist.
-- **Clean Dispatch**: `rome_dispatch` hides bulky prompts in files to keep the approval UI clean.
-- **Fire-and-Forget**: `rome_dispatch(fire_and_forget=True)` starts task in background, returns immediately with `DISPATCHED:{task_id}`. Prevents MCP connection drops on long-running tasks.
-- **Output Path Fallback**: `rome_dispatch(output_path=...)` copies report file to output_path if agent cannot write directly (e.g. GEMINI CLI).
+
+- **Autonomous Agents**: `execute_prefect` dispatches domain-scoped agents: `drupal`, `skyrim`, `git`, `investigate`, `full`.
+- **Tool Audit**: Post-run log analysis enforces tool whitelist with regex-based detection; violations mark task FAILED.
+- **Pre-flight Declaration**: Agents must declare tool intent before use.
 
 ## Coding Conventions
-- **Type hints**: Use `Callable` from `collections.abc`, never lowercase `callable` (it's a builtin function, not a type — causes `TypeError` at import time with `|` union syntax).
+
+- **Type hints**: Use `Callable` from `collections.abc`. Never use lowercase `callable` with `|` union syntax — it's a builtin function, causes `TypeError` at import time.
+- **Subprocess safety**: Always `start_new_session=True`. Never let child processes propagate signals to the MCP server.
+- **WS dispatch**: Long-running tasks must use `asyncio.to_thread()` or `asyncio.create_task()` — never block the event loop inline.
+- **Stderr**: Do not write to `sys.stderr.buffer` in `run_cmd_stream` — blocks the MCP stdio pipe.

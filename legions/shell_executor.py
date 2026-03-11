@@ -18,12 +18,25 @@ try:
 except ImportError:
     _log_event = None
 
+# Silently import ws_client from ws_client if available.
+try:
+    # Attempt to find ws_client in its likely location: ../dictator/ws_client.py
+    sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dictator'))
+    from ws_client import send_event, flush
+except ImportError:
+    send_event = None
+    flush = None
+
 def shell_executor():
     if len(sys.argv) < 4:
         print("Usage: python3 shell_executor.py <task_id> <global_start_timestamp> <bash_command_string>")
         sys.exit(1)
 
     task_id = sys.argv[1]
+
+    if send_event:
+        send_event("dispatch_start", task_id, {"capability": "SAFE_SHELL"})
+
     try:
         global_start_timestamp = float(sys.argv[2])
     except (ValueError, IndexError):
@@ -111,17 +124,18 @@ def shell_executor():
     except Exception:
         pass
 
+    if send_event:
+        send_event("complete", task_id, {"status": status, "report_path": report_path, "usage": None})
+        if flush:
+            flush()
+
     # Print last 3 lines as summary
     print("\n--- Summary ---")
     summary_lines = full_output[-3:]
     for l in summary_lines:
         print(l.strip())
 
-    # Print OK:{task_id} or ERR:{task_id}
-    if status == "SUCCESS":
-        print(f"OK:{task_id}")
-    else:
-        print(f"ERR:{task_id}")
+
 
 if __name__ == "__main__":
     shell_executor()

@@ -28,6 +28,7 @@ import dictator.tools_gc        # noqa: F401  — gc_legions, legion_stats
 import dictator.tools_stats     # noqa: F401  — rome_tail
 import dictator.tools_prefect   # noqa: F401  — execute_prefect
 import dictator.tools_docs      # noqa: F401  — update_project_docs
+import dictator.tools_ws        # noqa: F401  — ws_send
 
 if __name__ == "__main__":
     # Startup GC: clean old legion dirs before serving

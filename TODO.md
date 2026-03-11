@@ -1,30 +1,30 @@
 # ROME TODO
 
-## Fixed
-- [x] git tools (git_status, git_diff, git_commit, git_push) now accept `repo_path` param — no longer hardcoded to Drupal repo
+## Open Bugs
 
-## Fixed
-- [x] Fallback chain extended: GEMINI→CODEX→OPENCODE with chained retry logic
-- [x] Progress bars: richer keyword detection (reading/writing/compiling/testing/etc), step N/M parsing, percentage detection, error flagging
-- [x] Senate brain.py integrated as `senate_brain` MCP tool in tools_stats.py (dispatches via GEMINI legion)
-- [x] Centurion dashboard restored in execute_campaign — per-task aligned status lines + "Caesar's Consolidated Intelligence" summary
-- [x] Prefect whitelist enforcement strengthened — explicit CRITICAL CONSTRAINT prompts + regex-based tool call audit (not just string matching)
+- [ ] **GEMINI empty report bug** — report file occasionally overwritten with previous task's OK string. `output_path` fallback mitigates but doesn't fully fix the root cause (GEMINI CLI cannot write directly to arbitrary paths).
+- [x] **Ghost tasks on daemon restart** — `sweep_orphans()` in TaskRegistry + Starlette lifespan in daemon.py marks all registered/running tasks as failed on startup.
+- [ ] **`rome_tail` not task-scoped** — returns global log entries, not filtered by task_id. Hard to confirm task results without polling the manifest directly.
 
-- [x] Codex sandbox sync — auto-copies /tmp outputs and modified input_files back after CODEX runs (Phase 21)
-- [x] Prefect enforcement hardened — pre-flight tool declaration + violations now mark task FAILED (not just warning)
-- [x] Delegation heuristics — new `recommend_capability` MCP tool with keyword/volume scoring (GEMINI vs CODEX vs SAFE_SHELL)
-- [x] ROME v3 Centurion hierarchy — CENTURION capability in arsenal, prompt patch, recommend_capability heuristics
+## Open Infrastructure
 
-## Fixed
-- [x] Dictator MCP crash on startup — `callable | None` type hint (lowercase `callable` is a builtin function, not a type). Fixed in `core.py` and `tools_legion.py` by importing `Callable` from `collections.abc`.
+- [ ] **No daemon supervisor** — daemon dies on bad signals with no restart. Add systemd unit or supervisord config (`ops/rome-dictator.service`).
+- [ ] **MCP server cleanup** — "asshole" Node server has too many tools. Should be stripped to lean ROME-only tools; non-ROME tools (Drupal, Skyrim) can move to domain-specific servers.
+- [ ] **Prefect sandboxing is prompt-level only** — true MCP-level tool filtering not possible with gemini CLI dispatch. Would require a custom MCP proxy layer.
 
-## Open
-- [x] Agent-to-disk direct write — `rome_dispatch(output_path=...)` tells agent to write directly. Codex sandbox fixed (`--dangerously-bypass-approvals-and-sandbox`). Zero content through orchestrator.
-- [x] Legion wrapper progress bars in Claude Code — centurion.py non-TTY mode prints clean stdout lines, run via Bash tool for live streaming. progress.log polling + time-based ramp for visual progress.
-- [ ] Prefect sandboxing is still prompt-level — true MCP-level tool filtering not possible with gemini CLI dispatch
-- [x] Restore v1 Centurion dashboard — standalone centurion.py CLI with OrchestratorUI, launch_centurion MCP tool (fire-and-forget via /dev/tty), dynamic column alignment, JSON report written to file
-- [x] Quiet MCP returns — tools return minimal OK/ERR. rome_dispatch, shell_exec, git tools, write_anywhere all slimmed down.
-- [x] Empty report bug — rome_dispatch was overwriting wrapper's report file with "OK:task_id". Fixed: check if report exists before writing.
-- [x] WebSocket transport — daemon.py with Starlette/Uvicorn, EventBus, TaskRegistry, WS server, live dashboard at :8741/dashboard/.
-- [x] Fire-and-forget dispatch — `rome_dispatch(fire_and_forget=True)` prevents MCP timeout drops on long tasks.
-- [x] Output path fallback — `rome_dispatch(output_path=...)` copies report to output_path when agent cannot write directly.
+## Dashboard Features
+
+- [ ] **Cost widget** — show cumulative session cost on dashboard. `rome_costs` data exists; needs a `cost_update` event listener + display widget.
+- [ ] **Failed task retry button** — "Retry" button on FAILED cards sends WS `dispatch` command to re-run.
+- [ ] **Campaign fan-out view** — group child tasks under parent campaign; show aggregate campaign progress.
+- [ ] **Task output viewer** — click task card to view report file contents inline via WS `read_report` command.
+- [ ] **Historical persistence** — hydrate TaskRegistry from `logs/rome.jsonl` on startup so history survives restarts.
+- [ ] **Filter/search** — filter task cards by status, capability, date.
+
+## Backlog (Larger Items)
+
+- [ ] **Headless orchestrator mode (dashboard)** — external client (Haiku/Flash) orchestrates via WS `dispatch` command from the dashboard UI. The "make the throne cheap" endgame; `client/orchestrator.py` CLI exists but dashboard integration is missing.
+- [ ] **Agent WS Result Submission** — give Gemini/agents a small MCP server with `send_result(task_id, content)` tool. Agent calls `send_result` instead of writing to stdout/file. Eliminates report file pipeline + empty report bug entirely.
+  - Result flow: agent → MCP tool → ws_client → daemon → dashboard
+  - Add to arsenal: `--allowed-mcp-server-names rome-results`
+- [ ] **Gemini CLI WS Daemon Mode** — fork gemini-cli (Apache 2.0), add `--ws-daemon` mode: persistent worker that connects to `ws://127.0.0.1:8741/ws`, receives task payloads, sends results back via WS. Eliminates subprocess-per-task model entirely.

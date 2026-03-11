@@ -556,14 +556,6 @@
             <div class="stat-label">Tokens</div>
             <div class="stat-value" id="totalTokens">0</div>
           </div>
-          <div class="stat">
-            <div class="stat-label">Cost</div>
-            <div class="stat-value" id="totalCost">$0.0000</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Dictator Waste</div>
-            <div class="stat-value" id="dictatorWaste" style="font-size: 16px;">0 tok</div>
-          </div>
         </div>
       </section>
 
@@ -608,8 +600,6 @@
         const runningTasksEl = document.getElementById("runningTasks");
         const eventCountEl = document.getElementById("eventCount");
         const totalTokensEl = document.getElementById("totalTokens");
-        const totalCostEl = document.getElementById("totalCost");
-        const dictatorWasteEl = document.getElementById("dictatorWaste");
 
         const logPanel = document.getElementById("logPanel");
         const logHeader = document.getElementById("logHeader");
@@ -628,14 +618,12 @@
           clockTimer: null,
           requestId: 0,
           eventsSeen: 0,
+          sessionWasteTokens: 0,
           daemonStatus: null,
           tasks: new Map(),
-          sessionCosts: new Map(),
-          sessionTokens: new Map(),
           logs: [],
           lastLogKey: null,
-          lastLogTs: 0,
-          dictatorWasteTokens: 0
+          lastLogTs: 0
         };
 
         hostLabel.textContent = window.location.host || "localhost";
@@ -654,7 +642,7 @@
             .replace(/&/g, "&amp;")
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;")
-            .replace(/\"/g, "&quot;")
+            .replace(/"/g, "&quot;")
             .replace(/'/g, "&#39;");
         }
 
@@ -691,7 +679,6 @@
           const total = Number(data.total_tokens);
           const inTokens = Number(data.input_tokens);
           const outTokens = Number(data.output_tokens);
-          const cost = Number(data.cost_usd);
 
           let tokenText = "--";
           if (Number.isFinite(total) && total > 0) {
@@ -700,8 +687,7 @@
             tokenText = formatNumber(inTokens || 0) + " in / " + formatNumber(outTokens || 0) + " out";
           }
 
-          const costText = Number.isFinite(cost) && cost > 0 ? "$" + cost.toFixed(4) : "--";
-          return { tokenText, costText };
+          return { tokenText };
         }
 
         function canonicalStatus(status) {
@@ -824,27 +810,11 @@
           merged.updated_at = Number(merged.updated_at) || Date.now() / 1000;
           state.tasks.set(taskId, merged);
 
-          if (merged.usage && 'cost_usd' in merged.usage) {
-            const costVal = Number(merged.usage.cost_usd);
-            if (Number.isFinite(costVal)) {
-              state.sessionCosts.set(taskId, costVal);
-            }
-          }
-
-          if (merged.usage) {
-            let tok = Number(merged.usage.total_tokens);
-            if (!Number.isFinite(tok)) {
-              tok = (Number(merged.usage.input_tokens) || 0) + (Number(merged.usage.output_tokens) || 0);
-            }
-            if (tok > 0) {
-              state.sessionTokens.set(taskId, tok);
-            }
-          }
-
           renderTasks();
         }
 
         function handleSnapshot(tasks) {
+          state.tasks.clear(); // Clear existing tasks before populating from snapshot
           const entries = tasks || {};
           Object.keys(entries).forEach(function (taskId) {
             upsertTask(taskId, entries[taskId]);
@@ -859,16 +829,6 @@
           const type = event ? event.type : "event";
 
           if (type === "heartbeat") {
-            renderStats();
-            return;
-          }
-
-          if (type === "orchestrator_usage" || type === "dictator_usage" || type === "dictator_waste" || type === "orchestrator_waste") {
-            const usageBits = payload.usage || payload;
-            const tok = Number(usageBits.total_tokens) || (Number(usageBits.input_tokens || 0) + Number(usageBits.output_tokens || 0)) || Number(payload.tokens) || 0;
-            if (tok > 0) {
-               state.dictatorWasteTokens += tok;
-            }
             renderStats();
             return;
           }
@@ -987,7 +947,6 @@
                 '</div>' +
                 '<div class="usage-row">' +
                   '<span>Tokens <span class="mono-strong">' + escapeHtml(usageBits.tokenText) + '</span></span>' +
-                  '<span>Cost <span class="mono-strong">' + escapeHtml(usageBits.costText) + '</span></span>' +
                 '</div>' +
                 (task.usage && task.usage.model ? '<div class="usage-row" style="opacity:0.55;font-size:0.78em">' +
                   '<span>Model <span class="mono-strong">' + escapeHtml(task.usage.model) + '</span></span>' +
@@ -1014,27 +973,9 @@
           totalTasksEl.textContent = String(tasks.length);
           runningTasksEl.textContent = String(running);
           eventCountEl.textContent = String(state.eventsSeen);
+          totalTokensEl.textContent = formatNumber(state.sessionWasteTokens || 0);
           if (logHeaderCount) logHeaderCount.textContent = String(state.eventsSeen);
 
-          let totalCost = 0;
-          state.sessionCosts.forEach(function(cost) {
-            totalCost += cost;
-          });
-          totalCostEl.textContent = "$" + totalCost.toFixed(4);
-
-          let totalTokens = 0;
-          state.sessionTokens.forEach(function(tok) {
-            totalTokens += tok;
-          });
-          if (totalTokensEl) totalTokensEl.textContent = formatNumber(totalTokens);
-
-          if (dictatorWasteEl) {
-            if (state.dictatorWasteTokens > 0) {
-              dictatorWasteEl.textContent = formatNumber(state.dictatorWasteTokens) + " tok";
-            } else {
-              dictatorWasteEl.textContent = "0 tok";
-            }
-          }
         }
 
         function setWsState(kind, detail) {
@@ -1084,8 +1025,7 @@
           socket.addEventListener("open", function () {
             setWsState("connected");
             addLog("ws", "-", "connected", Date.now() / 1000);
-            sendCommand("status", {});
-            sendCommand("status", { summary: true });
+            sendCommand("get_state", {});
           });
 
           socket.addEventListener("message", function (messageEvent) {
@@ -1105,13 +1045,19 @@
                 return;
               }
 
-              if (data.ok && data.payload && data.payload.active_tasks !== undefined) {
-                state.daemonStatus = data.payload;
-                httpLabel.textContent = "OK";
-                uptimeLabel.textContent = formatDuration(Number(data.payload.uptime_s));
-              } else if (data.ok && data.payload && data.payload.tasks) {
-                handleSnapshot(data.payload.tasks);
-                addLog("snapshot", "-", Object.keys(data.payload.tasks).length + " tasks", Date.now() / 1000);
+              if (data.ok && data.payload) {
+                if (data.payload.active_tasks !== undefined) {
+                  state.daemonStatus = data.payload;
+                  httpLabel.textContent = "OK";
+                  uptimeLabel.textContent = formatDuration(Number(data.payload.uptime_s));
+                }
+                if (data.payload.tasks !== undefined) {
+                  handleSnapshot(data.payload.tasks);
+                  addLog("snapshot", "-", Object.keys(data.payload.tasks).length + " tasks", Date.now() / 1000);
+                }
+                if (data.payload.session_waste_tokens !== undefined) {
+                  state.sessionWasteTokens = Number(data.payload.session_waste_tokens);
+                }
               } else if (!data.ok) {
                 addLog("response_error", "-", data.error || "command failed", Date.now() / 1000);
               }

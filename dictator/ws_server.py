@@ -114,6 +114,8 @@ async def _dispatch_runner(
     if os.environ.get("ROME_DAEMON"):
         task_registry.register(task_id, capability)
         await emit_dispatch_start(event_bus, task_id, capability)
+        # Immediately mark as running so dashboard doesn't sit at REGISTERED
+        task_registry.update_progress(task_id, 0, "Starting...")
     try:
         result = await _execute_legion_impl(
             task_id=task_id,
@@ -128,6 +130,9 @@ async def _dispatch_runner(
             if os.environ.get("ROME_DAEMON"):
                 task_registry.update_usage(task_id, usage)
                 await emit_cost_update(event_bus, task_id, usage)
+                total_tokens = usage.get("total_tokens")
+                if total_tokens is not None:
+                    task_registry.add_waste(total_tokens)
 
         status = "completed" if result.get("ok") else "failed"
         report_path = result.get("report_path")
@@ -150,6 +155,8 @@ async def _dispatch_runner(
             await emit_complete(event_bus, task_id, "cancelled", None, None)
         raise
     except Exception as exc:
+        import traceback, logging
+        logging.getLogger("uvicorn.error").error("_dispatch_runner EXCEPTION task=%s: %s", task_id, traceback.format_exc())
         if os.environ.get("ROME_DAEMON"):
             task_registry.complete(task_id, "failed", None)
             await emit_error(event_bus, task_id, str(exc))
@@ -247,8 +254,25 @@ async def handle_clear(_: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "cleared": task_registry.clear_finished()}
 
 
+async def handle_get_state(payload: dict[str, Any]) -> dict[str, Any]:
+    import time
+    from dictator.core import DAEMON_START_TIME
+    tasks = task_registry.get_all()
+    active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
+    return {
+        "ok": True,
+        "tasks": tasks,
+        "session_waste_tokens": task_registry.get_waste(),
+        "session_events": task_registry.get_replay_event_count(),
+        "active_tasks": active,
+        "total_tasks": len(tasks),
+        "uptime_s": round(time.monotonic() - DAEMON_START_TIME, 3),
+    }
+
+
 async def handle_event(payload: dict[str, Any]) -> dict[str, Any]:
-    from dictator.events import emit_dispatch_start, emit_complete, emit_error, emit_progress
+    from dictator.events import emit_dispatch_start, emit_complete, emit_error, emit_progress, RomeEvent
+    import time
     t = payload.get("type", "")
     tid = str(payload.get("task_id") or "")
     p = payload.get("payload", {})
@@ -259,6 +283,9 @@ async def handle_event(payload: dict[str, Any]) -> dict[str, Any]:
         usage = p.get("usage")
         if usage:
             task_registry.update_usage(tid, usage)
+            total_tokens = usage.get("total_tokens")
+            if total_tokens is not None:
+                task_registry.add_waste(total_tokens)
         task_registry.complete(tid, p.get("status", "SUCCESS"), p.get("report_path"))
         await emit_complete(event_bus, tid, p.get("status"), p.get("report_path"), usage)
     elif t == "progress":
@@ -266,6 +293,20 @@ async def handle_event(payload: dict[str, Any]) -> dict[str, Any]:
         await emit_progress(event_bus, tid, p.get("percent", 0), p.get("message", ""))
     elif t == "error":
         await emit_error(event_bus, tid, p.get("message", ""))
+    elif t == "dictator_waste":
+        usage = p.get("usage", {})
+        tokens = usage.get("total_tokens", 0)
+        task_registry.add_waste(tokens)
+        await event_bus.publish(
+            RomeEvent(
+                type="dictator_waste",
+                task_id=tid,
+                ts=time.time(),
+                sequence=0,
+                source="dictator",
+                payload={"usage": usage}
+            )
+        )
     return {"ok": True}
 
 
@@ -283,6 +324,7 @@ async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
     handlers = {
         "dispatch": handle_dispatch,
         "status": handle_status,
+        "get_state": handle_get_state,
         "cancel": handle_cancel,
         "ping": _handle_ping,
         "read_report": handle_read_report,
