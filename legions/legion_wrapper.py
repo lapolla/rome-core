@@ -329,18 +329,22 @@ def main():
     ui.log(0, "Engaged (V2.0).")
     
     full_output = []
+    _idle_ticks = 0
     while True:
         try:
             chunk = os.read(fd, 4096)
             if chunk:
                 ui.handle_bytes(chunk)
                 full_output.append(chunk)
+                _idle_ticks = 0
             elif process.poll() is not None:
                 break
         except OSError:
             if process.poll() is not None: break
-            time.sleep(0.2)
-            ui.log(ui.percent, "Awaiting thought...")
+            time.sleep(0.5)
+            _idle_ticks += 1
+            if _idle_ticks % 10 == 1:  # log once every ~5s, not every 0.5s
+                ui.log(ui.percent, "Awaiting thought...")
             continue
 
     status = "SUCCESS" if process.returncode == 0 else "FAILED"
