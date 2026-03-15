@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from pathlib import Path
 from typing import Any
 
 from starlette.routing import WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from dictator.core import event_bus, task_registry, DAEMON_START_TIME
+from dictator.core import event_bus, task_registry, DAEMON_START_TIME, ROME_ROOT
 from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_dispatch_start, emit_error
 from dictator.tools_legion import _execute_legion_impl
+
+CONFIG_PATH = Path(ROME_ROOT) / "dictator" / "config.json"
+
+def _load_config_token() -> str:
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    return str(config.get("ws_token") or "").strip()
+
+_WEBSOCKET_TOKEN = _load_config_token()
 
 _HEARTBEAT_SECONDS = 15
 _ACTIVE_TASKS: dict[str, asyncio.Task[Any]] = {}
@@ -199,6 +210,24 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     return {"task_id": task_id, "capability": capability, "accepted": True}
 
 
+async def handle_submit_result(payload: dict[str, Any]) -> dict[str, Any]:
+    task_id = str(payload.get("task_id") or "").strip()
+    content = str(payload.get("content") or "")
+    if not task_id:
+        raise ValueError("payload.task_id is required")
+
+    task_dir = ROME_ROOT / "legions" / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+    report_path = task_dir / f"report_{task_id}.txt"
+    report_path.write_text(content, encoding="utf-8")
+
+    status = "completed"
+    task_registry.complete(task_id, status, str(report_path))
+    await emit_complete(event_bus, task_id, status, str(report_path), None)
+
+    return {"task_id": task_id, "status": status, "report_path": str(report_path)}
+
+
 async def handle_status(payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("summary"):
         tasks = task_registry.get_all()
@@ -331,6 +360,7 @@ async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
         "reset": handle_reset,
         "clear": handle_clear,
         "event": handle_event,
+        "submit_result": handle_submit_result,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -343,6 +373,16 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
     relay_task: asyncio.Task[Any] | None = None
     heartbeat_task: asyncio.Task[Any] | None = None
     try:
+        # Auth via Authorization: Bearer <token> header or ?token= query param
+        if _WEBSOCKET_TOKEN:
+            auth_header = websocket.headers.get("authorization", "")
+            header_token = auth_header.removeprefix("Bearer ").strip() if auth_header.startswith("Bearer ") else ""
+            query_token = websocket.query_params.get("token", "")
+            provided_token = header_token or query_token
+            if provided_token != _WEBSOCKET_TOKEN:
+                await websocket.close(code=1008)
+                return
+
         subscriber_id, queue = await manager.connect(websocket)
         relay_task = asyncio.create_task(manager.relay_events(websocket, queue), name="rome-ws-relay")
         heartbeat_task = asyncio.create_task(_emit_heartbeat(websocket), name="rome-ws-heartbeat")

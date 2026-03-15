@@ -227,7 +227,7 @@ def parse_usage(text):
             "output_tokens": u.get("output_tokens", 0),
             "total_tokens": u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0)
                             + u.get("cache_creation_input_tokens", 0) + u.get("output_tokens", 0),
-            "cost_usd": data.get("total_cost_usd") or _calc_claude_cost(model, u.get("input_tokens", 0), u.get("output_tokens", 0)),
+            "cost_usd": None,
         }
         return data.get("result", ""), usage
 

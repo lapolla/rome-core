@@ -41,23 +41,21 @@ DRUPAL_THEMES_DEST = Path(_cfg.get("drupal_themes_dest", "/var/www/ftk_lms/web/t
 # Skyrim/modding paths
 PAPYRUS_COMPILER = Path(_cfg.get("papyrus_compiler", "/media/paul-kane/SteamGames/Games/mods/compile_papyrus.sh"))
 
-# ── Server ─────────────────────────────────────────────────────────────
-mcp = FastMCP("asshole")
-DAEMON_START_TIME = _time.monotonic()
-
 # ── Event Bus & Task Registry (Phase 1 WS) ────────────────────────────
 from dictator.events import EventBus, TaskRegistry
 event_bus = EventBus(source="dictator")
 task_registry = TaskRegistry()
+DAEMON_START_TIME = _time.monotonic()
 
 MAX_BUF = _cfg.get("max_output_bytes", 10 * 1024 * 1024)
+LLM_LIMIT = 100 * 1024  # 100KB soft limit for LLM context safety
 
 
 async def run_cmd(
     cmd: str,
     cwd: str | Path = ROOT_DIR,
     env: dict | None = None,
-    max_output: int = MAX_BUF,
+    max_output: int = LLM_LIMIT,
 ) -> dict:
     """Run a shell command and return {ok, stdout, stderr} or error info."""
     t0 = _time.monotonic()
@@ -105,7 +103,7 @@ async def run_cmd_stream(
     cmd: str,
     cwd: str | Path = ROOT_DIR,
     env: dict | None = None,
-    max_output: int = MAX_BUF,
+    max_output: int = LLM_LIMIT,
     on_stderr: Callable | None = None,
 ) -> dict:
     """Like run_cmd but streams stderr to terminal in real-time (for legion progress bars)."""

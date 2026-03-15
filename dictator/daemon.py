@@ -21,7 +21,8 @@ from starlette.applications import Starlette
 from starlette.responses import FileResponse
 from starlette.routing import Mount, Route, WebSocketRoute
 
-from dictator.core import mcp, task_registry
+from dictator.core import task_registry
+from dictator.orchestrator import create_mcp_server
 from dictator.ws_server import rome_ws_endpoint
 
 _CFG_PATH = Path(__file__).with_name("config.json")
@@ -35,14 +36,6 @@ def load_config() -> dict:
         return json.loads(_CFG_PATH.read_text())
     except Exception:
         return {}
-
-
-def import_tool_modules() -> None:
-    import dictator.tools_fs, dictator.tools_git, dictator.tools_drupal  # noqa
-    import dictator.tools_legion, dictator.tools_skyrim  # noqa
-    import dictator.tools_desktop, dictator.tools_media  # noqa
-    import dictator.tools_gc, dictator.tools_stats  # noqa
-    import dictator.tools_prefect, dictator.tools_docs  # noqa
 
 
 async def dashboard_index(request) -> FileResponse:
@@ -62,7 +55,8 @@ async def lifespan(app):
 
 
 def create_app() -> Starlette:
-    import_tool_modules()
+    # Use the orchestrator to create the ROME MCP server instance
+    mcp = create_mcp_server("ROME")
 
     from starlette.staticfiles import StaticFiles
     dashboard_dir = Path(__file__).parent / "dashboard"

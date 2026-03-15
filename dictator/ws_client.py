@@ -22,6 +22,16 @@ except ImportError:
 
 _WS_URL = "ws://127.0.0.1:8741/ws"
 
+def _ws_headers() -> dict:
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        cfg = _json.loads((_Path(__file__).parent / "config.json").read_text())
+        token = str(cfg.get("ws_token") or "").strip()
+        return {"Authorization": f"Bearer {token}"} if token else {}
+    except Exception:
+        return {}
+
 
 # ---------------------------------------------------------------------------
 # Persistent background sender (fire-and-forget events)
@@ -43,7 +53,7 @@ class _EventSender:
         delay = 1.0
         while True:
             try:
-                async with websockets.connect(_WS_URL, open_timeout=30) as ws:
+                async with websockets.connect(_WS_URL, open_timeout=30, additional_headers=_ws_headers()) as ws:
                     delay = 1.0
                     while True:
                         try:
@@ -115,7 +125,7 @@ def send_command_sync(command: str, payload: dict[str, Any], timeout: float = 5.
     import websockets
 
     async def _run() -> dict[str, Any]:
-        async with websockets.connect(_WS_URL, open_timeout=30) as ws:
+        async with websockets.connect(_WS_URL, open_timeout=30, additional_headers=_ws_headers()) as ws:
             req_id = uuid.uuid4().hex[:8]
             await ws.send(json.dumps({
                 "type": "command",
@@ -144,7 +154,7 @@ async def send_command_async(command: str, payload: dict[str, Any], timeout: flo
     """Async version of send_command_sync — awaitable, safe inside a running event loop."""
     import websockets
     try:
-        async with websockets.connect(_WS_URL, open_timeout=30) as ws:
+        async with websockets.connect(_WS_URL, open_timeout=30, additional_headers=_ws_headers()) as ws:
             req_id = uuid.uuid4().hex[:8]
             await ws.send(json.dumps({
                 "type": "command",
@@ -163,3 +173,13 @@ async def send_command_async(command: str, payload: dict[str, Any], timeout: flo
                     return msg.get("payload", {})
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def submit_agent_result_sync(task_id: str, content: str, timeout: float = 10.0) -> dict[str, Any]:
+    """Sync version of submit_agent_result — sends submit_result command."""
+    return send_command_sync("submit_result", {"task_id": task_id, "content": content}, timeout)
+
+
+async def submit_agent_result_async(task_id: str, content: str, timeout: float = 10.0) -> dict[str, Any]:
+    """Async version of submit_agent_result — sends submit_result command."""
+    return await send_command_async("submit_result", {"task_id": task_id, "content": content}, timeout)

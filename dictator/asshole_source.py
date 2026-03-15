@@ -421,34 +421,6 @@ async def list_directory(dir_path: str, recursive: bool = False) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 17. music_play  (from dictator)
-# ═══════════════════════════════════════════════════════════════════════
-@mcp.tool()
-async def music_play(query: str, fade_ms: int = 500) -> str:
-    """Play music via yt-dlp + mpv. Accepts a URL or search query."""
-    try:
-        is_url = query.startswith("http")
-        ytdl_query = query if is_url else f"ytsearch:{query}"
-
-        r = await run_cmd(
-            f"yt-dlp --no-download --print webpage_url {shlex.quote(ytdl_query)}", cwd="/tmp"
-        )
-        if not r.get("ok"):
-            return json.dumps({"ok": False, "message": r.get("stderr", "yt-dlp failed")})
-
-        url = r["stdout"].strip()
-        proc = subprocess.Popen(
-            ["mpv", url, "--no-video", "--volume=100"],
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return json.dumps({"ok": True, "url": url, "pid": proc.pid})
-    except Exception as e:
-        return json.dumps({"ok": False, "message": str(e)})
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # 18. skyrim_read_state  (from dictator)
 # ═══════════════════════════════════════════════════════════════════════
 @mcp.tool()

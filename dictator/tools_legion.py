@@ -15,7 +15,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import Context
 
-from dictator.core import mcp, run_cmd, run_cmd_stream, ROME_ROOT, ARSENAL_PATH, event_bus, task_registry
+from dictator.core import run_cmd, run_cmd_stream, ROME_ROOT, ARSENAL_PATH, event_bus, task_registry
 from dictator.rome_log import log_event
 from dictator.events import emit_dispatch_start, emit_progress
 from dictator.emit_helpers import emit_events as _emit_events, emit_dispatch_start_ws, emit_progress_ws
@@ -169,49 +169,325 @@ def _recommend_capability_impl(task_description: str) -> dict:
     }
 
 
-@mcp.tool()
-async def execute_legion(
-    ctx: Context,
-    task_id: str,
-    capability: str,
-    args: list[str],
-    input_files: list[str] | None = None,
-    no_cache: bool = False,
-    prompt_file: str = "",
-) -> str:
-    """Execute a ROME legion worker for a given capability."""
-    result = await _execute_legion_impl(
-        task_id=task_id,
-        capability=capability,
-        args=args,
-        input_files=input_files,
-        no_cache=no_cache,
-        prompt_file=prompt_file,
-        ctx=ctx
-    )
-    
-    summary = result.get("summary", "Task complete.")
-    if result.get("truncated"):
-        summary += f"\nNote: Output was truncated. Report saved to {result.get('report_path')}."
-    if result.get("error"):
-        summary += f"\nError: {result['error']}"
+def register(mcp):
+    """Register Legion tools with the given FastMCP instance."""
 
-    actual_usage = _extract_mcp_usage(ctx)
-    if actual_usage:
-        usage_payload = {
-            "input_tokens": actual_usage.get("input_tokens", 0),
-            "output_tokens": actual_usage.get("output_tokens", 0),
-            "total_tokens": actual_usage.get("total_tokens", 0)
-        }
-        log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage=usage_payload)
-    else:
-        est_tokens = len(summary) // 4
-        usage_payload = {"total_tokens": est_tokens, "estimated": True}
-        log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
+    @mcp.tool()
+    async def execute_legion(
+        ctx: Context,
+        task_id: str,
+        capability: str,
+        args: list[str],
+        input_files: list[str] | None = None,
+        no_cache: bool = False,
+        prompt_file: str = "",
+    ) -> str:
+        """Execute a ROME legion worker for a given capability."""
+        result = await _execute_legion_impl(
+            task_id=task_id,
+            capability=capability,
+            args=args,
+            input_files=input_files,
+            no_cache=no_cache,
+            prompt_file=prompt_file,
+            ctx=ctx
+        )
+        
+        summary = result.get("summary", "Task complete.")
+        if result.get("truncated"):
+            summary += f"\nNote: Output was truncated. Report saved to {result.get('report_path')}."
+        if result.get("error"):
+            summary += f"\nError: {result['error']}"
 
-    from dictator.ws_client import send_event
-    send_event("dictator_waste", task_id, {"usage": usage_payload})
-    return summary
+        actual_usage = _extract_mcp_usage(ctx)
+        if actual_usage:
+            usage_payload = {
+                "input_tokens": actual_usage.get("input_tokens", 0),
+                "output_tokens": actual_usage.get("output_tokens", 0),
+                "total_tokens": actual_usage.get("total_tokens", 0)
+            }
+            log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage=usage_payload)
+        else:
+            est_tokens = len(summary) // 4
+            usage_payload = {"total_tokens": est_tokens, "estimated": True}
+            log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
+
+        from dictator.ws_client import send_event
+        send_event("dictator_waste", task_id, {"usage": usage_payload})
+        return summary
+
+    @mcp.tool()
+    async def execute_campaign(
+        ctx: Context,
+        campaign_id: str,
+        tasks: list[dict],
+    ) -> str:
+        """
+        Execute multiple ROME tasks in parallel.
+        Each task dict: { 'id': str, 'capability': str, 'args': list[str], 'input_files': list[str], 'depends_on': list[str] (optional) }
+        """
+        t0 = _time.monotonic()
+        log_event(tool="execute_campaign", task_id=campaign_id, message=f"{len(tasks)} tasks")
+
+        # --- Centurion Dashboard V2: Real-time Orchestrator UI ---
+        task_ids = [f"{campaign_id}_{t['id']}" for t in tasks]
+        ui = OrchestratorUI(task_ids)
+
+        events = {t["id"]: asyncio.Event() for t in tasks}
+        task_result_map = {}
+
+        async def run_task(t):
+            tid = f"{campaign_id}_{t['id']}"
+
+            def on_progress(line):
+                ui.update(tid, line)
+                ui.redraw()
+                if ctx:
+                    m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
+                    if m:
+                        try:
+                            p = int(m.group(1))
+                            msg = f"[{tid}] {m.group(3).strip()}"
+                            emit_progress_ws(tid, p, msg)
+                            asyncio.create_task(ctx.info(f"{p}% | {msg}"))
+                        except Exception:
+                            pass
+
+            emit_dispatch_start_ws(tid, t["capability"])
+
+            return await _execute_legion_impl(
+                task_id=tid,
+                capability=t['capability'],
+                args=t['args'],
+                input_files=t.get('input_files', []),
+                on_progress=on_progress,
+                ctx=ctx
+            )
+
+        async def run_task_with_deps(t):
+            tid_short = t["id"]
+            tid = f"{campaign_id}_{tid_short}"
+            # Wait for dependencies
+            for dep in t.get("depends_on", []):
+                if dep in events:
+                    await events[dep].wait()
+                    if task_result_map.get(dep) != "SUCCESS":
+                        # Mark as failed due to dep failure
+                        task_result_map[tid_short] = "FAILED"
+                        ui.update(tid, f"ERR: Dependency {dep} failed")
+                        emit_dispatch_start_ws(tid, t["capability"])  # register it
+                        emit_progress_ws(tid, 0, f"Dependency {dep} failed")
+                        from dictator.ws_client import send_event
+                        send_event("complete", tid, {"status": "FAILED", "report_path": None, "usage": {}})
+                        events[tid_short].set()
+                        return {"ok": False, "error": f"Dependency {dep} failed", "task_id": tid}
+            result = await run_task(t)
+            # Record outcome for dependents
+            try:
+                r = result if isinstance(result, dict) else json.loads(result)
+                task_result_map[tid_short] = "SUCCESS" if r.get("ok") else "FAILED"
+            except Exception:
+                task_result_map[tid_short] = "FAILED"
+            events[tid_short].set()
+            return result
+
+        # Campaign Error Isolation (Phase 8)
+        results = await asyncio.gather(*(run_task_with_deps(t) for t in tasks), return_exceptions=True)
+
+        total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+        has_usage = False
+        for t in tasks:
+            manifest_path = ROME_ROOT / "legions" / f"{campaign_id}_{t['id']}" / "manifest.json"
+            try:
+                if manifest_path.exists():
+                    m = json.loads(manifest_path.read_text())
+                    u = m.get("usage")
+                    if u:
+                        has_usage = True
+                        total_usage["input_tokens"] += u.get("input_tokens", 0)
+                        total_usage["output_tokens"] += u.get("output_tokens", 0)
+                        total_usage["total_tokens"] += u.get("total_tokens", 0)
+                        if u.get("cost_usd") is not None:
+                            total_usage["cost_usd"] += u["cost_usd"]
+            except Exception:
+                pass
+
+        elapsed = _time.monotonic() - t0
+        log_event(tool="execute_campaign", task_id=campaign_id, status="ok", duration_s=elapsed,
+                  message=f"Completed {len(tasks)} tasks",
+                  usage=total_usage if has_usage else None)
+
+        task_results = {}
+        ok_count = 0
+        artifact_paths = []
+        for t, result in zip(tasks, results):
+            tid = f"{campaign_id}_{t['id']}"
+            if isinstance(result, Exception):
+                task_results[t['id']] = json.dumps({"ok": False, "error": str(result), "task_id": tid}, indent=2)
+            else:
+                task_results[t['id']] = json.dumps(result, indent=2) if isinstance(result, dict) else result
+                try:
+                    r = result if isinstance(result, dict) else json.loads(result)
+                    if r.get("ok"):
+                        ok_count += 1
+                    # Collect artifact paths from manifest
+                    manifest_path = ROME_ROOT / "legions" / tid / "manifest.json"
+                    if manifest_path.exists():
+                        m = json.loads(manifest_path.read_text())
+                        for a in m.get("artifacts", []):
+                            artifact_paths.append(a.get("path", ""))
+                except Exception:
+                    pass
+
+        # Finalize UI
+        tok = total_usage.get("total_tokens", 0) if has_usage else 0
+        cost = total_usage.get("cost_usd", 0.0) if has_usage else 0.0
+        cost_str = f" ${cost:.4f}" if cost else ""
+        summary = f"Campaign: {campaign_id} | {ok_count}/{len(tasks)} succeeded | {round(elapsed, 1)}s | {tok}tok{cost_str}"
+        if artifact_paths:
+            summary += f"\nArtifacts: {', '.join(artifact_paths[:5])}"
+        
+        ui.finalize(summary)
+
+        final_output = summary
+        actual_usage = _extract_mcp_usage(ctx)
+        if actual_usage:
+            usage_payload = {
+                "input_tokens": actual_usage.get("input_tokens", 0),
+                "output_tokens": actual_usage.get("output_tokens", 0),
+                "total_tokens": actual_usage.get("total_tokens", 0)
+            }
+            log_event(tool='token_guard', message='mcp_outbound', task_id=campaign_id, usage=usage_payload)
+        else:
+            est_tokens = len(final_output) // 4
+            usage_payload = {"total_tokens": est_tokens, "estimated": True}
+            log_event(tool='token_guard', message='mcp_outbound', task_id=campaign_id, usage={'estimated_output_tokens': est_tokens})
+
+        from dictator.ws_client import send_event
+        send_event("dictator_waste", campaign_id, {"usage": usage_payload})
+        return final_output
+
+    @mcp.tool()
+    async def rome_dispatch(
+        ctx: Context,
+        task_id: str,
+        capability: str,
+        prompt: str,
+        input_files: list[str] | None = None,
+        no_cache: bool = False,
+        output_path: str | None = None,
+        fire_and_forget: bool = False
+    ) -> str:
+        """Quick dispatch. output_path: agent writes directly. fire_and_forget: returns immediately, task runs in background."""
+        task_dir = ROME_ROOT / "legions" / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+        full_prompt = prompt
+        if output_path:
+            full_prompt += f"\n\nIMPORTANT: Write your complete output directly to {output_path}. Do not include it in your response."
+        (task_dir / "task.md").write_text(full_prompt)
+
+        # Auto fire-and-forget for long-running capabilities (timeout > 120s)
+        # Prevents MCP transport timeout from killing the connection
+        if not fire_and_forget:
+            arsenal = json.loads(ARSENAL_PATH.read_text())
+            cap = arsenal.get("capabilities", {}).get(capability, {})
+            if cap.get("timeout", 300) > 120:
+                fire_and_forget = True
+
+        if fire_and_forget:
+            # Delegate to daemon process — MCP stays lightweight
+            from dictator.ws_client import send_command_async
+            payload = {"task_id": task_id, "capability": capability,
+                    "prompt_file": str(task_dir / "task.md"),
+                    "input_files": input_files, "no_cache": no_cache,
+                    "output_path": output_path}
+            resp = await send_command_async("dispatch", payload)
+            if resp.get("accepted"):
+                return f"DISPATCHED:{task_id}"
+            return f"ERR:{task_id}\n{resp.get('error', 'daemon rejected')}"
+
+        result = await _execute_legion_impl(
+            task_id=task_id,
+            capability=capability,
+            args=[prompt if capability == "SAFE_SHELL" else "Read and execute the task in task.md in your current working directory. Output results with [ROME_STATUS: SUCCESS] or [ROME_STATUS: FAILED]."],
+            input_files=input_files,
+            no_cache=no_cache,
+            ctx=ctx
+        )
+        
+        # Change 3: rome_dispatch returns path only
+        report_path = result.get('report_path')
+        if not report_path:
+            path = task_dir / f'report_{task_id}.txt'
+            if path.exists() and path.stat().st_size > 20:
+                report_path = str(path)
+            elif result.get('ok') and result.get('output'):
+                path.write_text(result['output'])
+                report_path = str(path)
+        
+        if output_path:
+            op = Path(output_path)
+            if not (op.exists() and op.stat().st_size > 0) and report_path:
+                rp = Path(report_path)
+                if rp.exists() and rp.stat().st_size > 20:
+                    shutil.copy2(str(rp), str(op))
+            if op.exists() and op.stat().st_size > 0:
+                return f"OK:{task_id}\nOutput: {output_path} ({op.stat().st_size}B)"
+            return f"ERR:{task_id}\nAgent failed to write to {output_path}"
+        status = "OK" if result.get("ok") else "ERR"
+        summary = result.get("summary", "")
+        rp = f"\nReport: {report_path}" if report_path else ""
+        final = f"{status}:{task_id}{rp}\n{summary}"
+        actual_usage = _extract_mcp_usage(ctx)
+        if actual_usage:
+            usage_payload = {
+                "input_tokens": actual_usage.get("input_tokens", 0),
+                "output_tokens": actual_usage.get("output_tokens", 0),
+                "total_tokens": actual_usage.get("total_tokens", 0)
+            }
+            log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage=usage_payload)
+        else:
+            est_tokens = len(final) // 4
+            usage_payload = {"total_tokens": est_tokens, "estimated": True}
+            log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
+
+        from dictator.ws_client import send_event
+        send_event("dictator_waste", task_id, {"usage": usage_payload})
+        return final
+
+    @mcp.tool()
+    async def clear_cache() -> str:
+        """Clear the legion result cache."""
+        count = 0
+        if CACHE_DIR.exists():
+            for f in CACHE_DIR.glob('*.json'):
+                f.unlink()
+                count += 1
+        log_event(tool='clear_cache', message=f'Cleared {count} cached entries')
+        return f'Cleared {count} cached entries from {CACHE_DIR}'
+
+    @mcp.tool()
+    async def recommend_capability(task_description: str) -> str:
+        """Recommend the best Legion capability based on task heuristics."""
+        res = _recommend_capability_impl(task_description)
+        return json.dumps(res, indent=2)
+
+    @mcp.tool()
+    async def launch_centurion(campaign_id: str, tasks: list[dict]) -> str:
+        """Launch a campaign with the Centurion CLI dashboard (blocks until complete, renders bars in terminal)."""
+        import tempfile
+
+        campaign = {"campaign_id": campaign_id, "tasks": tasks}
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix=f"centurion_{campaign_id}_",
+                                        dir=str(ROME_ROOT / "legions"), delete=False)
+        json.dump(campaign, tmp)
+        tmp.close()
+
+        centurion_path = str(ROME_ROOT / "legions" / "centurion.py")
+        command = f"python3 {centurion_path} {tmp.name}"
+        r = await run_cmd_stream(command, cwd=str(ROME_ROOT / "legions"))
+        exit_code = r.get("exit_code", "?")
+        return f"Campaign {campaign_id} complete | {len(tasks)} tasks | exit={exit_code}"
 
 
 async def _execute_legion_impl(
@@ -506,281 +782,3 @@ async def _execute_legion_impl(
             pass
 
     return result
-
-
-@mcp.tool()
-async def execute_campaign(
-    ctx: Context,
-    campaign_id: str,
-    tasks: list[dict],
-) -> str:
-    """
-    Execute multiple ROME tasks in parallel.
-    Each task dict: { 'id': str, 'capability': str, 'args': list[str], 'input_files': list[str], 'depends_on': list[str] (optional) }
-    """
-    t0 = _time.monotonic()
-    log_event(tool="execute_campaign", task_id=campaign_id, message=f"{len(tasks)} tasks")
-
-    # --- Centurion Dashboard V2: Real-time Orchestrator UI ---
-    task_ids = [f"{campaign_id}_{t['id']}" for t in tasks]
-    ui = OrchestratorUI(task_ids)
-
-    events = {t["id"]: asyncio.Event() for t in tasks}
-    task_result_map = {}
-
-    async def run_task(t):
-        tid = f"{campaign_id}_{t['id']}"
-
-        def on_progress(line):
-            ui.update(tid, line)
-            ui.redraw()
-            if ctx:
-                m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
-                if m:
-                    try:
-                        p = int(m.group(1))
-                        msg = f"[{tid}] {m.group(3).strip()}"
-                        emit_progress_ws(tid, p, msg)
-                        asyncio.create_task(ctx.info(f"{p}% | {msg}"))
-                    except Exception:
-                        pass
-
-        emit_dispatch_start_ws(tid, t["capability"])
-
-        return await _execute_legion_impl(
-            task_id=tid,
-            capability=t['capability'],
-            args=t['args'],
-            input_files=t.get('input_files', []),
-            on_progress=on_progress,
-            ctx=ctx
-        )
-
-    async def run_task_with_deps(t):
-        tid_short = t["id"]
-        tid = f"{campaign_id}_{tid_short}"
-        # Wait for dependencies
-        for dep in t.get("depends_on", []):
-            if dep in events:
-                await events[dep].wait()
-                if task_result_map.get(dep) != "SUCCESS":
-                    # Mark as failed due to dep failure
-                    task_result_map[tid_short] = "FAILED"
-                    ui.update(tid, f"ERR: Dependency {dep} failed")
-                    emit_dispatch_start_ws(tid, t["capability"])  # register it
-                    emit_progress_ws(tid, 0, f"Dependency {dep} failed")
-                    from dictator.ws_client import send_event
-                    send_event("complete", tid, {"status": "FAILED", "report_path": None, "usage": {}})
-                    events[tid_short].set()
-                    return {"ok": False, "error": f"Dependency {dep} failed", "task_id": tid}
-        result = await run_task(t)
-        # Record outcome for dependents
-        try:
-            r = result if isinstance(result, dict) else json.loads(result)
-            task_result_map[tid_short] = "SUCCESS" if r.get("ok") else "FAILED"
-        except Exception:
-            task_result_map[tid_short] = "FAILED"
-        events[tid_short].set()
-        return result
-
-    # Campaign Error Isolation (Phase 8)
-    results = await asyncio.gather(*(run_task_with_deps(t) for t in tasks), return_exceptions=True)
-
-    total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
-    has_usage = False
-    for t in tasks:
-        manifest_path = ROME_ROOT / "legions" / f"{campaign_id}_{t['id']}" / "manifest.json"
-        try:
-            if manifest_path.exists():
-                m = json.loads(manifest_path.read_text())
-                u = m.get("usage")
-                if u:
-                    has_usage = True
-                    total_usage["input_tokens"] += u.get("input_tokens", 0)
-                    total_usage["output_tokens"] += u.get("output_tokens", 0)
-                    total_usage["total_tokens"] += u.get("total_tokens", 0)
-                    if u.get("cost_usd") is not None:
-                        total_usage["cost_usd"] += u["cost_usd"]
-        except Exception:
-            pass
-
-    elapsed = _time.monotonic() - t0
-    log_event(tool="execute_campaign", task_id=campaign_id, status="ok", duration_s=elapsed,
-              message=f"Completed {len(tasks)} tasks",
-              usage=total_usage if has_usage else None)
-
-    task_results = {}
-    ok_count = 0
-    artifact_paths = []
-    for t, result in zip(tasks, results):
-        tid = f"{campaign_id}_{t['id']}"
-        if isinstance(result, Exception):
-            task_results[t['id']] = json.dumps({"ok": False, "error": str(result), "task_id": tid}, indent=2)
-        else:
-            task_results[t['id']] = json.dumps(result, indent=2) if isinstance(result, dict) else result
-            try:
-                r = result if isinstance(result, dict) else json.loads(result)
-                if r.get("ok"):
-                    ok_count += 1
-                # Collect artifact paths from manifest
-                manifest_path = ROME_ROOT / "legions" / tid / "manifest.json"
-                if manifest_path.exists():
-                    m = json.loads(manifest_path.read_text())
-                    for a in m.get("artifacts", []):
-                        artifact_paths.append(a.get("path", ""))
-            except Exception:
-                pass
-
-    # Finalize UI
-    tok = total_usage.get("total_tokens", 0) if has_usage else 0
-    cost = total_usage.get("cost_usd", 0.0) if has_usage else 0.0
-    cost_str = f" ${cost:.4f}" if cost else ""
-    summary = f"Campaign: {campaign_id} | {ok_count}/{len(tasks)} succeeded | {round(elapsed, 1)}s | {tok}tok{cost_str}"
-    if artifact_paths:
-        summary += f"\nArtifacts: {', '.join(artifact_paths[:5])}"
-    
-    ui.finalize(summary)
-
-    final_output = summary
-    actual_usage = _extract_mcp_usage(ctx)
-    if actual_usage:
-        usage_payload = {
-            "input_tokens": actual_usage.get("input_tokens", 0),
-            "output_tokens": actual_usage.get("output_tokens", 0),
-            "total_tokens": actual_usage.get("total_tokens", 0)
-        }
-        log_event(tool='token_guard', message='mcp_outbound', task_id=campaign_id, usage=usage_payload)
-    else:
-        est_tokens = len(final_output) // 4
-        usage_payload = {"total_tokens": est_tokens, "estimated": True}
-        log_event(tool='token_guard', message='mcp_outbound', task_id=campaign_id, usage={'estimated_output_tokens': est_tokens})
-
-    from dictator.ws_client import send_event
-    send_event("dictator_waste", campaign_id, {"usage": usage_payload})
-    return final_output
-
-
-@mcp.tool()
-async def rome_dispatch(
-    ctx: Context,
-    task_id: str,
-    capability: str,
-    prompt: str,
-    input_files: list[str] | None = None,
-    no_cache: bool = False,
-    output_path: str | None = None,
-    fire_and_forget: bool = False
-) -> str:
-    """Quick dispatch. output_path: agent writes directly. fire_and_forget: returns immediately, task runs in background."""
-    task_dir = ROME_ROOT / "legions" / task_id
-    task_dir.mkdir(parents=True, exist_ok=True)
-    full_prompt = prompt
-    if output_path:
-        full_prompt += f"\n\nIMPORTANT: Write your complete output directly to {output_path}. Do not include it in your response."
-    (task_dir / "task.md").write_text(full_prompt)
-
-    # Auto fire-and-forget for long-running capabilities (timeout > 120s)
-    # Prevents MCP transport timeout from killing the connection
-    if not fire_and_forget:
-        arsenal = json.loads(ARSENAL_PATH.read_text())
-        cap = arsenal.get("capabilities", {}).get(capability, {})
-        if cap.get("timeout", 300) > 120:
-            fire_and_forget = True
-
-    if fire_and_forget:
-        # Delegate to daemon process — MCP stays lightweight
-        from dictator.ws_client import send_command_async
-        payload = {"task_id": task_id, "capability": capability,
-                   "prompt_file": str(task_dir / "task.md"),
-                   "input_files": input_files, "no_cache": no_cache,
-                   "output_path": output_path}
-        resp = await send_command_async("dispatch", payload)
-        if resp.get("accepted"):
-            return f"DISPATCHED:{task_id}"
-        return f"ERR:{task_id}\n{resp.get('error', 'daemon rejected')}"
-
-    result = await _execute_legion_impl(
-        task_id=task_id,
-        capability=capability,
-        args=[prompt if capability == "SAFE_SHELL" else "Read and execute the task in task.md in your current working directory. Output results with [ROME_STATUS: SUCCESS] or [ROME_STATUS: FAILED]."],
-        input_files=input_files,
-        no_cache=no_cache,
-        ctx=ctx
-    )
-    
-    # Change 3: rome_dispatch returns path only
-    report_path = result.get('report_path')
-    if not report_path:
-        path = task_dir / f'report_{task_id}.txt'
-        if path.exists() and path.stat().st_size > 20:
-            report_path = str(path)
-        elif result.get('ok') and result.get('output'):
-            path.write_text(result['output'])
-            report_path = str(path)
-    
-    if output_path:
-        op = Path(output_path)
-        if not (op.exists() and op.stat().st_size > 0) and report_path:
-            rp = Path(report_path)
-            if rp.exists() and rp.stat().st_size > 20:
-                shutil.copy2(str(rp), str(op))
-        if op.exists() and op.stat().st_size > 0:
-            return f"OK:{task_id}\nOutput: {output_path} ({op.stat().st_size}B)"
-        return f"ERR:{task_id}\nAgent failed to write to {output_path}"
-    status = "OK" if result.get("ok") else "ERR"
-    summary = result.get("summary", "")
-    rp = f"\nReport: {report_path}" if report_path else ""
-    final = f"{status}:{task_id}{rp}\n{summary}"
-    actual_usage = _extract_mcp_usage(ctx)
-    if actual_usage:
-        usage_payload = {
-            "input_tokens": actual_usage.get("input_tokens", 0),
-            "output_tokens": actual_usage.get("output_tokens", 0),
-            "total_tokens": actual_usage.get("total_tokens", 0)
-        }
-        log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage=usage_payload)
-    else:
-        est_tokens = len(final) // 4
-        usage_payload = {"total_tokens": est_tokens, "estimated": True}
-        log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
-
-    from dictator.ws_client import send_event
-    send_event("dictator_waste", task_id, {"usage": usage_payload})
-    return final
-
-
-@mcp.tool()
-async def clear_cache() -> str:
-    """Clear the legion result cache."""
-    count = 0
-    if CACHE_DIR.exists():
-        for f in CACHE_DIR.glob('*.json'):
-            f.unlink()
-            count += 1
-    log_event(tool='clear_cache', message=f'Cleared {count} cached entries')
-    return f'Cleared {count} cached entries from {CACHE_DIR}'
-
-
-@mcp.tool()
-async def recommend_capability(task_description: str) -> str:
-    """Recommend the best Legion capability based on task heuristics."""
-    res = _recommend_capability_impl(task_description)
-    return json.dumps(res, indent=2)
-
-
-@mcp.tool()
-async def launch_centurion(campaign_id: str, tasks: list[dict]) -> str:
-    """Launch a campaign with the Centurion CLI dashboard (blocks until complete, renders bars in terminal)."""
-    import tempfile
-
-    campaign = {"campaign_id": campaign_id, "tasks": tasks}
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix=f"centurion_{campaign_id}_",
-                                       dir=str(ROME_ROOT / "legions"), delete=False)
-    json.dump(campaign, tmp)
-    tmp.close()
-
-    centurion_path = str(ROME_ROOT / "legions" / "centurion.py")
-    command = f"python3 {centurion_path} {tmp.name}"
-    r = await run_cmd_stream(command, cwd=str(ROME_ROOT / "legions"))
-    exit_code = r.get("exit_code", "?")
-    return f"Campaign {campaign_id} complete | {len(tasks)} tasks | exit={exit_code}"

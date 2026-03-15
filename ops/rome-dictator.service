@@ -1,0 +1,13 @@
+[Unit]
+Description=ROME Dictator Daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/paul-kane/projects/rome-core/dictator/daemon.py
+WorkingDirectory=/home/paul-kane/projects/rome-core
+Restart=always
+RestartSec=5
+User=paul-kane
+
+[Install]
+WantedBy=multi-user.target

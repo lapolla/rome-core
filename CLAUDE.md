@@ -25,20 +25,20 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 - **`client/orchestrator.py`** — Headless CLI: Haiku/Flash → subtask JSON → WS dispatch → JSONL stdout.
 - **`tests/`** — pytest suite: tools, signals, usage parsing, WS protocol, EventBus.
 
-## MCP Server (52 tools, 12 modules)
+## MCP Server (47 tools, 12 modules)
 
-- **`tools_fs`**: shell_exec, fs_read, fs_write, list_directory, read_anywhere, write_anywhere
+- **`tools_fs`**: shell_exec, fs_read, read_anywhere, list_directory
 - **`tools_git`**: git_status, git_diff, git_commit, git_push *(all accept `repo_path` param)*
 - **`tools_drupal`**: rsync_ftk_modules, drush_run, drupal_fj_run
 - **`tools_legion`**: execute_legion, execute_campaign, rome_dispatch, recommend_capability, launch_centurion, clear_cache
 - **`tools_skyrim`**: skyrim_console, skyrim_read_state, skyrim_face_actor, skyrim_follow_actor, skyrim_pivot, skyrim_compound_move, compile_papyrus
 - **`tools_desktop`**: desktop_screenshot, desktop_click, desktop_type_text, desktop_press_key, desktop_find_window, desktop_focus_window, desktop_get_mouse_location, desktop_notify
-- **`tools_media`**: music_play, music_stop, music_crossfade, music_status, http_fetch, fetch_mo2_mod
+- **`tools_media`**: http_fetch, fetch_mo2_mod
 - **`tools_gc`**: gc_legions, reset_tasks, legion_stats
-- **`tools_stats`**: rome_tail, rome_costs, rome_health, rome_find, senate_query, senate_brain
+- **`tools_stats`**: rome_tail (optionally filters by task_id), rome_costs, rome_health, rome_find, senate_query, senate_brain
 - **`tools_prefect`**: execute_prefect
 - **`tools_docs`**: update_project_docs
-- **`tools_ws`**: ws_send
+- **`tools_ws`**: ws_send, rome_submit_result
 
 ## ROME Protocol Rules (v2.3)
 
