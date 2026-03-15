@@ -110,11 +110,11 @@
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "-m",
-        "o4-mini"
+        "o3"
       ],
       "timeout": 300,
       "min_version": "0.1",
-      "_note": "OpenAI Codex CLI \u2014 gpt-5.4, replaces Gemini as main brain"
+      "_note": "OpenAI Codex CLI \u2014 requires OPENAI_API_KEY, not ChatGPT account. Currently disabled."
     },
     "MCP_TOOL_CLIENT": {
       "exec": "python3",
