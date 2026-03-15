@@ -11,8 +11,8 @@ from typing import Any
 from starlette.routing import WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from dictator.core import event_bus, task_registry, DAEMON_START_TIME, ROME_ROOT
-from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_dispatch_start, emit_error
+from dictator.core import event_bus, task_registry, DAEMON_START_TIME, ROME_ROOT, ARSENAL_PATH
+from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_dispatch_start, emit_error, emit_capability_status, emit_system_status
 from dictator.tools_legion import _execute_legion_impl
 
 CONFIG_PATH = Path(ROME_ROOT) / "dictator" / "config.json"
@@ -21,6 +21,44 @@ def _load_config_token() -> str:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
     return str(config.get("ws_token") or "").strip()
+
+
+async def _load_capabilities() -> dict[str, bool]:
+    # ARSENAL_PATH is already imported
+    import json
+    import asyncio
+    import os
+    import logging
+
+    capabilities_status = {}
+    try:
+        if not ARSENAL_PATH.exists():
+            logging.getLogger("uvicorn.error").warning("Arsenal file not found at %s", ARSENAL_PATH)
+            return {}
+
+        with open(ARSENAL_PATH, "r", encoding="utf-8") as f:
+            arsenal_config = json.load(f)
+        for capability_name, details in arsenal_config.get("capabilities", {}).items():
+            binary = details.get("binary")
+            if binary:
+                # Check if the binary exists in PATH
+                proc = await asyncio.create_subprocess_exec(
+                    "which",
+                    binary,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await proc.communicate()
+                capabilities_status[capability_name] = proc.returncode == 0
+            else:
+                capabilities_status[capability_name] = False # No binary specified
+    except FileNotFoundError:
+        logging.getLogger("uvicorn.error").warning("Arsenal file not found at %s", ARSENAL_PATH)
+    except json.JSONDecodeError:
+        logging.getLogger("uvicorn.error").error("Error decoding JSON from %s", ARSENAL_PATH)
+    except Exception as e:
+        logging.getLogger("uvicorn.error").error("ERROR loading capabilities: %s", e, exc_info=True)
+    return capabilities_status
 
 _WEBSOCKET_TOKEN = _load_config_token()
 
@@ -70,6 +108,17 @@ async def _emit_heartbeat(websocket: WebSocket) -> None:
             }
         )
 
+
+async def _emit_system_status_loop() -> None:
+    from dictator.events import emit_system_status
+    from dictator.core import event_bus, task_registry, DAEMON_START_TIME
+    import time
+    while True:
+        await asyncio.sleep(30)
+        tasks = task_registry.get_all()
+        active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
+        uptime = round(time.monotonic() - DAEMON_START_TIME, 3)
+        await emit_system_status(event_bus, active_tasks=active, uptime_s=uptime)
 
 class ConnectionManager:
     def __init__(self) -> None:
@@ -387,6 +436,15 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
         relay_task = asyncio.create_task(manager.relay_events(websocket, queue), name="rome-ws-relay")
         heartbeat_task = asyncio.create_task(_emit_heartbeat(websocket), name="rome-ws-heartbeat")
 
+        capabilities = await _load_capabilities()
+        await websocket.send_json({
+            "type": "agent_hello",
+            "capabilities": capabilities,
+            "active_tasks": len(task_registry.get_all()),
+            "uptime_s": round(time.monotonic() - DAEMON_START_TIME, 3),
+        })
+        system_status_task = asyncio.create_task(_emit_system_status_loop(), name="rome-ws-system-status")
+
         while True:
             message = await websocket.receive_json()
             request_id = message.get("request_id")
@@ -398,12 +456,12 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        for task in (relay_task, heartbeat_task):
+        for task in (relay_task, heartbeat_task, system_status_task):
             if task:
                 task.cancel()
-        if relay_task or heartbeat_task:
+        if relay_task or heartbeat_task or system_status_task:
             await asyncio.gather(
-                *(task for task in (relay_task, heartbeat_task) if task),
+                *(task for task in (relay_task, heartbeat_task, system_status_task) if task),
                 return_exceptions=True,
             )
         await manager.disconnect(websocket, subscriber_id)

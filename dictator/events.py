@@ -144,6 +144,32 @@ async def emit_cost_update(bus: EventBus, task_id: str, usage: dict[str, Any] | 
     )
 
 
+async def emit_capability_status(bus: EventBus, capability: str, available: bool, reason: str = '') -> RomeEvent:
+    return await bus.publish(
+        RomeEvent(
+            type="capability_status",
+            task_id=None,
+            ts=time.time(),
+            sequence=0,
+            source=bus._source,
+            payload={"capability": capability, "available": available, "reason": reason},
+        )
+    )
+
+
+async def emit_system_status(bus: EventBus, active_tasks: int, uptime_s: float) -> RomeEvent:
+    return await bus.publish(
+        RomeEvent(
+            type="system_status",
+            task_id=None,
+            ts=time.time(),
+            sequence=0,
+            source=bus._source,
+            payload={"active_tasks": active_tasks, "uptime_s": uptime_s},
+        )
+    )
+
+
 class TaskRegistry:
     def __init__(self, ttl_seconds: int = TASK_TTL_SECONDS) -> None:
         self._ttl_seconds = ttl_seconds
@@ -300,9 +326,11 @@ __all__ = [
     "RomeEvent",
     "TASK_TTL_SECONDS",
     "TaskRegistry",
+    "emit_capability_status",
     "emit_complete",
     "emit_cost_update",
     "emit_dispatch_start",
     "emit_error",
     "emit_progress",
+    "emit_system_status",
 ]

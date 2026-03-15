@@ -425,6 +425,15 @@ def main():
         status = "FAILED"
         signals["metadata"]["failure_reason"] = "empty_report"
 
+    capability_name = command[0] # Extract capability name
+
+    if status == "FAILED":
+        try:
+            from dictator.ws_client import send_event
+            send_event('capability_status', '', {'capability': capability_name, 'available': False, 'reason': f'exit_code={exit_code}'})
+        except Exception:
+            pass
+
     # Generate ROME v2.0 Manifest
     manifest = {
         "rome_v": "2.0",
