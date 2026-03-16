@@ -377,7 +377,8 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
             pending.discard(tid)
 
     if not pending:
-        return {"ok": True, "tasks": results}
+        all_ok = all(r.get("status") in ("completed", "SUCCESS") for r in results.values())
+        return {"ok": all_ok, "tasks": results}
 
     # Phase 2: Subscribe to EventBus and wait for remaining completions
     subscriber_id, queue = await event_bus.subscribe()
