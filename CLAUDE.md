@@ -1,4 +1,6 @@
-# ROME Core — Imperial Directives (v2.4)
+# ROME Core — Imperial Directives (v2.5)
+
+> **I am not here to do work. I am here to decompose it and get out of the way.**
 
 ## Project
 
@@ -10,11 +12,10 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 - **`dictator/dictator.py`** — Legacy stdio entry point (kept for fallback).
 - **`dictator/core.py`** — Central registry: config, `run_cmd`, `run_cmd_stream`, EventBus, mcp instance. All subprocesses use `start_new_session=True` (process group isolation).
 - **`dictator/config.json`** — Externalized path constants (17 keys: root_dir, git_root, rome_root, ws_token, daemon_port, etc.).
-- **`dictator/events.py`** — `RomeEvent` dataclass + `EventBus` pub/sub (bounded asyncio queues per subscriber).
-- **`dictator/ws_server.py`** — WS connection manager + command dispatcher (dispatch, cancel, status, reset, clear, ping, heartbeat).
+- **`dictator/ws_server.py`** — WS connection manager + command dispatcher (dispatch, status, get_state, cancel, ping, read_report, await, reset, clear, event, submit_result).
 - **`dictator/ws_client.py`** — Internal WS sender. Two modes: fire-and-forget sender + sync command client. All `websockets.connect()` calls use `open_timeout=30`.
 - **`dictator/rome_log.py`** — JSON-line logger with 50MB auto-rotation (`logs/rome.jsonl`).
-- **`dictator/task_registry.py`** — In-memory task state store (status, capability, started_at, progress, usage, report path). `clear_all()` and `clear_finished()` methods.
+- **`dictator/events.py`** — `RomeEvent` dataclass + `EventBus` pub/sub (bounded asyncio queues per subscriber) + `TaskRegistry` in-memory task state store (status, capability, progress, usage, report path).
 - **`legions/legion_wrapper.py`** — Subprocess harness for LLM workers; parses ROME signals, usage (Claude/Gemini JSON), manifests, progress bars.
 - **`legions/shell_executor.py`** — Dedicated bash executor for SAFE_SHELL. No JSON, no parse_usage, no task.md.
 - **`legions/centurion_wrapper.py`** — Campaign orchestrator: inline ANSI dashboard + retry loop (max 3 per task through fallback chain).
@@ -25,9 +26,9 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 - **`client/orchestrator.py`** — Headless CLI: Haiku/Flash → subtask JSON → WS dispatch → JSONL stdout.
 - **`tests/`** — pytest suite: tools, signals, usage parsing, WS protocol, EventBus.
 
-## MCP Server (47 tools, 12 modules)
+## MCP Server (50 tools, 12 modules)
 
-- **`tools_fs`**: shell_exec, fs_read, read_anywhere, list_directory
+- **`tools_fs`**: shell_exec, fs_read, fs_write, read_anywhere, write_anywhere, list_directory
 - **`tools_git`**: git_status, git_diff, git_commit, git_push *(all accept `repo_path` param)*
 - **`tools_drupal`**: rsync_ftk_modules, drush_run, drupal_fj_run
 - **`tools_legion`**: execute_legion, execute_campaign, rome_dispatch, recommend_capability, launch_centurion, clear_cache
@@ -38,15 +39,18 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 - **`tools_stats`**: rome_tail (optionally filters by task_id), rome_costs, rome_health, rome_find, senate_query, senate_brain
 - **`tools_prefect`**: execute_prefect
 - **`tools_docs`**: update_project_docs
-- **`tools_ws`**: ws_send, rome_submit_result
+- **`tools_ws`**: ws_send, rome_await, rome_submit_result
 
-## ROME Protocol Rules (v2.3)
+## ROME Protocol Rules (v2.5)
 
 1. **Atomic Changes**: Surgical commits, one concern per commit.
 2. **Sub-division**: Tasks exceeding 45s should be split into smaller units.
 3. **Manifesto Compliance**: Legion tasks governed by manifestos in `legions/TASK_*/`.
 4. **Naming**: Adhere to Imperial metaphors (Dictator, Legion, Senate, Centurion).
 5. **Observability**: Use `rome_tail` to monitor progress, `rome_costs` for budget tracking.
+6. **Architect First**: When given a goal, decompose it into parallel subtasks and fire `execute_campaign` immediately. Never relay a goal directly to one GEMINI task — that is forwarding, not orchestration. Ask: what are all the independent workstreams? Assign the right capability to each. Only use `rome_dispatch` for single atomic tasks.
+7. **Capability Routing**: SAFE_SHELL for bash/git/build ops (free). GEMINI for analysis/design/code when it needs MCP file access. Never use GEMINI as a glorified cat/grep — SAFE_SHELL gathers execution output, GEMINI reasons about code it reads directly.
+8. **Await, Don't Poll**: Fire tasks with `rome_dispatch(fire_and_forget=True)`, then collect results with `rome_await(task_ids, include_reports=True)`. One call in, all results back — no sleep loops, no rome_tail polling. The daemon uses EventBus internally (zero CPU spin).
 
 ## Legion & Campaign Features
 

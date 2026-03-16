@@ -1,10 +1,11 @@
 """
-WebSocket tools: ws_send.
+WebSocket tools: ws_send, rome_await.
 Standardized interface for sending commands to the ROME Daemon.
 """
 
 import json
 from dictator.ws_client import send_command_async, submit_agent_result_async
+
 
 def register(mcp):
     """Register WebSocket tools with the given FastMCP instance."""
@@ -16,6 +17,19 @@ def register(mcp):
         Standard commands: list, status, dispatch, fire_and_forget.
         """
         result = await send_command_async(command, payload, timeout)
+        return json.dumps(result)
+
+    @mcp.tool()
+    async def rome_await(task_ids: list[str], timeout: float = 120.0, include_reports: bool = False) -> str:
+        """
+        Block until all specified tasks complete. Event-driven — no polling.
+        Returns status + optional report content for each task.
+        Uses the daemon's EventBus internally (subscribe → filter complete events → resolve).
+        """
+        result = await send_command_async("await", {
+            "task_ids": task_ids,
+            "include_reports": include_reports,
+        }, timeout=timeout)
         return json.dumps(result)
 
     @mcp.tool()

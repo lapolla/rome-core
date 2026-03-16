@@ -18,9 +18,12 @@ from dictator.tools_legion import _execute_legion_impl
 CONFIG_PATH = Path(ROME_ROOT) / "dictator" / "config.json"
 
 def _load_config_token() -> str:
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        config = json.load(f)
-    return str(config.get("ws_token") or "").strip()
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        return str(config.get("ws_token") or "").strip()
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return ""
 
 
 async def _load_capabilities() -> dict[str, bool]:
@@ -109,12 +112,26 @@ async def _emit_heartbeat(websocket: WebSocket) -> None:
         )
 
 
+_ZOMBIE_TIMEOUT_SECONDS = 180  # 3 minutes at 0% with no update → auto-fail
+
 async def _emit_system_status_loop() -> None:
     from dictator.events import emit_system_status
     from dictator.core import event_bus, task_registry, DAEMON_START_TIME
-    import time
+    import time, logging
+    logger = logging.getLogger("uvicorn.error")
     while True:
         await asyncio.sleep(30)
+        now = time.time()
+        tasks = task_registry.get_all()
+        # Reap zombie tasks: stuck at 0% progress for too long
+        for tid, t in tasks.items():
+            if t.get("status") in {"registered", "running"} and t.get("progress_percent", 0) == 0:
+                age = now - t.get("updated_at", t.get("created_at", now))
+                if age > _ZOMBIE_TIMEOUT_SECONDS:
+                    logger.warning("Reaping zombie task %s (stuck %ds at 0%%)", tid, int(age))
+                    task_registry.complete(tid, "failed", None)
+                    await emit_error(event_bus, tid, f"Reaped: no progress for {int(age)}s")
+        # Re-read after reaping
         tasks = task_registry.get_all()
         active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
         uptime = round(time.monotonic() - DAEMON_START_TIME, 3)
@@ -324,6 +341,113 @@ async def handle_read_report(payload: dict[str, Any]) -> dict[str, Any]:
         return {"report_path": report_path, "content": f"Error reading report: {exc}"}
 
 
+async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
+    """Block until all requested tasks complete. Event-driven via EventBus."""
+    task_ids = payload.get("task_ids", [])
+    include_reports = payload.get("include_reports", False)
+
+    if not task_ids:
+        raise ValueError("payload.task_ids is required (non-empty list)")
+
+    pending = set(task_ids)
+    results: dict[str, dict[str, Any]] = {}
+
+    # Phase 1: Check already-completed tasks in registry
+    for tid in list(pending):
+        task = task_registry.get(tid)
+        if task and task.get("status") in ("completed", "failed", "cancelled"):
+            results[tid] = {
+                "status": task["status"],
+                "report_path": task.get("report_path"),
+                "usage": task.get("usage", {}),
+            }
+            if include_reports and task.get("report_path"):
+                try:
+                    from pathlib import Path
+                    rp = Path(task["report_path"])
+                    if rp.exists():
+                        content = rp.read_text(encoding="utf-8")
+                        # Truncate for context safety
+                        if len(content) > 4000:
+                            results[tid]["report"] = content[:4000] + "\n...[TRUNCATED]"
+                        else:
+                            results[tid]["report"] = content
+                except Exception:
+                    pass
+            pending.discard(tid)
+
+    if not pending:
+        return {"ok": True, "tasks": results}
+
+    # Phase 2: Subscribe to EventBus and wait for remaining completions
+    subscriber_id, queue = await event_bus.subscribe()
+    try:
+        # Use a generous internal timeout (caller controls outer timeout via WS)
+        deadline = asyncio.get_event_loop().time() + 300  # 5 min max internal
+        while pending:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                # Timeout — return what we have, mark rest as timeout
+                for tid in pending:
+                    results[tid] = {"status": "timeout", "report_path": None, "usage": {}}
+                break
+
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=min(remaining, 1.0))
+            except asyncio.TimeoutError:
+                # Check registry in case we missed the event (task completed before subscribe)
+                for tid in list(pending):
+                    task = task_registry.get(tid)
+                    if task and task.get("status") in ("completed", "failed", "cancelled"):
+                        results[tid] = {
+                            "status": task["status"],
+                            "report_path": task.get("report_path"),
+                            "usage": task.get("usage", {}),
+                        }
+                        if include_reports and task.get("report_path"):
+                            try:
+                                from pathlib import Path
+                                rp = Path(task["report_path"])
+                                if rp.exists():
+                                    content = rp.read_text(encoding="utf-8")
+                                    if len(content) > 4000:
+                                        results[tid]["report"] = content[:4000] + "\n...[TRUNCATED]"
+                                    else:
+                                        results[tid]["report"] = content
+                            except Exception:
+                                pass
+                        pending.discard(tid)
+                continue
+
+            # Only care about complete events for our tasks
+            if event.type == "complete" and event.task_id in pending:
+                tid = event.task_id
+                p = event.payload
+                results[tid] = {
+                    "status": p.get("status", "unknown"),
+                    "report_path": p.get("report_path"),
+                    "usage": p.get("usage", {}),
+                }
+                if include_reports and p.get("report_path"):
+                    try:
+                        from pathlib import Path
+                        rp = Path(p["report_path"])
+                        if rp.exists():
+                            content = rp.read_text(encoding="utf-8")
+                            if len(content) > 4000:
+                                results[tid]["report"] = content[:4000] + "\n...[TRUNCATED]"
+                            else:
+                                results[tid]["report"] = content
+                    except Exception:
+                        pass
+                pending.discard(tid)
+    finally:
+        await event_bus.unsubscribe(subscriber_id)
+
+    all_ok = all(r.get("status") in ("completed", "SUCCESS") for r in results.values())
+    return {"ok": all_ok, "tasks": results}
+
+
 async def handle_reset(_: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "cleared": task_registry.clear_all()}
 
@@ -406,6 +530,7 @@ async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
         "cancel": handle_cancel,
         "ping": _handle_ping,
         "read_report": handle_read_report,
+        "await": handle_await,
         "reset": handle_reset,
         "clear": handle_clear,
         "event": handle_event,
@@ -423,14 +548,19 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
     heartbeat_task: asyncio.Task[Any] | None = None
     try:
         # Auth via Authorization: Bearer <token> header or ?token= query param
+        # Skip auth for same-origin dashboard connections (Origin matches host)
         if _WEBSOCKET_TOKEN:
-            auth_header = websocket.headers.get("authorization", "")
-            header_token = auth_header.removeprefix("Bearer ").strip() if auth_header.startswith("Bearer ") else ""
-            query_token = websocket.query_params.get("token", "")
-            provided_token = header_token or query_token
-            if provided_token != _WEBSOCKET_TOKEN:
-                await websocket.close(code=1008)
-                return
+            origin = websocket.headers.get("origin", "")
+            host = websocket.headers.get("host", "")
+            is_dashboard = origin and host and (origin.endswith("://" + host))
+            if not is_dashboard:
+                auth_header = websocket.headers.get("authorization", "")
+                header_token = auth_header.removeprefix("Bearer ").strip() if auth_header.startswith("Bearer ") else ""
+                query_token = websocket.query_params.get("token", "")
+                provided_token = header_token or query_token
+                if provided_token != _WEBSOCKET_TOKEN:
+                    await websocket.close(code=1008)
+                    return
 
         subscriber_id, queue = await manager.connect(websocket)
         relay_task = asyncio.create_task(manager.relay_events(websocket, queue), name="rome-ws-relay")
