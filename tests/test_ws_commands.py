@@ -66,16 +66,15 @@ async def test_handle_await_waits_for_completion(fresh_registry):
             reg.complete("pending-1", "completed", "/tmp/r.txt")
             await emit_complete(bus, "pending-1", "completed", "/tmp/r.txt", {"total_tokens": 100})
 
-        # Fire completion in background, await should catch it
-        task = asyncio.create_task(complete_after_delay())
+        # Push-based: handle_await returns immediately with pending list
         result = await ws_server.handle_await({
             "task_ids": ["pending-1"],
             "include_reports": False,
         })
-        await task
 
-    assert result["ok"] is True
-    assert result["tasks"]["pending-1"]["status"] == "completed"
+    assert result["ok"] == "pending"
+    assert "pending-1" in result["pending"]
+    assert result["completed"] == {}
 
 
 @pytest.mark.asyncio
@@ -91,18 +90,12 @@ async def test_handle_await_mixed_complete_and_pending(fresh_registry):
     with patch.object(ws_server, "event_bus", bus), \
          patch.object(ws_server, "task_registry", reg):
 
-        async def complete_b():
-            await asyncio.sleep(0.2)
-            reg.complete("b", "completed", None)
-            await emit_complete(bus, "b", "completed", None, None)
-
-        task = asyncio.create_task(complete_b())
+        # Push-based: returns completed tasks immediately, pending as list
         result = await ws_server.handle_await({"task_ids": ["a", "b"]})
-        await task
 
-    assert result["ok"] is True
-    assert result["tasks"]["a"]["status"] == "completed"
-    assert result["tasks"]["b"]["status"] == "completed"
+    assert result["ok"] == "pending"
+    assert result["completed"]["a"]["status"] == "completed"
+    assert "b" in result["pending"]
 
 
 @pytest.mark.asyncio
