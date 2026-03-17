@@ -110,6 +110,77 @@ _ACTIVE_TASKS: dict[str, asyncio.Task[Any]] = {}
 _ACTIVE_TASKS_LOCK = asyncio.Lock()
 
 
+# ---------------------------------------------------------------------------
+# Persistent Worker Registry
+# ---------------------------------------------------------------------------
+
+class _WorkerEntry:
+    __slots__ = ("ws", "capabilities", "busy_tasks", "connected_at", "version", "platform")
+
+    def __init__(self, ws: WebSocket, capabilities: list[str], version: str = "", platform: str = "") -> None:
+        self.ws = ws
+        self.capabilities = [c.upper() for c in capabilities]
+        self.busy_tasks: set[str] = set()
+        self.connected_at = time.time()
+        self.version = version
+        self.platform = platform
+
+
+class WorkerRegistry:
+    """Tracks persistent worker connections (e.g. gemini --rome-daemon)."""
+
+    def __init__(self) -> None:
+        self._workers: dict[int, _WorkerEntry] = {}  # keyed by id(ws)
+        self._lock = asyncio.Lock()
+
+    async def register(self, ws: WebSocket, capabilities: list[str], version: str = "", platform: str = "") -> None:
+        async with self._lock:
+            self._workers[id(ws)] = _WorkerEntry(ws, capabilities, version, platform)
+
+    async def unregister(self, ws: WebSocket) -> list[str]:
+        """Remove worker. Returns list of task_ids that were still busy (need cleanup)."""
+        async with self._lock:
+            entry = self._workers.pop(id(ws), None)
+        return list(entry.busy_tasks) if entry else []
+
+    async def find_worker(self, capability: str) -> WebSocket | None:
+        """Find an idle worker that supports the given capability."""
+        cap = capability.upper()
+        async with self._lock:
+            for entry in self._workers.values():
+                if cap in entry.capabilities and len(entry.busy_tasks) == 0:
+                    return entry.ws
+        return None
+
+    async def mark_busy(self, ws: WebSocket, task_id: str) -> None:
+        async with self._lock:
+            entry = self._workers.get(id(ws))
+            if entry:
+                entry.busy_tasks.add(task_id)
+
+    async def mark_idle(self, ws: WebSocket, task_id: str) -> None:
+        async with self._lock:
+            entry = self._workers.get(id(ws))
+            if entry:
+                entry.busy_tasks.discard(task_id)
+
+    async def get_info(self) -> list[dict[str, Any]]:
+        async with self._lock:
+            return [
+                {
+                    "capabilities": e.capabilities,
+                    "busy_tasks": list(e.busy_tasks),
+                    "connected_at": e.connected_at,
+                    "version": e.version,
+                    "platform": e.platform,
+                }
+                for e in self._workers.values()
+            ]
+
+
+worker_registry = WorkerRegistry()
+
+
 def _event_to_json(event: RomeEvent) -> dict[str, Any]:
     return {
         "type": "event",
@@ -291,6 +362,23 @@ async def _dispatch_runner(
                 _ACTIVE_TASKS.pop(task_id, None)
 
 
+async def _dispatch_to_worker(ws: WebSocket, task_id: str, capability: str, prompt: str) -> None:
+    """Forward a dispatch command to a persistent worker over WS."""
+    import logging
+    logger = logging.getLogger("uvicorn.error")
+    logger.info("Routing task %s (%s) to persistent worker", task_id, capability)
+    await ws.send_json({
+        "type": "command",
+        "request_id": f"dispatch-{task_id}",
+        "command": "dispatch",
+        "payload": {
+            "task_id": task_id,
+            "capability": capability,
+            "prompt": prompt,
+        },
+    })
+
+
 async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     task_id = str(payload.get("task_id") or "").strip()
     capability = str(payload.get("capability") or "").strip().upper()
@@ -309,6 +397,40 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     if input_files is not None and not isinstance(input_files, list):
         raise ValueError("payload.input_files must be a list when provided")
 
+    # --- Resolve prompt_file to prompt content for worker routing ---
+    if prompt_file and not prompt:
+        pf = Path(prompt_file)
+        if pf.exists():
+            prompt = pf.read_text(encoding="utf-8").strip()
+
+    # --- Persistent worker routing ---
+    # Check if a persistent worker can handle this capability (skip for SAFE_SHELL
+    # which is always local, and skip if input_files are set since workers don't
+    # have access to those via the forwarding protocol yet).
+    worker_ws = None
+    if capability != "SAFE_SHELL" and not input_files and prompt:
+        worker_ws = await worker_registry.find_worker(capability)
+
+    if worker_ws is not None:
+        # Register task in daemon's registry so await/status/dashboard work
+        import os
+        if os.environ.get("ROME_DAEMON"):
+            task_registry.register(task_id, capability)
+            await emit_dispatch_start(event_bus, task_id, capability)
+            task_registry.update_progress(task_id, 0, "Routing to persistent worker...")
+
+        await worker_registry.mark_busy(worker_ws, task_id)
+        try:
+            await _dispatch_to_worker(worker_ws, task_id, capability, prompt)
+        except Exception:
+            # Worker died mid-send — fall through to subprocess
+            await worker_registry.mark_idle(worker_ws, task_id)
+            worker_ws = None
+
+    if worker_ws is not None:
+        return {"task_id": task_id, "capability": capability, "accepted": True, "routed_to": "persistent_worker"}
+
+    # --- Fallback: spawn subprocess ---
     task = asyncio.create_task(
         _dispatch_runner(task_id, capability, prompt, input_files, no_cache, prompt_file, output_path),
         name=f"rome-ws-dispatch-{task_id}",
@@ -608,6 +730,7 @@ async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
         "event": handle_event,
         "submit_result": handle_submit_result,
         "dashboard_stats": handle_dashboard_stats,
+        "workers": _handle_workers,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -615,10 +738,63 @@ async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
     return await handler(payload)
 
 
+async def _handle_workers(_: dict[str, Any]) -> dict[str, Any]:
+    workers = await worker_registry.get_info()
+    return {"ok": True, "workers": workers, "count": len(workers)}
+
+
+async def _handle_worker_event(ws: WebSocket, event_data: dict[str, Any]) -> None:
+    """Process an event sent by a persistent worker (progress, complete, error)."""
+    import logging
+    logger = logging.getLogger("uvicorn.error")
+    ev_type = event_data.get("type", "")
+    task_id = event_data.get("task_id", "")
+    payload = event_data.get("payload", {})
+
+    if ev_type == "dispatch_start":
+        # Worker accepted — task already registered by handle_dispatch
+        pass
+    elif ev_type == "progress":
+        task_registry.update_progress(task_id, payload.get("percent", 0), payload.get("message", ""))
+        from dictator.events import emit_progress
+        await emit_progress(event_bus, task_id, payload.get("percent", 0), payload.get("message", ""))
+    elif ev_type == "complete":
+        status_raw = str(payload.get("status", "completed")).upper()
+        status = "completed" if status_raw in ("SUCCESS", "OK", "COMPLETED") else "failed"
+
+        # If the worker sent inline report content, save it to a report file
+        report_path = payload.get("report_path")
+        report_content = payload.get("report")
+        if report_content and not report_path:
+            task_dir = ROME_ROOT / "legions" / task_id
+            task_dir.mkdir(parents=True, exist_ok=True)
+            rp = task_dir / f"report_{task_id}.txt"
+            rp.write_text(str(report_content), encoding="utf-8")
+            report_path = str(rp)
+
+        usage = payload.get("usage")
+        if usage:
+            task_registry.update_usage(task_id, usage)
+            await emit_cost_update(event_bus, task_id, usage)
+            total_tokens = usage.get("total_tokens")
+            if total_tokens is not None:
+                task_registry.add_waste(total_tokens)
+
+        task_registry.complete(task_id, status, report_path)
+        await emit_complete(event_bus, task_id, status, report_path, usage)
+        await worker_registry.mark_idle(ws, task_id)
+        logger.info("Worker completed task %s → %s", task_id, status)
+    elif ev_type == "error":
+        await emit_error(event_bus, task_id, payload.get("message", "worker error"))
+    else:
+        logger.debug("Unknown worker event type: %s", ev_type)
+
+
 async def rome_ws_endpoint(websocket: WebSocket) -> None:
     subscriber_id: str | None = None
     relay_task: asyncio.Task[Any] | None = None
     heartbeat_task: asyncio.Task[Any] | None = None
+    is_worker = False
     try:
         # Auth via Authorization: Bearer <token> header or ?token= query param
         # Skip auth for same-origin dashboard connections (Origin matches host)
@@ -650,6 +826,47 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
 
         while True:
             message = await websocket.receive_json()
+            msg_type = message.get("type", "")
+
+            # --- Persistent worker registration ---
+            if msg_type == "agent_hello":
+                import logging
+                logger = logging.getLogger("uvicorn.error")
+                worker_caps = message.get("capabilities", [])
+                worker_version = message.get("version", "")
+                worker_platform = message.get("platform", "")
+                await worker_registry.register(websocket, worker_caps, worker_version, worker_platform)
+                is_worker = True
+                logger.info(
+                    "Persistent worker registered: caps=%s version=%s platform=%s",
+                    worker_caps, worker_version, worker_platform,
+                )
+                await websocket.send_json({
+                    "type": "worker_ack",
+                    "ok": True,
+                    "message": "Registered as persistent worker",
+                    "capabilities_accepted": worker_caps,
+                })
+                continue
+
+            # --- Worker sending events back (progress/complete/error) ---
+            if msg_type == "event" and is_worker:
+                event_data = message.get("event", {})
+                await _handle_worker_event(websocket, event_data)
+                continue
+
+            # --- Worker sending response to dispatch ack ---
+            if msg_type == "response" and is_worker:
+                # Worker acknowledging a dispatch — nothing to do, task is already
+                # registered in handle_dispatch. Log if not ok.
+                if not message.get("ok"):
+                    import logging
+                    logging.getLogger("uvicorn.error").warning(
+                        "Worker rejected dispatch: %s", message.get("error")
+                    )
+                continue
+
+            # --- Standard client command ---
             request_id = message.get("request_id")
             try:
                 payload = await _handle_command(message)
@@ -659,6 +876,17 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        if is_worker:
+            orphaned = await worker_registry.unregister(websocket)
+            if orphaned:
+                import logging
+                logger = logging.getLogger("uvicorn.error")
+                logger.warning("Worker disconnected with active tasks: %s", orphaned)
+                # Mark orphaned tasks as failed
+                for tid in orphaned:
+                    task_registry.complete(tid, "failed", None)
+                    await emit_error(event_bus, tid, "Persistent worker disconnected")
+                    await emit_complete(event_bus, tid, "failed", None, None)
         for task in (relay_task, heartbeat_task, system_status_task):
             if task:
                 task.cancel()
@@ -672,4 +900,4 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
 
 routes = [WebSocketRoute("/ws", endpoint=rome_ws_endpoint)]
 
-__all__ = ["ConnectionManager", "manager", "rome_ws_endpoint", "routes"]
+__all__ = ["ConnectionManager", "WorkerRegistry", "manager", "worker_registry", "rome_ws_endpoint", "routes"]
