@@ -4,13 +4,13 @@ import yaml
 import websockets
 import os
 import sys
-import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Set
 
-# Assuming ROME_ROOT is accessible or can be derived
+
 ROME_ROOT = os.environ.get("ROME_ROOT", "/home/paul-kane/projects/rome-core")
 CONFIG_PATH = os.path.join(ROME_ROOT, "dictator", "config.json")
 _WS_URL = os.environ.get("ROME_WS_URL", "ws://127.0.0.1:8741/ws")
+
 
 def _ws_headers() -> Dict[str, str]:
     try:
@@ -21,192 +21,146 @@ def _ws_headers() -> Dict[str, str]:
     except Exception:
         return {}
 
-async def _send_command(ws: websockets.WebSocketClientProtocol, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    req_id = os.urandom(4).hex()
-    await ws.send(json.dumps({
-        "type": "command",
-        "command": command,
-        "request_id": req_id,
-        "payload": payload,
-    }))
-    # Wait for the specific response to this command
-    while True:
-        message = await ws.recv()
-        msg = json.loads(message)
-        if msg.get("type") == "response" and msg.get("request_id") == req_id:
-            return msg.get("payload", {})
+
+class WsMultiplexer:
+    """Single recv loop that routes responses and events."""
+
+    def __init__(self, ws):
+        self.ws = ws
+        self.events: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+        self._pending: Dict[str, asyncio.Future] = {}
+        self._task: asyncio.Task | None = None
+
+    def start(self):
+        self._task = asyncio.create_task(self._recv_loop())
+
+    async def stop(self):
+        if self._task:
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+
+    async def _recv_loop(self):
+        try:
+            while True:
+                raw = await self.ws.recv()
+                msg = json.loads(raw)
+                if msg.get("type") == "response":
+                    req_id = msg.get("request_id")
+                    fut = self._pending.pop(req_id, None)
+                    if fut and not fut.done():
+                        fut.set_result(msg.get("payload", {}))
+                elif msg.get("type") == "event":
+                    await self.events.put(msg.get("event", {}))
+        except (websockets.exceptions.ConnectionClosed, asyncio.CancelledError):
+            pass
+
+    async def send_command(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        req_id = os.urandom(4).hex()
+        fut = asyncio.get_event_loop().create_future()
+        self._pending[req_id] = fut
+        await self.ws.send(json.dumps({
+            "type": "command",
+            "command": command,
+            "request_id": req_id,
+            "payload": payload,
+        }))
+        return await fut
+
 
 async def run_campaign(campaign_file: str) -> None:
-    print(f"Loading campaign from {campaign_file}...")
-    try:
-        with open(campaign_file, "r", encoding="utf-8") as f:
-            campaign_data = yaml.safe_load(f)
-    except FileNotFoundError:
-        print(f"Error: Campaign file not found at {campaign_file}", file=sys.stderr)
-        return
-    except yaml.YAMLError as e:
-        print(f"Error parsing YAML campaign file: {e}", file=sys.stderr)
+    with open(campaign_file, "r", encoding="utf-8") as f:
+        campaign_data = yaml.safe_load(f)
+
+    name = campaign_data.get("name", "Unnamed")
+    task_defs = {t["id"]: t for t in campaign_data.get("tasks", [])}
+    if not task_defs:
+        print("No tasks.", file=sys.stderr)
         return
 
-    campaign_name = campaign_data.get("name", "Unnamed Campaign")
-    tasks_definition = campaign_data.get("tasks", [])
+    statuses: Dict[str, str] = {tid: "pending" for tid in task_defs}
+    results: Dict[str, Dict[str, Any]] = {}
+    total = len(task_defs)
 
-    if not tasks_definition:
-        print("No tasks defined in the campaign.", file=sys.stderr)
-        return
-
-    # Validate tasks and build dependency graph
-    tasks: Dict[str, Dict[str, Any]] = {t["id"]: t for t in tasks_definition}
-    if len(tasks) != len(tasks_definition):
-        print("Error: Duplicate task IDs found in campaign.", file=sys.stderr)
-        return
-
-    # Initialize task states
-    task_statuses: Dict[str, str] = {task_id: "pending" for task_id in tasks}
-    task_results: Dict[str, Dict[str, Any]] = {} # Store full results including report_path, usage etc.
-
-    print(f"Running campaign: {campaign_name}")
+    print(f"Campaign: {name} ({total} tasks)")
 
     async with websockets.connect(_WS_URL, open_timeout=30, additional_headers=_ws_headers()) as ws:
-        # Background task to listen for events from the daemon
-        event_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
-        async def event_listener():
-            try:
-                while True:
-                    message = await ws.recv()
-                    msg = json.loads(message)
-                    if msg.get("type") == "event":
-                        await event_queue.put(msg["event"])
-            except websockets.exceptions.ConnectionClosedOK:
-                pass
-            except Exception as e:
-                print(f"Error in event listener: {e}", file=sys.stderr)
+        mux = WsMultiplexer(ws)
+        mux.start()
 
-        listener_task = asyncio.create_task(event_listener())
+        # Skip agent_hello
+        await mux.events.get()
+
+        dispatched: Set[str] = set()
 
         try:
-            total_tasks = len(tasks)
-            dispatched_tasks: Set[str] = set() # Tasks that have been sent to the daemon for dispatch
-            running_dispatch_futures: Dict[str, asyncio.Future] = {} # Futures for the _send_command("dispatch") call
-
             while True:
-                # Check for completion criteria
-                completed_count = sum(1 for status in task_statuses.values() if status in {"completed", "failed", "cancelled"})
-                if completed_count == total_tasks:
-                    break # All tasks are done
+                done = sum(1 for s in statuses.values() if s in ("completed", "failed", "cancelled", "SUCCESS"))
+                if done == total:
+                    break
 
-                # Dispatch tasks whose dependencies are met and haven't been dispatched yet
-                for task_id, task_def in tasks.items():
-                    if task_statuses[task_id] == "pending" and task_id not in dispatched_tasks:
-                        # Check dependencies
-                        dependencies_met = True
-                        for dep_id in task_def.get("depends_on", []):
-                            if task_statuses.get(dep_id) != "completed": # Only 'completed' status counts as successful dependency
-                                dependencies_met = False
-                                break
+                # Dispatch ready tasks
+                for tid, tdef in task_defs.items():
+                    if statuses[tid] != "pending" or tid in dispatched:
+                        continue
+                    deps = tdef.get("depends_on", [])
+                    if all(statuses.get(d) in ("completed", "SUCCESS") for d in deps):
+                        print(f"-> {tid}")
+                        dispatched.add(tid)
+                        try:
+                            resp = await mux.send_command("dispatch", {
+                                "task_id": tid,
+                                "capability": tdef["capability"],
+                                "prompt": tdef["prompt"],
+                                "input_files": tdef.get("input_files"),
+                                "fire_and_forget": True,
+                            })
+                            if resp.get("accepted"):
+                                statuses[tid] = "running"
+                            else:
+                                statuses[tid] = "failed"
+                                results[tid] = {"status": "failed", "error": resp.get("error")}
+                                print(f"   REJECTED: {resp.get('error')}", file=sys.stderr)
+                        except Exception as e:
+                            statuses[tid] = "failed"
+                            results[tid] = {"status": "failed", "error": str(e)}
+                            print(f"   ERROR: {e}", file=sys.stderr)
 
-                        if dependencies_met:
-                            print(f"-> Dispatching task: {task_id}")
-                            task_statuses[task_id] = "dispatching"
-                            dispatched_tasks.add(task_id)
-                            # Use asyncio.ensure_future to dispatch in background and get a future
-                            future = asyncio.ensure_future(_send_command(ws, "dispatch", {
-                                "task_id": task_id,
-                                "capability": task_def["capability"],
-                                "prompt": task_def["prompt"],
-                                "input_files": task_def.get("input_files"),
-                            }))
-                            running_dispatch_futures[task_id] = future
-                
-                # Process completed dispatch futures
-                done_dispatch_futures = [f for f in running_dispatch_futures.values() if f.done()]
-                for future in done_dispatch_futures:
-                    for task_id, f in list(running_dispatch_futures.items()): # Iterate over copy as we modify dict
-                        if f == future:
-                            try:
-                                dispatch_response = await future
-                                if not dispatch_response.get("accepted"): # The daemon can reject a dispatch
-                                    print(f"Daemon rejected task {task_id} dispatch: {dispatch_response.get('error', 'Unknown error')}", file=sys.stderr)
-                                    task_statuses[task_id] = "failed"
-                                    task_results[task_id] = {"status": "failed", "error": dispatch_response.get("error")}
-                                    # Propagate failure to dependents
-                                    for dep_task_id, dep_task_def in tasks.items():
-                                        if task_id in dep_task_def.get("depends_on", []):
-                                            # Mark dependent as failed if its dependency failed
-                                            task_statuses[dep_task_id] = "failed"
-                                            task_results[dep_task_id] = {"status": "failed", "error": f"Dependency {task_id} failed"}
-                                else:
-                                    # Dispatch accepted, now wait for completion event
-                                    task_statuses[task_id] = "running"
-                            except Exception as e:
-                                print(f"Error dispatching task {task_id}: {e}", file=sys.stderr)
-                                task_statuses[task_id] = "failed"
-                                task_results[task_id] = {"status": "failed", "error": str(e)}
-                                # Propagate failure
-                                for dep_task_id, dep_task_def in tasks.items():
-                                    if task_id in dep_task_def.get("depends_on", []):
-                                        task_statuses[dep_task_id] = "failed"
-                                        task_results[dep_task_id] = {"status": "failed", "error": f"Dependency {task_id} failed"}
-                            finally:
-                                del running_dispatch_futures[task_id]
-                            break # Move to next future
+                # Drain events
+                try:
+                    event = await asyncio.wait_for(mux.events.get(), timeout=1.0)
+                    if event.get("type") == "complete" and event.get("task_id") in task_defs:
+                        tid = event["task_id"]
+                        p = event.get("payload", {})
+                        status = p.get("status", "unknown")
+                        statuses[tid] = status
+                        results[tid] = {"status": status, "report_path": p.get("report_path"), "usage": p.get("usage", {})}
+                        cost = p.get("usage", {}).get("cost_usd", 0)
+                        print(f"   {tid} -> {status} (${cost:.3f})")
 
-                # Process events from the daemon
-                while not event_queue.empty():
-                    event = await event_queue.get()
-                    event_type = event.get("type")
-                    event_task_id = event.get("task_id")
-                    payload = event.get("payload", {})
-
-                    if event_type == "complete" and event_task_id in tasks:
-                        status = payload.get("status", "unknown")
-                        report_path = payload.get("report_path")
-                        usage = payload.get("usage", {})
-                        
-                        task_statuses[event_task_id] = status
-                        task_results[event_task_id] = {
-                            "status": status,
-                            "report_path": report_path,
-                            "usage": usage
-                        }
-                        print(f"Task {event_task_id} completed with status: {status}")
-
-                        if status != "completed": # If a task fails or is cancelled
-                            # Mark dependents as failed
-                            for dep_task_id, dep_task_def in tasks.items():
-                                if event_task_id in dep_task_def.get("depends_on", []):
-                                    task_statuses[dep_task_id] = "failed"
-                                    task_results[dep_task_id] = {"status": "failed", "error": f"Dependency {event_task_id} failed with status {status}"}
-                                    print(f"Task {dep_task_id} marked as failed due to dependency {event_task_id} failure.")
-                
-                # Small delay to prevent busy-waiting
-                await asyncio.sleep(0.05)
+                        if status not in ("completed", "SUCCESS"):
+                            for dep_tid, dep_def in task_defs.items():
+                                if tid in dep_def.get("depends_on", []):
+                                    statuses[dep_tid] = "failed"
+                                    results[dep_tid] = {"status": "failed", "error": f"dep {tid} failed"}
+                                    print(f"   {dep_tid} -> SKIPPED (dep failed)")
+                except asyncio.TimeoutError:
+                    pass
 
         finally:
-            listener_task.cancel()
-            await asyncio.gather(listener_task, return_exceptions=True)
+            await mux.stop()
 
-        print("
---- Campaign Summary ---")
-        for task_id in tasks:
-            result = task_results.get(task_id, {"status": task_statuses.get(task_id, "NOT RUN")})
-            print(f"Task {task_id}: Status={result['status']}")
-            if result.get("report_path"):
-                # Fetch report content
-                read_report_response = await _send_command(ws, "read_report", {"report_path": result["report_path"]})
-                if read_report_response.get("ok"):
-                    print(f"  Report:
-{read_report_response['content']}")
-                else:
-                    print(f"  Failed to read report: {read_report_response.get('error', 'Unknown error')}")
+        print(f"\n--- {name} ---")
+        for tid in task_defs:
+            r = results.get(tid, {"status": statuses[tid]})
+            print(f"  {tid}: {r['status']}")
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python loader.py <campaign_file.yaml>", file=sys.stderr)
+        print("Usage: python loader.py <campaign.yaml>", file=sys.stderr)
         sys.exit(1)
-    campaign_file = sys.argv[1]
-    asyncio.run(run_campaign(campaign_file))
+    asyncio.run(run_campaign(sys.argv[1]))
+
 
 if __name__ == "__main__":
     main()

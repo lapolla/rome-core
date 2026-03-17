@@ -541,20 +541,20 @@
         </div>
         <div class="stats-grid">
           <div class="stat">
-            <div class="stat-label">Active</div>
-            <div class="stat-value" id="activeTasks">0</div>
+            <div class="stat-label">Session Cost</div>
+            <div class="stat-value" id="sessionCost">--</div>
           </div>
           <div class="stat">
-            <div class="stat-label">Total</div>
-            <div class="stat-value" id="totalTasks">0</div>
+            <div class="stat-label">Throughput</div>
+            <div class="stat-value" id="throughput">--</div>
           </div>
           <div class="stat">
-            <div class="stat-label">Running</div>
-            <div class="stat-value" id="runningTasks">0</div>
+            <div class="stat-label">Queue</div>
+            <div class="stat-value" id="queueCounts">--</div>
           </div>
           <div class="stat">
-            <div class="stat-label">Events</div>
-            <div class="stat-value" id="eventCount">0</div>
+            <div class="stat-label">Health</div>
+            <div class="stat-value" id="healthStatus">--</div>
           </div>
           <div class="stat">
             <div class="stat-label">Tokens</div>
@@ -605,8 +605,10 @@
         const runningTasksEl = document.getElementById("runningTasks");
         const eventCountEl = document.getElementById("eventCount");
         const totalTokensEl = document.getElementById("totalTokens");
-        const sessionTokensEl = document.getElementById("sessionTokens");
-        const sessionTokensProgressBar = document.getElementById("sessionTokensProgressBar");
+        const sessionCostEl = document.getElementById("sessionCost");
+        const throughputEl = document.getElementById("throughput");
+        const queueCountsEl = document.getElementById("queueCounts");
+        const healthStatusEl = document.getElementById("healthStatus");
         const capabilitiesStripEl = document.getElementById("capabilitiesStrip");
 
         const logPanel = document.getElementById("logPanel");
@@ -634,7 +636,9 @@
           lastLogKey: null,
           lastLogTs: 0,
           capabilities: {},
-          daemonCapabilities: []
+          daemonCapabilities: [],
+          tokenCostRate: 0.000015, // Example: $0.015 per 1K tokens for both input and output
+          completedTasksHistory: [] // To track completed tasks for throughput
         };
 
         hostLabel.textContent = window.location.host || "localhost";
@@ -683,6 +687,14 @@
         function formatNumber(value) {
           const n = Number(value);
           return Number.isFinite(n) ? n.toLocaleString() : "--";
+        }
+
+        function formatCurrency(value) {
+          const n = Number(value);
+          if (!Number.isFinite(n)) {
+            return "--";
+          }
+          return "$" + n.toFixed(4);
         }
 
         function formatUsage(usage) {
@@ -821,6 +833,11 @@
           merged.updated_at = Number(merged.updated_at) || Date.now() / 1000;
           state.tasks.set(taskId, merged);
 
+          // If task just completed, add to history for throughput calculation
+          if (canonicalStatus(existing.status) !== "SUCCESS" && canonicalStatus(merged.status) === "SUCCESS") {
+            state.completedTasksHistory.push(Date.now());
+          }
+
           renderTasks();
         }
 
@@ -863,10 +880,6 @@
           }
 
           if (type === "system_status") {
-            // Update active task count display if available in payload
-            if (payload.hasOwnProperty('active_tasks_count')) {
-              activeTasksEl.textContent = String(payload.active_tasks_count);
-            }
             // Update daemon uptime, host etc if available
             if (payload.hasOwnProperty('uptime_s')) {
                 uptimeLabel.textContent = formatDuration(Number(payload.uptime_s));
@@ -1019,26 +1032,47 @@
 
         function renderStats() {
           const tasks = Array.from(state.tasks.values());
-          const running = tasks.filter(function (task) {
-            const s = canonicalStatus(task.status).toLowerCase();
-            return s === "running";
-          }).length;
-          const active = tasks.filter(function (task) {
-            const s = canonicalStatus(task.status).toLowerCase();
-            return s === "running" || s === "registered";
-          }).length;
 
-          activeTasksEl.textContent = String(active);
-          totalTasksEl.textContent = String(tasks.length);
-          runningTasksEl.textContent = String(running);
-          eventCountEl.textContent = String(state.eventsSeen);
+          // Session Cost
+          const totalTokens = state.workerTokens + state.dictatorTokens;
+          const sessionCost = (totalTokens / 1000) * state.tokenCostRate;
+          sessionCostEl.textContent = formatCurrency(sessionCost);
+
+          // Throughput
+          const now = Date.now();
+          state.completedTasksHistory = state.completedTasksHistory.filter(ts => now - ts < 60 * 1000); // Last 1 minute
+          const throughput = state.completedTasksHistory.length;
+          throughputEl.textContent = throughput + " tasks/min";
+
+          // Queue
+          const pending = tasks.filter(task => canonicalStatus(task.status) === "registered").length;
+          const running = tasks.filter(task => canonicalStatus(task.status) === "running").length;
+          queueCountsEl.textContent = pending + " pending / " + running + " running";
+          
+          // Health
+          let healthText = "OK";
+          let healthColor = "var(--success)";
+          if (wsChip.dataset.state !== "connected") {
+            healthText = "WS Disconnected";
+            healthColor = "var(--failed)";
+          } else if (state.daemonStatus && state.daemonStatus.errors_count > 0) { // Assuming daemonStatus has errors_count
+            healthText = "Daemon Errors";
+            healthColor = "var(--failed)";
+          } else if (uptimeLabel.textContent === "--") { // Simple check if uptime is not reported yet
+            healthText = "Daemon Offline";
+            healthColor = "var(--failed)";
+          }
+          healthStatusEl.textContent = healthText;
+          healthStatusEl.style.color = healthColor; // Apply color directly or via class
+          
+          // Original Tokens Stat - remains unchanged but included for completeness in the new block
           const workerTok = state.workerTokens || 0;
           const dictatorTok = state.dictatorTokens || 0;
           totalTokensEl.textContent = formatNumber(workerTok + dictatorTok);
           document.getElementById("workerTokensLabel").textContent = formatNumber(workerTok);
           document.getElementById("dictatorTokensLabel").textContent = formatNumber(dictatorTok);
           if (logHeaderCount) logHeaderCount.textContent = String(state.eventsSeen);
-          }
+        }
 
           function renderCapabilities() {
           if (!capabilitiesStripEl) {

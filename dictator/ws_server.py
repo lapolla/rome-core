@@ -448,6 +448,48 @@ async def handle_event(payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True}
 
 
+async def handle_dashboard_stats(_: dict[str, Any]) -> dict[str, Any]:
+    now = time.time()
+    tasks = task_registry.get_all()
+
+    total_cost_usd = 0.0
+    tasks_completed_count = 0
+    tasks_failed_count = 0
+    tasks_running_count = 0
+    tasks_pending_count = 0
+    throughput_per_min = 0
+
+    for task in tasks.values():
+        usage = task.get("usage", {})
+        total_cost_usd += float(usage.get("total_cost_usd", 0.0))
+
+        status = task.get("status")
+        if status == "completed":
+            tasks_completed_count += 1
+            completed_at = task.get("completed_at", 0)
+            if now - completed_at <= 60:  # Within the last 60 seconds
+                throughput_per_min += 1
+        elif status == "failed":
+            tasks_failed_count += 1
+        elif status == "running":
+            tasks_running_count += 1
+        elif status == "registered":
+            tasks_pending_count += 1
+
+    uptime_seconds = round(time.monotonic() - DAEMON_START_TIME, 3)
+    active_ws_connections = len(manager._connections)
+
+    return {
+        "total_cost_usd": total_cost_usd,
+        "tasks_completed_count": tasks_completed_count,
+        "tasks_failed_count": tasks_failed_count,
+        "tasks_running_count": tasks_running_count,
+        "tasks_pending_count": tasks_pending_count,
+        "uptime_seconds": uptime_seconds,
+        "active_ws_connections": active_ws_connections,
+        "throughput_per_min": throughput_per_min,
+    }
+
 async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
     if message.get("type") != "command":
         raise ValueError("message.type must be 'command'")
@@ -471,6 +513,7 @@ async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
         "clear": handle_clear,
         "event": handle_event,
         "submit_result": handle_submit_result,
+        "dashboard_stats": handle_dashboard_stats,
     }
     handler = handlers.get(command)
     if handler is None:
