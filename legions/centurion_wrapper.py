@@ -33,7 +33,7 @@ def run_cmd(cmd, task_id="unknown", cwd=None, timeout=300):
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
         if cwd:
             env["ROME_TASK_DIR"] = cwd
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=env)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=env, start_new_session=True)
         return {"ok": proc.returncode == 0, "stdout": proc.stdout, "stderr": proc.stderr, "exit_code": proc.returncode}
     except Exception as e:
         return {"ok": False, "error": str(e), "exit_code": 1}

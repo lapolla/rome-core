@@ -5,15 +5,15 @@ Runs standalone using Claude Sonnet 4.6 or Gemini 1.5 Flash.
 Connects to ROME daemon WS to dispatch tasks and stream progress.
 """
 
-import sys
-import os
-import json
 import asyncio
-import urllib.request
-import urllib.error
+import aiohttp
+import json
+import os
+import sys
 import uuid
 from pathlib import Path
 import time
+# Removed urllib.request and urllib.error as aiohttp replaces them
 
 try:
     import websockets
@@ -48,37 +48,6 @@ def get_available_capabilities_from_arsenal(arsenal: dict) -> dict[str, bool]:
         available[cap_name] = True # Mark as available based on API key
     return available
 
-def choose_capability(task_type: str, capabilities: dict[str, bool]) -> str:
-    """Returns the best available capability based on task type and current capabilities."""
-    
-    # Check if a capability is truly available (based on agent_hello or capability_status events)
-    def is_available(cap_name: str) -> bool:
-        return capabilities.get(cap_name, False) # Defaults to False if not in dict
-
-    routing_rules = {
-        "code": ["CLAUDE", "GEMINI"],
-        "shell": ["SAFE_SHELL"],
-        "analysis": ["GEMINI", "CLAUDE"],
-        "complex": ["CENTURION_CLAUDE", "CENTURION_GEMINI", "GEMINI"],
-        "default": ["CLAUDE", "GEMINI", "SAFE_SHELL"],
-    }
-
-    # Normalize task_type from existing orchestrate_task logic
-    if task_type == "code_edit": task_type = "code"
-    elif task_type == "research": task_type = "analysis"
-    elif task_type == "shell_op": task_type = "shell"
-
-    for cap_name in routing_rules.get(task_type, routing_rules["default"]):
-        if is_available(cap_name):
-            return cap_name
-            
-    # Fallback: return the first available capability in a general order
-    for cap_name in ["CLAUDE", "GEMINI", "SAFE_SHELL"]:
-        if is_available(cap_name):
-            return cap_name
-
-    return "UNKNOWN"
-
 SYSTEM_PROMPT = """You are a headless orchestrator (similar to Claude Code's Claude personality).
 Read the user's task, understand the requirements, and break it into subtasks if needed.
 You have access to a tool called `rome_dispatch`. Available capabilities: {available_capabilities_str}.
@@ -92,7 +61,7 @@ Example:
 ]
 """
 
-def orchestrate_task(task_description: str, available_capabilities: dict[str, bool]) -> list:
+async def orchestrate_task(task_description: str, available_capabilities: dict[str, bool]) -> list:
     """Uses LLM (Haiku or Flash) to break the task down and decide capabilities."""
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
     gemini_key = os.environ.get("GEMINI_API_KEY")
@@ -103,7 +72,7 @@ def orchestrate_task(task_description: str, available_capabilities: dict[str, bo
     if not anthropic_key and not gemini_key:
         print(json.dumps({"type": "progress", "task_id": "orchestrator", "percent": 0, "message": "No API keys found. Falling back to single GEMINI dispatch."}))
         # Fallback to a single dispatch with a "default" task type to choose capability
-        chosen_cap = choose_capability("default", available_capabilities)
+        chosen_cap = "GEMINI" if available_capabilities.get("GEMINI") else "UNKNOWN"
         if chosen_cap == "UNKNOWN":
             print(json.dumps({"type": "error", "message": "No suitable capability found. Exiting."}))
             sys.exit(1)
@@ -114,40 +83,41 @@ def orchestrate_task(task_description: str, available_capabilities: dict[str, bo
     current_system_prompt = SYSTEM_PROMPT.format(available_capabilities_str=available_capabilities_str)
 
     try:
-        if anthropic_key and (("CLAUDE" in llm_available_caps) or ("CENTURION_CLAUDE" in llm_available_caps)):
-            req_data = {
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1024,
-                "system": current_system_prompt, # Use current_system_prompt
-                "messages": [{"role": "user", "content": task_description}]
-            }
-            req = urllib.request.Request(
-                "https://api.anthropic.com/v1/messages",
-                data=json.dumps(req_data).encode("utf-8"),
-                headers={
-                    "x-api-key": anthropic_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json"
+        async with aiohttp.ClientSession() as session:
+            if anthropic_key and (("CLAUDE" in llm_available_caps) or ("CENTURION_CLAUDE" in llm_available_caps)):
+                req_data = {
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 1024,
+                    "system": current_system_prompt,
+                    "messages": [{"role": "user", "content": task_description}]
                 }
-            )
-            with urllib.request.urlopen(req) as response:
-                res_body = json.loads(response.read().decode("utf-8"))
-                content = res_body["content"][0]["text"]
-        elif gemini_key and (("GEMINI" in llm_available_caps) or ("CENTURION_GEMINI" in llm_available_caps)):
-            req_data = {
-                "system_instruction": {"parts": {"text": current_system_prompt}}, # Use current_system_prompt
-                "contents": [{"parts": [{"text": task_description}]}]
-            }
-            req = urllib.request.Request(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}",
-                data=json.dumps(req_data).encode("utf-8"),
-                headers={"content-type": "application/json"}
-            )
-            with urllib.request.urlopen(req) as response:
-                res_body = json.loads(response.read().decode("utf-8"))
-                content = res_body["candidates"][0]["content"]["parts"][0]["text"]
-        else:
-            raise Exception("No suitable LLM for orchestration available.")
+                async with session.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": anthropic_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json"
+                    },
+                    json=req_data
+                ) as response:
+                    response.raise_for_status()
+                    res_body = await response.json()
+                    content = res_body["content"][0]["text"]
+            elif gemini_key and (("GEMINI" in llm_available_caps) or ("CENTURION_GEMINI" in llm_available_caps)):
+                req_data = {
+                    "system_instruction": {"parts": [{"text": current_system_prompt}]},
+                    "contents": [{"parts": [{"text": task_description}]}]
+                }
+                async with session.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash:generateContent?key={gemini_key}",
+                    headers={"content-type": "application/json"},
+                    json=req_data
+                ) as response:
+                    response.raise_for_status()
+                    res_body = await response.json()
+                    content = res_body["candidates"][0]["content"]["parts"][0]["text"]
+            else:
+                raise Exception("No suitable LLM for orchestration available.")
 
         # Parse JSON array from LLM response
         start = content.find('[')
@@ -156,18 +126,19 @@ def orchestrate_task(task_description: str, available_capabilities: dict[str, bo
             return json.loads(content[start:end+1])
         else:
             raise ValueError("LLM response did not contain a valid JSON array.")
+    except aiohttp.ClientResponseError as e:
+        print(json.dumps({"type": "error", "message": f"Orchestrator LLM HTTP error: {e.status} {e.message}. Falling back to a selected default capability."}), flush=True)
     except Exception as e:
-        print(json.dumps({"type": "error", "message": f"Orchestrator LLM failed: {e}. Falling back to a selected default capability."}))
+        print(json.dumps({"type": "error", "message": f"Orchestrator LLM failed: {e}. Falling back to a selected default capability."}), flush=True)
     
     # Fallback if LLM fails or returns nothing
-    chosen_cap = choose_capability("default", available_capabilities)
+    chosen_cap = "GEMINI" if available_capabilities.get("GEMINI") else "UNKNOWN"
     if chosen_cap == "UNKNOWN":
         print(json.dumps({"type": "error", "message": "No suitable capability found. Exiting."}))
         sys.exit(1)
     return [{"capability": chosen_cap, "prompt": task_description, "fire_and_forget": False}]
 
-
-async def listen_to_ws(websocket, active_tasks, exit_code_ref, capabilities_ref):
+async def listen_to_ws(websocket, exit_code_ref, capabilities_ref):
     """Listens for WS events and prints JSONL progress, updates capabilities."""
     while True:
         try:
@@ -219,7 +190,6 @@ async def listen_to_ws(websocket, active_tasks, exit_code_ref, capabilities_ref)
                     }), flush=True)
                     if status not in ("completed", "SUCCESS", "success"):
                         exit_code_ref[0] = 1
-                    active_tasks.discard(t_id)
                 elif ev_type == "error":
                     print(json.dumps({
                         "type": "error",
@@ -227,7 +197,6 @@ async def listen_to_ws(websocket, active_tasks, exit_code_ref, capabilities_ref)
                         "message": str(payload.get("error") or "Task error")
                     }), flush=True)
                     exit_code_ref[0] = 1
-                    active_tasks.discard(t_id)
         except websockets.exceptions.ConnectionClosed:
             print(json.dumps({"type": "debug", "message": "WebSocket connection closed."}), flush=True)
             break
@@ -235,6 +204,16 @@ async def listen_to_ws(websocket, active_tasks, exit_code_ref, capabilities_ref)
             print(json.dumps({"type": "error", "message": f"Error in WS listener: {e}"}), flush=True)
             break
 
+def _ws_headers() -> dict:
+    """Loads ws_token from config.json and returns it as an Authorization header."""
+    try:
+        cfg_path = Path(__file__).parent.parent / "dictator" / "config.json"
+        cfg = json.loads(cfg_path.read_text())
+        token = str(cfg.get("ws_token") or "").strip()
+        return {"Authorization": f"Bearer {token}"} if token else {}
+    except Exception as e:
+        print(json.dumps({"type": "error", "message": f"Failed to load ws_token: {e}"}), file=sys.stderr, flush=True)
+        return {}
 
 async def main():
     if len(sys.argv) > 1:
@@ -260,24 +239,21 @@ async def main():
     uri = "ws://localhost:8741/ws"
     
     exit_code_ref = [0]
-    active_tasks = set()
     
     try:
-        async with websockets.connect(uri) as websocket:
+        async with websockets.connect(uri, extra_headers=_ws_headers()) as websocket:
             # Start listener task
-            listener = asyncio.create_task(listen_to_ws(websocket, active_tasks, exit_code_ref, capabilities_ref))
+            listener = asyncio.create_task(listen_to_ws(websocket, exit_code_ref, capabilities_ref))
 
             # Wait for agent_hello for up to 3 seconds
             start_time = time.time()
             agent_hello_received = False
             while time.time() - start_time < 3:
                 # Check if capabilities_ref[0] has been updated from agent_hello
-                # If agent_hello includes 'SAFE_SHELL' or any other specific cap, we can assume it's arrived
-                # For now, let's just check if it's different from initial_capabilities and contains more than just arsenal-derived caps
-                if any(status for status in capabilities_ref[0].values()): # Check if any capability is true, indicating agent_hello has populated it
+                if any(status for status in capabilities_ref[0].values()):
                     agent_hello_received = True
                     break
-                await asyncio.sleep(0.1) # Check frequently
+                await asyncio.sleep(0.1)
 
             if not agent_hello_received:
                 print(json.dumps({"type": "debug", "message": "agent_hello not received within 3 seconds. Using initial capabilities from arsenal."}), flush=True)
@@ -285,33 +261,19 @@ async def main():
                 print(json.dumps({"type": "debug", "message": f"agent_hello received. Current capabilities: {capabilities_ref[0]}"}), flush=True)
 
             # Now, orchestrate task using potentially updated capabilities
-            subtasks = orchestrate_task(task_desc, capabilities_ref[0]) # Pass the live capabilities
+            subtasks = await orchestrate_task(task_desc, capabilities_ref[0])
 
             if not any(capabilities_ref[0].values()): # If no capabilities are available after trying agent_hello
                 print(json.dumps({"type": "error", "message": "No capabilities available to run tasks. Ensure ROME daemon is running and agents are configured."}))
                 sys.exit(1)
             
+            dispatched_task_ids = []
             for task_def in subtasks:
                 t_id = f"task-{uuid.uuid4().hex[:8]}"
                 
-                # Determine task_type for choose_capability
-                # This is a simplified derivation from the prompt, similar to orchestrate_task's internal logic
-                prompt_text = task_def.get("prompt", "").lower()
-                if any(keyword in prompt_text for keyword in ["implement", "fix code", "refactor"]):
-                    task_type = "code"
-                elif any(keyword in prompt_text for keyword in ["shell", "command", "run", "git", "file system"]):
-                    task_type = "shell"
-                elif any(keyword in prompt_text for keyword in ["analyze", "research", "understand", "investigate"]):
-                    task_type = "analysis"
-                elif any(keyword in prompt_text for keyword in ["complex", "multi-step", "orchestrate"]):
-                    task_type = "complex"
-                else:
-                    task_type = "default"
-
-                # Use choose_capability if capability is not explicitly set by the orchestrator LLM
-                capability = task_def.get("capability")
-                if not capability or not capabilities_ref[0].get(capability, False): # Also re-check if explicitly set cap is actually available
-                    capability = choose_capability(task_type, capabilities_ref[0])
+                capability = task_def.get("capability", "GEMINI")
+                if not capabilities_ref[0].get(capability, False):
+                    capability = "GEMINI" if capabilities_ref[0].get("GEMINI", False) else "UNKNOWN"
 
                 if capability == "UNKNOWN":
                     print(json.dumps({"type": "error", "message": f"No suitable capability found for subtask: {task_def.get('prompt')}. Skipping."}), flush=True)
@@ -319,11 +281,7 @@ async def main():
                     continue
                 
                 prompt = task_def.get("prompt", task_desc)
-                fire_and_forget = task_def.get("fire_and_forget", False)
                 
-                if not fire_and_forget:
-                    active_tasks.add(t_id)
-                    
                 cmd = {
                     "type": "command",
                     "command": "dispatch",
@@ -332,22 +290,68 @@ async def main():
                         "task_id": t_id,
                         "capability": capability,
                         "prompt": prompt,
-                        "fire_and_forget": fire_and_forget
+                        "fire_and_forget": True
                     }
                 }
                 
                 await websocket.send(json.dumps(cmd))
-                
-                if not fire_and_forget:
-                    # Wait for this specific subtask to finish before dispatching the next
-                    while t_id in active_tasks:
-                        await asyncio.sleep(0.1)
+                dispatched_task_ids.append(t_id)
                         
-            # Wait for any straggler tasks
-            while active_tasks:
-                print(json.dumps({"type": "debug", "message": f"Waiting for {len(active_tasks)} active tasks to complete..."}), flush=True)
-                await asyncio.sleep(0.5)
+            # Use rome_await to wait for all non-fire_and_forget tasks
+            if dispatched_task_ids:
+                await_request_id = f"req-{uuid.uuid4().hex[:8]}"
+                await websocket.send(json.dumps({
+                    "type": "command",
+                    "command": "await",
+                    "request_id": await_request_id,
+                    "payload": {
+                        "task_ids": dispatched_task_ids,
+                        "include_reports": True
+                    }
+                }))
                 
+                # Wait for the specific response to the await command
+                await_response = None
+                while True:
+                    msg_str = await websocket.recv()
+                    msg = json.loads(msg_str)
+                    if msg.get("type") == "response" and msg.get("request_id") == await_request_id:
+                        await_response = msg
+                        break
+                    # If it's an event, let the listener handle it (important for progress updates)
+                    elif msg.get("type") == "event":
+                        # This will be handled by the listener task, no need to process here
+                        pass
+                
+                if await_response and await_response.get("ok"):
+                    results = await_response["payload"].get("tasks", {})
+                    for t_id, res in results.items():
+                        status = res.get("status", "UNKNOWN")
+                        report_path = res.get("report_path", "")
+                        report_content = res.get("report", "")
+                        
+                        print(json.dumps({
+                            "type": "complete",
+                            "task_id": t_id,
+                            "status": status,
+                            "report": report_path
+                        }), flush=True)
+                        if status not in ("completed", "SUCCESS", "success"):
+                            exit_code_ref[0] = 1
+                        # Basic error handling: log to stderr if task failed
+                        if status == "failed":
+                             print(json.dumps({
+                                 "type": "error",
+                                 "task_id": t_id,
+                                 "message": f"Task {t_id} failed. Report: {report_path}. Content: {report_content}"
+                             }), file=sys.stderr, flush=True)
+                elif await_response:
+                    print(json.dumps({"type": "error", "message": f"Await command failed: {await_response.get('error', 'Unknown error')}"}), flush=True)
+                    exit_code_ref[0] = 1
+                else:
+                    print(json.dumps({"type": "error", "message": "Did not receive a response for await command."}), flush=True)
+                    exit_code_ref[0] = 1
+            
             listener.cancel()
             await listener # Ensure the listener task is properly cancelled and cleaned up
             

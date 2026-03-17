@@ -45,6 +45,22 @@ async def dashboard_index(request) -> FileResponse:
                         headers={"Cache-Control": "no-store"})
 
 
+async def health_endpoint(request):
+    """Lightweight HTTP health check — no WS needed."""
+    import time
+    from starlette.responses import JSONResponse
+    from dictator.core import DAEMON_START_TIME
+    tasks = task_registry.get_all()
+    active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
+    return JSONResponse({
+        "ok": True,
+        "version": _VERSION,
+        "uptime_s": round(time.monotonic() - DAEMON_START_TIME, 3),
+        "active_tasks": active,
+        "total_tasks": len(tasks),
+    })
+
+
 @asynccontextmanager
 async def lifespan(app):
     swept = task_registry.sweep_orphans()
@@ -66,6 +82,7 @@ def create_app() -> Starlette:
         routes=[
             Mount("/mcp", app=mcp.sse_app()),
             WebSocketRoute("/ws", endpoint=rome_ws_endpoint),
+            Route("/health", endpoint=health_endpoint),
             Route("/dashboard", endpoint=dashboard_index),
             Route("/dashboard/", endpoint=dashboard_index),
             Mount("/dashboard", app=StaticFiles(directory=str(dashboard_dir), html=True)),
@@ -86,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
     import socket
-    cfg = uvicorn.Config(create_app(), host=args.host, port=args.port)
+    cfg = uvicorn.Config(create_app(), host=args.host, port=args.port, reload=True, reload_dirs=[str(Path(__file__).parent.parent)])
     cfg.socket_options = [(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)]
     server = uvicorn.Server(cfg)
     server.run()

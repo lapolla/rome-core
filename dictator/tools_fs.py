@@ -48,6 +48,20 @@ def register(mcp):
             return f"ERR: {e}"
 
     @mcp.tool()
+    async def fs_write(path: str, content: str) -> str:
+        """Write content to a file relative to /var/www/ftk_lms."""
+        full = (ROOT_DIR / path).resolve()
+        if not full.is_relative_to(ROOT_DIR):
+            return json.dumps({"ok": False, "message": "Path escapes root directory"})
+        
+        try:
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text(content, encoding="utf-8")
+            return "OK: Wrote to " + str(full)
+        except Exception as e:
+            return f"ERR: {e}"
+
+    @mcp.tool()
     async def read_anywhere(path: str, start_line: int = 1, end_line: int | None = None) -> str:
         """Read a file by absolute path (1-indexed, inclusive)."""
         p = Path(path).resolve()
@@ -59,6 +73,17 @@ def register(mcp):
             content = "\n".join(lines[start:end])
             header = f"[ROME: lines {start+1}-{min(end, total)} of {total}]\n"
             return header + content
+        except Exception as e:
+            return f"ERR: {e}"
+
+    @mcp.tool()
+    async def write_anywhere(path: str, content: str) -> str:
+        """Write content to a file by absolute path."""
+        p = Path(path).resolve()
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+            return "OK: Wrote to " + str(p)
         except Exception as e:
             return f"ERR: {e}"
 

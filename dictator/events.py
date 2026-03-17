@@ -57,16 +57,18 @@ class EventBus:
 
     @staticmethod
     def _enqueue(queue: asyncio.Queue[RomeEvent], event: RomeEvent) -> None:
-        while queue.full():
+        for _ in range(3):  # bounded retry, no recursion
+            while queue.full():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
             try:
-                queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-        try:
-            queue.put_nowait(event)
-        except asyncio.QueueFull:
-            # Another producer may have refilled the queue after eviction.
-            EventBus._enqueue(queue, event)
+                queue.put_nowait(event)
+                return
+            except asyncio.QueueFull:
+                continue
+        # Drop event after 3 failed attempts rather than infinite loop
 
 
 async def emit_dispatch_start(bus: EventBus, task_id: str, capability: str) -> RomeEvent:

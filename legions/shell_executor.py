@@ -60,7 +60,8 @@ def shell_executor():
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        bufsize=1
+        bufsize=1,
+        start_new_session=True,
     )
 
     def read_output(proc, output_list, tid, start_t):
@@ -82,7 +83,12 @@ def shell_executor():
     is_timeout = False
     while process.poll() is None:
         if time.time() - start_time > shell_timeout:
-            process.kill()
+            # Kill entire process group to avoid orphans
+            import signal
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except OSError:
+                process.kill()
             is_timeout = True
             break
         time.sleep(0.05)

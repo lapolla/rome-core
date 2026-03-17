@@ -326,23 +326,32 @@ async def _handle_ping(_: dict[str, Any]) -> dict[str, Any]:
     return {"pong": True, "ts": time.time()}
 
 
-async def handle_read_report(payload: dict[str, Any]) -> dict[str, Any]:
+def _read_report_content(report_path: str) -> str | None:
     from pathlib import Path
+    rp = Path(report_path)
+    if not rp.exists():
+        return None
+    try:
+        content = rp.read_text(encoding="utf-8")
+        # Truncate for context safety
+        if len(content) > 4000:
+            return content[:4000] + "\n...[TRUNCATED]"
+        return content
+    except Exception:
+        return None
+
+async def handle_read_report(payload: dict[str, Any]) -> dict[str, Any]:
     report_path = str(payload.get("report_path") or "").strip()
     if not report_path:
         raise ValueError("payload.report_path is required")
-    rp = Path(report_path)
-    if not rp.exists():
+    content = _read_report_content(report_path)
+    if content is None:
         return {"report_path": report_path, "content": "File not found or no report generated."}
-    try:
-        content = rp.read_text(encoding="utf-8")
-        return {"report_path": report_path, "content": content}
-    except Exception as exc:
-        return {"report_path": report_path, "content": f"Error reading report: {exc}"}
+    return {"report_path": report_path, "content": content}
 
 
 async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
-    """Block until all requested tasks complete. Event-driven via EventBus."""
+    """Return status of requested tasks, indicating any pending tasks."""
     task_ids = payload.get("task_ids", [])
     include_reports = payload.get("include_reports", False)
 
@@ -362,91 +371,17 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
                 "usage": task.get("usage", {}),
             }
             if include_reports and task.get("report_path"):
-                try:
-                    from pathlib import Path
-                    rp = Path(task["report_path"])
-                    if rp.exists():
-                        content = rp.read_text(encoding="utf-8")
-                        # Truncate for context safety
-                        if len(content) > 4000:
-                            results[tid]["report"] = content[:4000] + "\n...[TRUNCATED]"
-                        else:
-                            results[tid]["report"] = content
-                except Exception:
-                    pass
+                content = _read_report_content(task["report_path"])
+                if content:
+                    results[tid]["report"] = content
             pending.discard(tid)
 
     if not pending:
         all_ok = all(r.get("status") in ("completed", "SUCCESS") for r in results.values())
         return {"ok": all_ok, "tasks": results}
-
-    # Phase 2: Subscribe to EventBus and wait for remaining completions
-    subscriber_id, queue = await event_bus.subscribe()
-    try:
-        # Use a generous internal timeout (caller controls outer timeout via WS)
-        deadline = asyncio.get_event_loop().time() + 300  # 5 min max internal
-        while pending:
-            remaining = deadline - asyncio.get_event_loop().time()
-            if remaining <= 0:
-                # Timeout — return what we have, mark rest as timeout
-                for tid in pending:
-                    results[tid] = {"status": "timeout", "report_path": None, "usage": {}}
-                break
-
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=min(remaining, 1.0))
-            except asyncio.TimeoutError:
-                # Check registry in case we missed the event (task completed before subscribe)
-                for tid in list(pending):
-                    task = task_registry.get(tid)
-                    if task and task.get("status") in ("completed", "failed", "cancelled"):
-                        results[tid] = {
-                            "status": task["status"],
-                            "report_path": task.get("report_path"),
-                            "usage": task.get("usage", {}),
-                        }
-                        if include_reports and task.get("report_path"):
-                            try:
-                                from pathlib import Path
-                                rp = Path(task["report_path"])
-                                if rp.exists():
-                                    content = rp.read_text(encoding="utf-8")
-                                    if len(content) > 4000:
-                                        results[tid]["report"] = content[:4000] + "\n...[TRUNCATED]"
-                                    else:
-                                        results[tid]["report"] = content
-                            except Exception:
-                                pass
-                        pending.discard(tid)
-                continue
-
-            # Only care about complete events for our tasks
-            if event.type == "complete" and event.task_id in pending:
-                tid = event.task_id
-                p = event.payload
-                results[tid] = {
-                    "status": p.get("status", "unknown"),
-                    "report_path": p.get("report_path"),
-                    "usage": p.get("usage", {}),
-                }
-                if include_reports and p.get("report_path"):
-                    try:
-                        from pathlib import Path
-                        rp = Path(p["report_path"])
-                        if rp.exists():
-                            content = rp.read_text(encoding="utf-8")
-                            if len(content) > 4000:
-                                results[tid]["report"] = content[:4000] + "\n...[TRUNCATED]"
-                            else:
-                                results[tid]["report"] = content
-                    except Exception:
-                        pass
-                pending.discard(tid)
-    finally:
-        await event_bus.unsubscribe(subscriber_id)
-
-    all_ok = all(r.get("status") in ("completed", "SUCCESS") for r in results.values())
-    return {"ok": all_ok, "tasks": results}
+    else:
+        # If pending remain, return immediately with current state
+        return {"ok": "pending", "completed": results, "pending": list(pending)}
 
 
 async def handle_reset(_: dict[str, Any]) -> dict[str, Any]:

@@ -33,6 +33,21 @@ def _ws_headers() -> dict:
         return {}
 
 
+_HEARTBEAT_TIMEOUT = 120 # If no message for this long, consider connection dead
+
+def _read_report_content(report_path: str) -> str | None:
+    from pathlib import Path
+    rp = Path(report_path)
+    if not rp.exists():
+        return None
+    try:
+        content = rp.read_text(encoding="utf-8")
+        if len(content) > 4000:
+            return content[:4000] + "\n...[TRUNCATED]"
+        return content
+    except Exception:
+        return None
+
 # ---------------------------------------------------------------------------
 # Persistent background sender (fire-and-forget events)
 # ---------------------------------------------------------------------------
@@ -162,15 +177,88 @@ async def send_command_async(command: str, payload: dict[str, Any], timeout: flo
                 "request_id": req_id,
                 "payload": payload,
             }))
-            deadline = asyncio.get_event_loop().time() + timeout
-            while True:
-                remaining = deadline - asyncio.get_event_loop().time()
-                if remaining <= 0:
-                    return {"ok": False, "error": "timeout"}
-                raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-                msg = json.loads(raw)
-                if msg.get("type") == "response" and msg.get("request_id") == req_id:
-                    return msg.get("payload", {})
+
+            import sys; print(f"[AWAIT_DEBUG] send_command_async command={command}", file=sys.stderr, flush=True)
+            if command == "await":
+                # Initial response from server for await command
+                initial_response: dict[str, Any] = {}
+                deadline = asyncio.get_event_loop().time() + timeout
+
+                while True:
+                    remaining_time = deadline - asyncio.get_event_loop().time()
+                    if remaining_time <= 0:
+                        return {"ok": False, "error": "timeout_await_initial_response"}
+
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=remaining_time)
+                        msg = json.loads(raw)
+                        if msg.get("type") == "response" and msg.get("request_id") == req_id:
+                            initial_response = msg.get("payload", {})
+                            break
+                    except asyncio.TimeoutError:
+                        continue # Keep waiting for the initial response
+                    except Exception:
+                        return {"ok": False, "error": f"Error during initial await response: {msg}"}
+
+                log_event(tool='ws_client', message=f"await initial_response ok={initial_response.get('ok')}, pending={initial_response.get('pending')}", task_id='await_debug')
+                if initial_response.get("ok") == "pending":
+                    # Server indicated pending tasks, client needs to listen for events
+                    all_results = initial_response.get("completed", {})
+                    pending_task_ids = set(initial_response.get("pending", []))
+                    include_reports = payload.get("include_reports", False)
+
+                    while pending_task_ids:
+                        remaining_time = deadline - asyncio.get_event_loop().time()
+                        if remaining_time <= 0:
+                            for tid in pending_task_ids:
+                                all_results[tid] = {"status": "timeout", "report_path": None, "usage": {}}
+                            return {"ok": False, "error": "timeout", "tasks": all_results}
+
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=remaining_time)
+                            msg = json.loads(raw)
+
+                            if msg.get("type") == "event":
+                                event_data = msg.get("event", {})
+                                if event_data.get("type") == "complete":
+                                    tid = event_data.get("task_id")
+                                    if tid in pending_task_ids:
+                                        event_payload = event_data.get("payload", {})
+                                        result = {
+                                            "status": event_payload.get("status", "unknown"),
+                                            "report_path": event_payload.get("report_path"),
+                                            "usage": event_payload.get("usage", {}),
+                                        }
+                                        if include_reports and event_payload.get("report_path"):
+                                            content = _read_report_content(event_payload["report_path"])
+                                            if content:
+                                                result["report"] = content
+                                        all_results[tid] = result
+                                        pending_task_ids.discard(tid)
+
+                        except asyncio.TimeoutError:
+                            continue # Just keep waiting, deadline check handles overall timeout
+                        except Exception as e:
+                            # Log error but don't stop waiting for other tasks
+                            log_event(tool='ws_client', message=f"Error receiving await event: {e}", task_id='await_command')
+
+                    # All tasks are completed or timed out by now
+                    final_ok = all(r.get("status") in ("completed", "SUCCESS") for r in all_results.values())
+                    return {"ok": final_ok, "tasks": all_results}
+                else:
+                    # Server returned final results directly (no pending)
+                    return initial_response
+            else:
+                # Original logic for non-await commands
+                deadline = asyncio.get_event_loop().time() + timeout
+                while True:
+                    remaining = deadline - asyncio.get_event_loop().time()
+                    if remaining <= 0:
+                        return {"ok": False, "error": "timeout"}
+                    raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                    msg = json.loads(raw)
+                    if msg.get("type") == "response" and msg.get("request_id") == req_id:
+                        return msg.get("payload", {})
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

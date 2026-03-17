@@ -134,8 +134,24 @@ def register(mcp):
     @mcp.tool()
     async def rome_health() -> str:
         """Check availability of all worker CLIs and core files."""
+        import httpx
         capabilities = {}
         checks = {}
+
+        # Check daemon HTTP health endpoint
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get("http://127.0.0.1:8741/health")
+                if resp.status_code == 200:
+                    health = resp.json()
+                    checks["daemon"] = "OK"
+                    checks["daemon_uptime"] = f"{health.get('uptime_s', 0):.0f}s"
+                    checks["daemon_active_tasks"] = health.get("active_tasks", 0)
+                    checks["daemon_version"] = health.get("version", "?")
+                else:
+                    checks["daemon"] = f"HTTP {resp.status_code}"
+        except Exception:
+            checks["daemon"] = "OFFLINE"
 
         # Check Arsenal
         try:

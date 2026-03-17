@@ -1,5 +1,6 @@
 """Tests for ROME dictator modules — direct function calls, no framework gymnastics."""
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -10,9 +11,35 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dictator.core import run_cmd
-from dictator.tools_fs import fs_read, fs_write, read_anywhere, write_anywhere, list_directory
-from dictator.tools_legion import _execute_legion_impl, execute_campaign
+from mcp.server.fastmcp import FastMCP
+from dictator import tools_fs, tools_legion
 from legions.legion_wrapper import parse_rome_signals, parse_usage
+
+
+@pytest.fixture
+def authed_mcp_fixture():
+    """Returns a FastMCP instance with dictator tools registered."""
+    loop = asyncio.get_event_loop()
+    _mcp = FastMCP("test_dictator")
+    tools_fs.register(_mcp)
+    tools_legion.register(_mcp)
+
+    tool_info_list = loop.run_until_complete(_mcp.list_tools())
+    tool_names = [tool.name for tool in tool_info_list]
+
+    class AuthedMCPWrapper:
+        def __getattr__(self, name):
+            if name in tool_names:
+                def tool_callable(**kwargs):
+                    # Extract 'ctx' if it exists in kwargs and pass it as context to call_tool
+                    ctx_arg = kwargs.pop("ctx", None)
+                    return loop.run_until_complete(_mcp.call_tool(name, kwargs, context=ctx_arg))
+                return tool_callable
+            
+            # Fallback to original attribute if not a registered tool
+            return getattr(_mcp, name)
+            
+    return AuthedMCPWrapper()
 
 
 # ── run_cmd ────────────────────────────────────────────────────────────
@@ -33,38 +60,43 @@ async def test_run_cmd_failing():
 # ── fs_read / fs_write round-trip ──────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_fs_read_write_roundtrip(tmp_path, monkeypatch):
+async def test_fs_read_write_roundtrip(tmp_path, monkeypatch, authed_mcp_fixture):
     """Round-trip through fs_write → fs_read using a temp ROOT_DIR."""
-    import dictator.tools_fs as fs_mod
-    monkeypatch.setattr(fs_mod, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(tools_fs, "ROOT_DIR", tmp_path)
 
-    result = await fs_write("test.txt", "imperial data")
+    result_obj = await authed_mcp_fixture.call_tool("fs_write", {"path": "test.txt", "content": "imperial data"})
+    result = result_obj[0][0].text if result_obj and result_obj[0] and hasattr(result_obj[0][0], 'text') else str(result_obj)
     assert "imperial data" not in json.dumps({"err": True})  # no error
     assert "Wrote" in result
 
-    content = await fs_read("test.txt")
+    content_obj = await authed_mcp_fixture.call_tool("fs_read", {"path": "test.txt"})
+    content = content_obj[0][0].text if content_obj and content_obj[0] and hasattr(content_obj[0][0], 'text') else str(content_obj)
+    # Remove the [ROME: lines ...] prefix
+    if content.startswith("[ROME: lines"):
+        content = content.split('\n', 1)[1] if '\n' in content else ''
     assert content == "imperial data"
 
 
 # ── path traversal guard ──────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_fs_read_path_traversal(tmp_path, monkeypatch):
-    import dictator.tools_fs as fs_mod
-    monkeypatch.setattr(fs_mod, "ROOT_DIR", tmp_path)
+async def test_fs_read_path_traversal(tmp_path, monkeypatch, authed_mcp_fixture):
+    """Refactor test_fs_read_path_traversal to directly use `authed_mcp_fixture` for tool calls, removing the intermediate `authed_mcp` variable."""
+    monkeypatch.setattr(tools_fs, "ROOT_DIR", tmp_path)
 
-    result = await fs_read("../../etc/passwd")
+    result_obj = await authed_mcp_fixture.call_tool("fs_read", {"path": "../../etc/passwd"})
+    result = result_obj[0][0].text if result_obj and result_obj[0] and hasattr(result_obj[0][0], 'text') else str(result_obj)
     parsed = json.loads(result)
     assert parsed["ok"] is False
     assert "escapes" in parsed["message"]
 
 
 @pytest.mark.asyncio
-async def test_fs_write_path_traversal(tmp_path, monkeypatch):
-    import dictator.tools_fs as fs_mod
-    monkeypatch.setattr(fs_mod, "ROOT_DIR", tmp_path)
+async def test_fs_write_path_traversal(tmp_path, monkeypatch, authed_mcp_fixture):
+    monkeypatch.setattr(tools_fs, "ROOT_DIR", tmp_path)
 
-    result = await fs_write("../../tmp/evil.txt", "nope")
+    result_obj = await authed_mcp_fixture.call_tool("fs_write", {"path": "../../tmp/evil.txt", "content": "nope"})
+    result = result_obj[0][0].text if result_obj and result_obj[0] and hasattr(result_obj[0][0], 'text') else str(result_obj)
     parsed = json.loads(result)
     assert parsed["ok"] is False
     assert "escapes" in parsed["message"]
@@ -73,20 +105,26 @@ async def test_fs_write_path_traversal(tmp_path, monkeypatch):
 # ── read_anywhere / write_anywhere round-trip ─────────────────────────
 
 @pytest.mark.asyncio
-async def test_read_write_anywhere_roundtrip(tmp_path):
+async def test_read_write_anywhere_roundtrip(tmp_path, authed_mcp_fixture):
     target = str(tmp_path / "anywhere.txt")
-    r = await write_anywhere(target, "absolute power")
+    r_obj = await authed_mcp_fixture.call_tool("write_anywhere", {"path": target, "content": "absolute power"})
+    r = r_obj[0][0].text if r_obj and r_obj[0] and hasattr(r_obj[0][0], 'text') else str(r_obj)
     assert r.startswith("OK:")
 
-    content = await read_anywhere(target)
+    content_obj = await authed_mcp_fixture.call_tool("read_anywhere", {"path": target})
+    content = content_obj[0][0].text if content_obj and content_obj[0] and hasattr(content_obj[0][0], 'text') else str(content_obj)
+    # Remove the [ROME: lines ...] prefix
+    if content.startswith("[ROME: lines"):
+        content = content.split('\n', 1)[1] if '\n' in content else ''
     assert content == "absolute power"
 
 
 # ── list_directory ────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_list_directory():
-    r = json.loads(await list_directory("/tmp"))
+async def test_list_directory(authed_mcp_fixture):
+    r_obj = await authed_mcp_fixture.call_tool("list_directory", {"dir_path": "/tmp"})
+    r = json.loads(r_obj[0][0].text if r_obj and r_obj[0] and hasattr(r_obj[0][0], 'text') else str(r_obj))
     assert r["ok"] is True
     assert isinstance(r["entries"], list)
 
@@ -95,7 +133,7 @@ async def test_list_directory():
 
 @pytest.mark.asyncio
 async def test_execute_legion_invalid_capability():
-    r = await _execute_legion_impl(
+    r = await tools_legion._execute_legion_impl(
         task_id="TEST_INVALID",
         capability="NONEXISTENT",
         args=["echo", "hi"],
@@ -108,8 +146,9 @@ async def test_execute_legion_invalid_capability():
 # ── execute_campaign empty ────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_execute_campaign_empty():
-    r = await execute_campaign(ctx=None, campaign_id="EMPTY_TEST", tasks=[])
+async def test_execute_campaign_empty(authed_mcp_fixture):
+    r_obj = await authed_mcp_fixture.call_tool("execute_campaign", {"ctx": None, "campaign_id": "EMPTY_TEST", "tasks": []})
+    r = r_obj[0][0].text if r_obj and r_obj[0] and hasattr(r_obj[0][0], 'text') else str(r_obj)
     assert "Campaign: EMPTY_TEST" in r
     assert "0/0 succeeded" in r
 

@@ -71,9 +71,17 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 
 - All daemon communication is pure WebSocket. No HTTP API routes (`/api/*` returns 404).
 - `ws_client.py` uses `open_timeout=30` on all `websockets.connect()` calls (prevents handshake timeout under load).
+- **Push-based await**: `handle_await` returns immediately with completed + pending lists. Client holds WS open and receives `complete` events via `relay_events`. No polling.
 - `reset` command clears all tasks in the registry including REGISTERED zombies.
 - RUNNING dashboard counter excludes REGISTERED state (only counts truly running tasks).
 - Heartbeat every 10–15s.
+- **Daemon managed by systemd**: `rome-daemon.service` (user unit). Restart via `systemctl --user restart rome-daemon`. MCP server (`asshole.py`) is separate process — needs `/mcp` reconnect after code changes.
+
+## Campaign Templates
+
+- **`campaigns/`** — YAML-defined task pipelines. `loader.py` reads any YAML, dispatches via WS, awaits results.
+- **Format**: `name`, `tasks[]` with `id`, `capability`, `prompt`, `input_files`, `depends_on`.
+- **Usage**: `python3 campaigns/loader.py campaigns/example.yaml` — or dispatch a GEMINI worker to run a campaign by name.
 
 ## Prefect Agents
 

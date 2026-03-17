@@ -558,7 +558,8 @@
           </div>
           <div class="stat">
             <div class="stat-label">Tokens</div>
-            <div class="stat-value" id="totalTokens">0</div>
+            <div class="stat-value" id="totalTokens" style="font-size:1.1rem">0</div>
+            <div style="font-size:0.7rem;color:var(--text-dim);margin-top:2px"><span id="workerTokensLabel">0</span> workers / <span id="dictatorTokensLabel">0</span> dictator</div>
           </div>
         </div>
       </section>
@@ -604,6 +605,8 @@
         const runningTasksEl = document.getElementById("runningTasks");
         const eventCountEl = document.getElementById("eventCount");
         const totalTokensEl = document.getElementById("totalTokens");
+        const sessionTokensEl = document.getElementById("sessionTokens");
+        const sessionTokensProgressBar = document.getElementById("sessionTokensProgressBar");
         const capabilitiesStripEl = document.getElementById("capabilitiesStrip");
 
         const logPanel = document.getElementById("logPanel");
@@ -623,7 +626,7 @@
           clockTimer: null,
           requestId: 0,
           eventsSeen: 0,
-          sessionWasteTokens: 0,
+          dictatorTokens: 0,
           workerTokens: 0,
           daemonStatus: null,
           tasks: new Map(),
@@ -875,6 +878,13 @@
             return;
           }
 
+          if (type === "dictator_waste") {
+            const usage = payload.usage || {};
+            state.dictatorTokens += Number(usage.total_tokens || 0);
+            renderStats();
+            return;
+          }
+
           if (!taskId) {
             if (shouldLogEvent(type)) {
               addLog(type, "-", JSON.stringify(payload), ts);
@@ -948,7 +958,12 @@
             return;
           }
 
-          cardsEl.innerHTML = tasks.map(function (task) {
+          cardsEl.innerHTML = tasks
+            .filter(function(task) {
+              const status = (task.status || "").toLowerCase();
+              return status !== "expired";
+            })
+            .map(function (task) {
             const status = canonicalStatus(task.status);
             const percent = Math.max(0, Math.min(100, Number(task.progress_percent) || 0));
             const usageBits = formatUsage(task.usage);
@@ -1017,7 +1032,11 @@
           totalTasksEl.textContent = String(tasks.length);
           runningTasksEl.textContent = String(running);
           eventCountEl.textContent = String(state.eventsSeen);
-          totalTokensEl.textContent = formatNumber(state.workerTokens || 0);
+          const workerTok = state.workerTokens || 0;
+          const dictatorTok = state.dictatorTokens || 0;
+          totalTokensEl.textContent = formatNumber(workerTok + dictatorTok);
+          document.getElementById("workerTokensLabel").textContent = formatNumber(workerTok);
+          document.getElementById("dictatorTokensLabel").textContent = formatNumber(dictatorTok);
           if (logHeaderCount) logHeaderCount.textContent = String(state.eventsSeen);
           }
 
@@ -1131,7 +1150,7 @@
                   addLog("snapshot", "-", Object.keys(data.payload.tasks).length + " tasks", Date.now() / 1000);
                 }
                 if (data.payload.session_waste_tokens !== undefined) {
-                  state.sessionWasteTokens = Number(data.payload.session_waste_tokens);
+                  state.dictatorTokens = Number(data.payload.session_waste_tokens);
                 }
                 renderStats(); // Ensure stats are updated after processing initial state
               } else if (!data.ok) {

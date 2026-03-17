@@ -15,7 +15,6 @@
 ## Dashboard Features
 
 - [ ] **Cost widget** — show cumulative session cost on dashboard. `rome_costs` data exists; needs a `cost_update` event listener + display widget.
-- [ ] **Failed task retry button** — "Retry" button on FAILED cards sends WS `dispatch` command to re-run.
 - [ ] **Campaign fan-out view** — group child tasks under parent campaign; show aggregate campaign progress.
 - [ ] **Task output viewer** — click task card to view report file contents inline via WS `read_report` command.
 - [ ] **Historical persistence** — hydrate TaskRegistry from `logs/rome.jsonl` on startup so history survives restarts.

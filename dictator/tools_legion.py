@@ -29,23 +29,17 @@ CACHE_TTL = 3600  # 1 hour
 MAX_OUTPUT_CHARS = 2000
 
 def _extract_mcp_usage(ctx: Context | None) -> dict | None:
+    """Extract usage dict from FastMCP's internal state, if available."""
     if not ctx:
         return None
-    actual_usage = None
-    if hasattr(ctx, "usage"):
-        actual_usage = getattr(ctx, "usage")
-    elif hasattr(ctx, "meta") and isinstance(getattr(ctx, "meta"), dict):
-        actual_usage = getattr(ctx, "meta").get("usage")
-    elif hasattr(ctx, "request_context") and ctx.request_context:
-        meta = getattr(ctx.request_context, "meta", None)
-        if meta:
-            if hasattr(meta, "model_extra") and meta.model_extra:
-                actual_usage = meta.model_extra.get("usage")
-            elif hasattr(meta, "usage"):
-                actual_usage = getattr(meta, "usage")
-            elif isinstance(meta, dict):
-                actual_usage = meta.get("usage")
-    return actual_usage
+    
+    # Prioritize last_tool_usage if present
+    if hasattr(ctx, "last_tool_usage") and getattr(ctx, "last_tool_usage") is not None:
+        return getattr(ctx, "last_tool_usage")
+
+    # For testing outside of a request context, return None.
+    # Otherwise, FastMCP's internal Context object might raise ValueError.
+    return None
 
 class OrchestratorUI:
     def __init__(self, task_ids):
