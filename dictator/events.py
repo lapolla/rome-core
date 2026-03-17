@@ -247,6 +247,8 @@ class TaskRegistry:
             task["progress_percent"] = 100.0
             task["report_path"] = report_path
             task["updated_at"] = time.time()
+            if status == "completed":
+                task["completed_at"] = time.time()
             return self._snapshot(task)
 
     def get(self, task_id: str) -> dict[str, Any] | None:

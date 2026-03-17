@@ -34,8 +34,9 @@ def shell_executor():
 
     task_id = sys.argv[1]
 
-    if send_event:
-        send_event("dispatch_start", task_id, {"capability": "SAFE_SHELL"})
+    # NOTE: dispatch_start is already emitted by _dispatch_runner in ws_server.py.
+    # Do NOT send it again here — it calls task_registry.register() which resets
+    # the task status back to "registered", clobbering the daemon's state.
 
     try:
         global_start_timestamp = float(sys.argv[2])
@@ -44,7 +45,7 @@ def shell_executor():
     
     bash_command = sys.argv[3]
 
-    shell_timeout = float(os.environ.get('SHELL_TIMEOUT', 60))
+    shell_timeout = float(os.environ.get('SHELL_TIMEOUT', 600))
 
     # task_dir = /home/paul-kane/projects/rome-core/legions/<task_id>/ — create if needed
     base_dir = "/home/paul-kane/projects/rome-core/legions"

@@ -584,27 +584,19 @@ async def _execute_legion_impl(
             pass
 
     if capability == "SAFE_SHELL":
-        import subprocess as _sp, time as _time2, json as _json2
-        from pathlib import Path as _Path2
+        import subprocess as _sp, time as _time2
         task_dir2 = ROME_ROOT / "legions" / task_id
         task_dir2.mkdir(parents=True, exist_ok=True)
-        # Get the actual shell command from args
         shell_cmd = args[0] if args else ""
         shell_script = str(Path(__file__).parent.parent / "legions" / "shell_executor.py")
-        import asyncio as _asyncio
-        proc = await _asyncio.to_thread(
-            _sp.run,
+        # Fire and forget — shell_executor sends completion event via WS
+        _sp.Popen(
             ["python3", shell_script, task_id, str(_time2.time()), shell_cmd],
-            capture_output=True, text=True, timeout=70
+            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            start_new_session=True,
         )
-        report_path = task_dir2 / f"report_{task_id}.txt"
-        summary_lines = [l for l in proc.stdout.strip().splitlines() if not l.startswith("PROGRESS:")]
-        shell_ok = proc.returncode == 0
-        r = {"ok": shell_ok, "status": "SUCCESS" if shell_ok else "FAILED",
-             "report_path": str(report_path), "summary": "\n".join(summary_lines[-3:]),
-             "elapsed_s": _time.monotonic() - t0}
-        await _emit_events(shell_ok, task_id, task_dir2, r, None)
-        return r
+        return {"ok": True, "status": "DISPATCHED", "task_id": task_id,
+                "message": "SAFE_SHELL launched — completion via EventBus"}
 
     cap_args = " ".join(cap.get("args", []))
     # Capabilities using -p take exactly ONE prompt string; collapse multi-arg lists to avoid

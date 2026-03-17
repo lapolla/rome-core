@@ -20,16 +20,18 @@ def register(mcp):
         return json.dumps(result)
 
     @mcp.tool()
-    async def rome_await(task_ids: list[str], timeout: float = 120.0, include_reports: bool = False) -> str:
+    async def rome_await(task_ids: list[str], timeout: float = 120.0, include_reports: bool = False, summarize: bool = False) -> str:
         """
         Block until all specified tasks complete. Event-driven — no polling.
         Returns status + optional report content for each task.
-        Uses the daemon's EventBus internally (subscribe → filter complete events → resolve).
+        summarize=True runs reports through Gemini Flash for a 3-5 bullet digest (saves tokens).
         """
         result = await send_command_async("await", {
             "task_ids": task_ids,
             "include_reports": include_reports,
-        }, timeout=timeout)
+            "summarize": summarize,
+            "timeout": timeout,
+        }, timeout=timeout + 5)  # WS timeout slightly longer than await timeout
         return json.dumps(result)
 
     @mcp.tool()

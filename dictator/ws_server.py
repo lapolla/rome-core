@@ -16,6 +16,46 @@ from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_dis
 from dictator.tools_legion import _execute_legion_impl
 
 CONFIG_PATH = Path(ROME_ROOT) / "dictator" / "config.json"
+GEMINI_CLI = "/home/paul-kane/.nvm/versions/node/v20.20.0/bin/gemini"
+
+
+async def _summarize_report(content: str, max_input_lines: int = 200) -> str:
+    """Summarize a report via Gemini Flash. Returns digest or original on failure."""
+    lines = content.splitlines()
+    if len(lines) > max_input_lines:
+        # Keep first 150 + last 50 lines
+        truncated = lines[:150] + ["", f"... ({len(lines) - 200} lines omitted) ...", ""] + lines[-50:]
+        content = "\n".join(truncated)
+
+    prompt = (
+        "Summarize this task report in 3-5 bullet points. "
+        "Flag any errors or failures prominently. "
+        "Be extremely concise — no preamble, no markdown headers.\n\n"
+        f"```\n{content}\n```"
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            GEMINI_CLI, "-p", prompt,
+            "--output-format", "json", "--sandbox", "false",
+            "-m", "gemini-3.1-pro-preview",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        import logging
+        if proc.returncode == 0 and stdout:
+            raw = stdout.decode()
+            # Gemini CLI may prepend non-JSON warnings — find first '{'
+            json_start = raw.find("{")
+            if json_start >= 0:
+                data = json.loads(raw[json_start:])
+                return data.get("response", content[:500])
+    except Exception:
+        pass
+    # Fallback: head/tail truncation
+    if len(lines) > 20:
+        return "\n".join(lines[:15] + [f"... ({len(lines) - 20} lines omitted) ..."] + lines[-5:])
+    return content
 
 def _load_config_token() -> str:
     try:
@@ -211,6 +251,13 @@ async def _dispatch_runner(
                 if total_tokens is not None:
                     task_registry.add_waste(total_tokens)
 
+        # SAFE_SHELL fires shell_executor.py as a detached subprocess and returns
+        # immediately with status="DISPATCHED".  The shell_executor owns the
+        # completion lifecycle — it sends a "complete" event via WS when done.
+        # Do NOT mark it completed here or the task will briefly flash "completed"
+        # before shell_executor has even started.
+        is_fire_and_forget = result.get("status") == "DISPATCHED"
+
         status = "completed" if result.get("ok") else "failed"
         report_path = result.get("report_path")
         if output_path and report_path:
@@ -221,7 +268,7 @@ async def _dispatch_runner(
             if rp.exists() and rp.stat().st_size > 20:
                 if not (op.exists() and op.stat().st_size > 0):
                     shutil.copy2(str(rp), str(op))
-        if os.environ.get("ROME_DAEMON"):
+        if os.environ.get("ROME_DAEMON") and not is_fire_and_forget:
             task_registry.complete(task_id, status, report_path)
             await emit_complete(event_bus, task_id, status, report_path, usage)
         if not result.get("ok"):
@@ -351,9 +398,11 @@ async def handle_read_report(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return status of requested tasks, indicating any pending tasks."""
+    """Block until all specified tasks complete. Event-driven via EventBus."""
     task_ids = payload.get("task_ids", [])
     include_reports = payload.get("include_reports", False)
+    summarize = payload.get("summarize", False)
+    timeout = float(payload.get("timeout", 120))
 
     if not task_ids:
         raise ValueError("payload.task_ids is required (non-empty list)")
@@ -361,27 +410,72 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
     pending = set(task_ids)
     results: dict[str, dict[str, Any]] = {}
 
+    def _collect_completed(tid: str, task: dict[str, Any]) -> None:
+        status = task.get("status", "")
+        # Normalize SUCCESS/OK from shell_executor to "completed"
+        normalized = "completed" if status.upper() in ("SUCCESS", "OK", "COMPLETED") else status
+        results[tid] = {
+            "status": normalized,
+            "report_path": task.get("report_path"),
+            "usage": task.get("usage", {}),
+        }
+        if include_reports and task.get("report_path"):
+            content = _read_report_content(task["report_path"])
+            if content:
+                results[tid]["report"] = content
+        pending.discard(tid)
+
     # Phase 1: Check already-completed tasks in registry
     for tid in list(pending):
         task = task_registry.get(tid)
-        if task and task.get("status") in ("completed", "failed", "cancelled"):
-            results[tid] = {
-                "status": task["status"],
-                "report_path": task.get("report_path"),
-                "usage": task.get("usage", {}),
-            }
-            if include_reports and task.get("report_path"):
-                content = _read_report_content(task["report_path"])
-                if content:
-                    results[tid]["report"] = content
-            pending.discard(tid)
+        if task and task.get("status", "").upper() in ("COMPLETED", "FAILED", "CANCELLED", "SUCCESS", "OK"):
+            _collect_completed(tid, task)
 
     if not pending:
+        # Summarize before returning
+        if summarize:
+            for tid, r in results.items():
+                report = r.get("report")
+                if report and len(report) > 500:
+                    r["report"] = await _summarize_report(report)
         all_ok = all(r.get("status") in ("completed", "SUCCESS") for r in results.values())
         return {"ok": all_ok, "tasks": results}
-    else:
-        # If pending remain, return immediately with current state
-        return {"ok": "pending", "completed": results, "pending": list(pending)}
+
+    # Phase 2: Subscribe to EventBus and wait for remaining tasks
+    sub_id, queue = await event_bus.subscribe()
+    try:
+        deadline = asyncio.get_event_loop().time() + timeout
+        while pending:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                break
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                break
+            if event.type == "complete" and event.task_id in pending:
+                task = task_registry.get(event.task_id)
+                if task:
+                    _collect_completed(event.task_id, task)
+                else:
+                    # Fallback: use event payload directly
+                    _collect_completed(event.task_id, event.payload)
+    finally:
+        await event_bus.unsubscribe(sub_id)
+
+    # Any still-pending tasks are timeouts
+    for tid in list(pending):
+        results[tid] = {"status": "timeout", "report_path": None, "usage": {}}
+
+    # Summarize reports via Gemini if requested
+    if summarize:
+        for tid, r in results.items():
+            report = r.get("report")
+            if report and len(report) > 500:
+                r["report"] = await _summarize_report(report)
+
+    all_ok = all(r.get("status") in ("completed", "SUCCESS") for r in results.values())
+    return {"ok": all_ok if not pending else False, "tasks": results}
 
 
 async def handle_reset(_: dict[str, Any]) -> dict[str, Any]:
