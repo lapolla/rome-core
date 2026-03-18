@@ -1,9 +1,38 @@
 """Filesystem tools: shell_exec, fs_read, fs_write, read_anywhere, write_anywhere, list_directory."""
 
+import asyncio
 import json
+import sys
 from pathlib import Path
 
 from dictator.core import run_cmd, ROOT_DIR
+
+
+def _debug(msg: str):
+    print(f"[TOOLS_FS] {msg}", file=sys.stderr, flush=True)
+
+
+async def _gemini_summarize(content: str, instruction: str, timeout: int = 15) -> str | None:
+    """Quick Gemini Flash summarization. Returns summary or None on failure."""
+    GEMINI_CLI = "/home/paul-kane/.nvm/versions/node/v20.20.0/bin/gemini"
+    prompt = f"{instruction}\n\n```\n{content[:8000]}\n```"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            GEMINI_CLI, "-p", prompt,
+            "--sandbox", "false",
+            "-m", "gemini-2.5-flash",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        _debug(f"gemini_summarize: rc={proc.returncode}, stdout_len={len(stdout)}, stderr={stderr.decode()[:200]}")
+        if proc.returncode == 0 and stdout:
+            return stdout.decode().strip()
+    except asyncio.TimeoutError:
+        _debug("gemini_summarize: TIMEOUT")
+    except Exception as e:
+        _debug(f"gemini_summarize: {type(e).__name__}: {e}")
+    return None
 
 
 def register(mcp):
@@ -25,6 +54,26 @@ def register(mcp):
             err = r.get("stderr", r.get("message", ""))
             exit_code = r.get("exit_code", "?")
             return f"ERR({exit_code}): {err}" if err else f"ERR({exit_code})"
+
+        lines = out.splitlines()
+        n = len(lines)
+
+        # Compact: first 20 + last 10 lines if output is large
+        if n > 40:
+            trimmed = lines[:20] + [f"... ({n - 30} lines omitted) ..."] + lines[-10:]
+            out = "\n".join(trimmed)
+
+        # Smart summarize: large successful output gets Gemini digest
+        if n > 20:
+            summary = await _gemini_summarize(
+                out,
+                "Summarize this command output in 1-3 lines. "
+                "Include: success/failure, key numbers (files compiled, tests passed, etc), "
+                "any errors or warnings. Be extremely concise."
+            )
+            if summary:
+                return f"[OK] {n} lines — {summary}"
+
         return out if out else "OK"
 
     @mcp.tool()
@@ -63,16 +112,76 @@ def register(mcp):
 
     @mcp.tool()
     async def read_anywhere(path: str, start_line: int = 1, end_line: int | None = None) -> str:
-        """Read a file by absolute path (1-indexed, inclusive)."""
+        """Read a file by absolute path (1-indexed, inclusive).
+        start_line=0 returns structural overview (functions, classes, imports) without full content."""
         p = Path(path).resolve()
         try:
-            lines = p.read_text(encoding="utf-8").splitlines()
+            text = p.read_text(encoding="utf-8")
+            lines = text.splitlines(keepends=True)
             total = len(lines)
-            start = max(0, start_line - 1)
-            end = end_line if end_line is not None else total
-            content = "\n".join(lines[start:end])
-            header = f"[ROME: lines {start+1}-{min(end, total)} of {total}]\n"
-            return header + content
+
+            # Overview mode: structural summary without full content
+            if start_line == 0:
+                import re
+                ext = p.suffix.lower()
+                outline = [f"[ROME: overview of {p.name} — {total} lines]"]
+
+                if ext in (".py", ".pyx"):
+                    for i, line in enumerate(lines, 1):
+                        stripped = line.strip()
+                        if stripped.startswith(("def ", "async def ", "class ")):
+                            outline.append(f"  {i}: {stripped.split('(')[0].split(':')[0]}")
+                        elif stripped.startswith(("import ", "from ")):
+                            outline.append(f"  {i}: {stripped}")
+                elif ext in (".cpp", ".h", ".hpp", ".c"):
+                    for i, line in enumerate(lines, 1):
+                        stripped = line.strip()
+                        if re.match(r"^(class |struct |namespace |void |bool |int |auto |static |inline |template)", stripped):
+                            outline.append(f"  {i}: {stripped[:80]}")
+                        elif stripped.startswith("#include"):
+                            outline.append(f"  {i}: {stripped}")
+                elif ext in (".js", ".ts", ".mjs", ".tsx"):
+                    for i, line in enumerate(lines, 1):
+                        stripped = line.strip()
+                        if re.match(r"^(export |function |class |const |async function|import )", stripped):
+                            outline.append(f"  {i}: {stripped[:80]}")
+                elif ext in (".json", ".yaml", ".yml", ".toml"):
+                    if total <= 50:
+                        outline.append("".join(lines))
+                    else:
+                        outline.append("".join(lines[:30]))
+                        outline.append(f"  ... ({total - 40} lines omitted) ...")
+                        outline.append("".join(lines[-10:]))
+                else:
+                    if total <= 40:
+                        outline.append("".join(lines))
+                    else:
+                        outline.append("".join(lines[:20]))
+                        outline.append(f"  ... ({total - 30} lines omitted) ...")
+                        outline.append("".join(lines[-10:]))
+
+                return "\n".join(outline)
+
+            s = max(1, start_line) - 1
+            e = min(total, end_line) if end_line else total
+            selected = lines[s:e]
+            num_selected = e - s
+
+            # Smart summarize: full-file reads of large files get Gemini digest
+            if start_line == 1 and end_line is None and num_selected > 100:
+                _debug(f"read_anywhere: triggering summarize for {p.name} ({num_selected} lines)")
+                summary = await _gemini_summarize(
+                    "".join(selected),
+                    f"Summarize this {p.suffix} file ({total} lines) in 5-10 bullet points. "
+                    "List key functions/classes/structures with line numbers. "
+                    "Flag anything unusual. Be extremely concise — no preamble."
+                )
+                if summary:
+                    return f"[ROME: AI summary of {p.name} — {total} lines]\n{summary}"
+                _debug("read_anywhere: summarize returned None, falling back to raw")
+
+            header = f"[ROME: lines {s+1}-{e} of {total}]\n"
+            return header + "".join(selected)
         except Exception as e:
             return f"ERR: {e}"
 
