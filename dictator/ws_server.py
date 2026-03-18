@@ -81,20 +81,13 @@ async def _load_capabilities() -> dict[str, bool]:
 
         with open(ARSENAL_PATH, "r", encoding="utf-8") as f:
             arsenal_config = json.load(f)
+        import shutil
         for capability_name, details in arsenal_config.get("capabilities", {}).items():
-            binary = details.get("binary")
-            if binary:
-                # Check if the binary exists in PATH
-                proc = await asyncio.create_subprocess_exec(
-                    "which",
-                    binary,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, _ = await proc.communicate()
-                capabilities_status[capability_name] = proc.returncode == 0
+            exec_path = details.get("exec", "")
+            if exec_path:
+                capabilities_status[capability_name] = Path(exec_path).exists() or shutil.which(exec_path) is not None
             else:
-                capabilities_status[capability_name] = False # No binary specified
+                capabilities_status[capability_name] = False
     except FileNotFoundError:
         logging.getLogger("uvicorn.error").warning("Arsenal file not found at %s", ARSENAL_PATH)
     except json.JSONDecodeError:
@@ -467,8 +460,13 @@ async def handle_status(payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("summary"):
         tasks = task_registry.get_all()
         active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
+        caps = await _load_capabilities()
+        workers = await worker_registry.get_info()
         return {"ok": True, "active_tasks": active, "total_tasks": len(tasks),
-                "uptime_s": round(time.monotonic() - DAEMON_START_TIME, 3)}
+                "uptime_s": round(time.monotonic() - DAEMON_START_TIME, 3),
+                "capabilities": list(caps.keys()),
+                "capability_status": caps,
+                "workers": workers}
     task_id = str(payload.get("task_id") or "").strip()
     if task_id:
         task = task_registry.get(task_id)
@@ -608,11 +606,32 @@ async def handle_clear(_: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "cleared": task_registry.clear_finished()}
 
 
+
+
+async def handle_recent_events(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return tasks that changed since a given timestamp. Used by hooks for event injection."""
+    since = payload.get("since", time.time() - 30)  # default: last 30 seconds
+    tasks = task_registry.get_all()
+    recent = []
+    for tid, t in tasks.items():
+        if t.get("updated_at", 0) >= since:
+            status = t.get("status", "?")
+            cap = t.get("capability", "?")
+            if status in ("completed", "failed", "SUCCESS"):
+                recent.append(f"[{status.upper()}] {tid} ({cap})")
+            elif status == "running":
+                pct = t.get("progress_percent", 0)
+                msg = t.get("progress_message", "")
+                recent.append(f"[RUNNING] {tid} ({cap}) {pct:.0f}% {msg}")
+    return {"ok": True, "events": recent, "since": since}
+
 async def handle_get_state(payload: dict[str, Any]) -> dict[str, Any]:
     import time
     from dictator.core import DAEMON_START_TIME
     tasks = task_registry.get_all()
     active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
+    caps = await _load_capabilities()
+    workers = await worker_registry.get_info()
     return {
         "ok": True,
         "tasks": tasks,
@@ -621,6 +640,9 @@ async def handle_get_state(payload: dict[str, Any]) -> dict[str, Any]:
         "active_tasks": active,
         "total_tasks": len(tasks),
         "uptime_s": round(time.monotonic() - DAEMON_START_TIME, 3),
+        "capabilities": list(caps.keys()),
+        "capability_status": caps,
+        "workers": workers,
     }
 
 
@@ -727,6 +749,7 @@ async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
         "await": handle_await,
         "reset": handle_reset,
         "clear": handle_clear,
+        "recent_events": handle_recent_events,
         "event": handle_event,
         "submit_result": handle_submit_result,
         "dashboard_stats": handle_dashboard_stats,

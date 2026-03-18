@@ -348,10 +348,57 @@ async def drupal_fj_run(
 # ═══════════════════════════════════════════════════════════════════════
 @mcp.tool()
 async def read_anywhere(path: str, start_line: int = 1, end_line: int | None = None) -> str:
-    """Read a file by absolute path (1-indexed, inclusive)."""
+    """Read a file by absolute path (1-indexed, inclusive).
+    start_line=0 returns structural overview (functions, classes, imports) without full content."""
     p = Path(path).resolve()
-    lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+    text = p.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
     total = len(lines)
+
+    # Overview mode: structural summary without full content
+    if start_line == 0:
+        import re
+        ext = p.suffix.lower()
+        outline = [f"[ROME: overview of {p.name} — {total} lines]"]
+
+        if ext in (".py", ".pyx"):
+            for i, line in enumerate(lines, 1):
+                stripped = line.strip()
+                if stripped.startswith(("def ", "async def ", "class ")):
+                    outline.append(f"  {i}: {stripped.split('(')[0].split(':')[0]}")
+                elif stripped.startswith(("import ", "from ")):
+                    outline.append(f"  {i}: {stripped}")
+        elif ext in (".cpp", ".h", ".hpp", ".c"):
+            for i, line in enumerate(lines, 1):
+                stripped = line.strip()
+                if re.match(r"^(class |struct |namespace |void |bool |int |auto |static |inline |template)", stripped):
+                    outline.append(f"  {i}: {stripped[:80]}")
+                elif stripped.startswith("#include"):
+                    outline.append(f"  {i}: {stripped}")
+        elif ext in (".js", ".ts", ".mjs", ".tsx"):
+            for i, line in enumerate(lines, 1):
+                stripped = line.strip()
+                if re.match(r"^(export |function |class |const |async function|import )", stripped):
+                    outline.append(f"  {i}: {stripped[:80]}")
+        elif ext in (".json", ".yaml", ".yml", ".toml"):
+            # For config files, just return first 30 + last 10 lines
+            if total <= 50:
+                outline.append("".join(lines))
+            else:
+                outline.append("".join(lines[:30]))
+                outline.append(f"  ... ({total - 40} lines omitted) ...")
+                outline.append("".join(lines[-10:]))
+        else:
+            # Unknown type: first 20 + last 10
+            if total <= 40:
+                outline.append("".join(lines))
+            else:
+                outline.append("".join(lines[:20]))
+                outline.append(f"  ... ({total - 30} lines omitted) ...")
+                outline.append("".join(lines[-10:]))
+
+        return "\n".join(outline)
+
     s = max(1, start_line) - 1
     e = min(total, end_line) if end_line else total
     selected = lines[s:e]
