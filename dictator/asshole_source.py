@@ -141,7 +141,22 @@ async def fetch_mo2_mod(url: str, filename: str = "") -> str:
 async def shell_exec(command: str) -> str:
     """Execute a shell command (cwd = /var/www/ftk_lms)."""
     r = await run_cmd(command, cwd=ROOT_DIR)
-    return json.dumps(r, indent=2)
+    ok = r.get("ok", False)
+    stdout = r.get("stdout", "").strip()
+    stderr = r.get("stderr", "").strip()
+    lines = stdout.splitlines()
+    n = len(lines)
+    # Compact: first 20 + last 10 lines if output is large
+    if n > 40:
+        trimmed = lines[:20] + [f"... ({n - 30} lines omitted) ..."] + lines[-10:]
+        stdout = "\n".join(trimmed)
+    status = "OK" if ok else "ERR"
+    parts = [f"[{status}] {n} lines"]
+    if stdout:
+        parts.append(stdout)
+    if stderr:
+        parts.append(f"STDERR: {stderr[:500]}")
+    return "\n".join(parts)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -332,9 +347,16 @@ async def drupal_fj_run(
 # 13. read_anywhere
 # ═══════════════════════════════════════════════════════════════════════
 @mcp.tool()
-async def read_anywhere(path: str) -> str:
-    """Read a file by absolute path."""
-    return Path(path).resolve().read_text(encoding="utf-8")
+async def read_anywhere(path: str, start_line: int = 1, end_line: int | None = None) -> str:
+    """Read a file by absolute path (1-indexed, inclusive)."""
+    p = Path(path).resolve()
+    lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+    total = len(lines)
+    s = max(1, start_line) - 1
+    e = min(total, end_line) if end_line else total
+    selected = lines[s:e]
+    header = f"[ROME: lines {s+1}-{e} of {total}]\n"
+    return header + "".join(selected)
 
 
 # ═══════════════════════════════════════════════════════════════════════

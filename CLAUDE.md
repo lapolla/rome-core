@@ -67,6 +67,13 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 - **Auto GC**: `auto_gc()` fires on every MCP server startup — runs `gc_legions` + `reset_tasks` to clear zombie tasks.
 - **Centurion Hierarchy**: CENTURION capability dispatches CODEX/OPENCODE as sub-legionnaires within its session.
 
+
+## Context Diet (MCP Tool Output Compaction)
+
+- **`read_anywhere`**: Returns `[ROME: lines X-Y of N]` header + requested range only. Supports `start_line`/`end_line` params (1-indexed, inclusive). No more full-file dumps into Claude context.
+- **`shell_exec`**: Returns `[OK/ERR] N lines` + trimmed output (first 20 + last 10 lines if >40). Stderr capped at 500 chars.
+- **Claude Code hook**: PreToolUse hook (`~/.claude/hooks/block_builtin_io.sh`) blocks built-in Read/Bash/Grep/Glob — forces all I/O through MCP compact tools.
+- **Principle**: Full data stays on disk. Only summaries and targeted excerpts enter the context window.
 ## WS Protocol Notes
 
 - All daemon communication is pure WebSocket. No HTTP API routes (`/api/*` returns 404).
