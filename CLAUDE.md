@@ -39,7 +39,7 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 - **`tools_stats`**: rome_tail (optionally filters by task_id), rome_costs, rome_health, rome_find, senate_query, senate_brain
 - **`tools_prefect`**: execute_prefect
 - **`tools_docs`**: update_project_docs
-- **`tools_ws`**: ws_send, rome_await, rome_submit_result
+- **`tools_ws`**: ws_send, rome_await, rome_submit_result, rome_events
 
 ## ROME Protocol Rules (v2.5)
 
@@ -73,6 +73,7 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 - **`read_anywhere`**: Returns `[ROME: lines X-Y of N]` header + requested range only. Supports `start_line`/`end_line` params (1-indexed, inclusive). No more full-file dumps into Claude context.
 - **`shell_exec`**: Returns `[OK/ERR] N lines` + trimmed output (first 20 + last 10 lines if >40). Stderr capped at 500 chars.
 - **Claude Code hook**: PreToolUse hook (`~/.claude/hooks/block_builtin_io.sh`) blocks built-in Read/Bash/Grep/Glob — forces all I/O through MCP compact tools.
+- **`rome_events`**: Drains buffered daemon events as compact one-liners (`HH:MM:SS [STATUS] task_id`). Background WS listener starts on first call. Call between tool calls to stay event-aware without polling.
 - **Principle**: Full data stays on disk. Only summaries and targeted excerpts enter the context window.
 ## WS Protocol Notes
 
