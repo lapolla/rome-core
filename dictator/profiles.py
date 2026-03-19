@@ -7,6 +7,7 @@ PROFILES = {
     "drupal": CORE_MODULES + ["git", "drupal"],
     "skyrim": CORE_MODULES + ["skyrim", "desktop"],
     "orchestrate": CORE_MODULES + ["gc", "stats"],
+    "gemini": CORE_MODULES + ["git", "gc"],  # Gemini-as-dictator: core + git + gc
     "full": None,  # None = load everything
 }
 
@@ -15,6 +16,7 @@ TOOL_EXCLUDES = {
     "drupal": ["execute_legion", "launch_centurion", "rome_submit_result"],
     "skyrim": ["execute_legion", "launch_centurion", "rome_submit_result"],
     "orchestrate": [],
+    "gemini": ["execute_legion", "execute_campaign", "launch_centurion", "rome_submit_result"],
     "full": [],
 }
 

@@ -82,9 +82,19 @@ Set `ROME_PROFILE` env var to load only needed tools per session:
 - **`drupal`** (21 tools) — core + git, drupal tools.
 - **`skyrim`** (29 tools) — core + skyrim, desktop tools.
 - **`orchestrate`** (26 tools) — core + gc, stats tools.
+- **`gemini`** (21 tools) — core + git, gc. Gemini-as-dictator mode with `consult_architect`.
 - **`full`** (55 tools) — all modules. Default when unset.
 
 Profiles defined in `dictator/profiles.py`. Per-profile tool excludes strip rarely-needed tools from loaded modules.
+
+## Gemini Dictator Mode
+
+Gemini CLI can run as the primary interactive agent ("Dictator") with Claude as "Architect":
+- **`ROME_PROFILE=gemini`** in `~/.gemini/settings.json` MCP env
+- **`consult_architect`** tool — dispatches architectural questions to Claude, returns analysis
+- **`GEMINI.md`** at project root — dictator-mode instructions for Gemini
+- **`legion_patches.json`** — CLAUDE capability includes architect role guidance
+- Claude receives questions via `rome_dispatch(CLAUDE)`, responds with design decisions
 
 ## Result Compression & Auto-Lean
 

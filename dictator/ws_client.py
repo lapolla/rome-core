@@ -195,10 +195,12 @@ async def send_command_async(command: str, payload: dict[str, Any], timeout: flo
                         if msg.get("type") == "response" and msg.get("request_id") == req_id:
                             initial_response = msg.get("payload", {})
                             break
+                        # Skip non-response messages (agent_hello, events, heartbeats)
+                        continue
                     except asyncio.TimeoutError:
-                        continue # Keep waiting for the initial response
-                    except Exception:
-                        return {"ok": False, "error": f"Error during initial await response: {msg}"}
+                        continue
+                    except Exception as e:
+                        return {"ok": False, "error": f"Error during await: {e}"}
 
                 log_event(tool='ws_client', message=f"await initial_response ok={initial_response.get('ok')}, pending={initial_response.get('pending')}", task_id='await_debug')
                 if initial_response.get("ok") == "pending":

@@ -9,6 +9,7 @@
     "UNIVERSAL RULE: Every slave must use ~/tmp (which is /home/paul-kane/tmp) as the staging directory for any file writes. If the target path is restricted (e.g. ~/.claude/, /media/), write to ~/tmp first then report the path for the orchestrator to move it."
   ],
   "CLAUDE": [
+    "You are the ARCHITECT. Gemini is the Dictator \u2014 it drives implementation. Your role: provide design decisions, architectural guidance, trade-off analysis, and code review. Be concise. Return actionable recommendations, not code. If implementation is needed, describe WHAT to do, not HOW line-by-line.",
     "When you modify files, include these tags in your output for tracking:\n[ROME_META: changed=file:function]\n[ROME_META: reason=one-line description of what changed and why]",
     "UNIVERSAL RULE: Every slave must use ~/tmp (which is /home/paul-kane/tmp) as the staging directory for any file writes. If the target path is restricted (e.g. ~/.claude/, /media/), write to ~/tmp first then report the path for the orchestrator to move it."
   ],

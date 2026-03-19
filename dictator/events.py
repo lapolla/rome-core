@@ -4,6 +4,7 @@ import asyncio
 import threading
 import time
 import uuid
+import logging
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -234,6 +235,15 @@ class TaskRegistry:
             if task is None:
                 return None
             task["usage"] = dict(usage or {})
+            task["updated_at"] = time.time()
+            return self._snapshot(task)
+
+    def update_task(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return None
+            task.update(updates)
             task["updated_at"] = time.time()
             return self._snapshot(task)
 

@@ -35,6 +35,13 @@ async def _gemini_summarize(content: str, instruction: str, timeout: int = 15) -
     return None
 
 
+def _is_compact_mode() -> bool:
+    """Check if running in a compact profile (gemini, core)."""
+    import os
+    profile = os.environ.get("ROME_PROFILE", "")
+    return profile in ("gemini", "core")
+
+
 def register(mcp):
     """Register FS tools with the given FastMCP instance."""
 
@@ -63,8 +70,9 @@ def register(mcp):
             trimmed = lines[:20] + [f"... ({n - 30} lines omitted) ..."] + lines[-10:]
             out = "\n".join(trimmed)
 
-        # Smart summarize: large successful output gets Gemini digest
-        if n > 20:
+        # Smart summarize: compact mode >5 lines, normal >20 lines
+        summarize_above = 5 if _is_compact_mode() else 20
+        if n > summarize_above:
             summary = await _gemini_summarize(
                 out,
                 "Summarize this command output in 1-3 lines. "
@@ -167,8 +175,12 @@ def register(mcp):
             selected = lines[s:e]
             num_selected = e - s
 
-            # Smart summarize: full-file reads of large files get Gemini digest
-            if start_line == 1 and end_line is None and num_selected > 100:
+            # Smart summarize: large reads get Gemini digest
+            # Compact mode (gemini profile): >50 lines. Normal: >100 lines full-file only.
+            compact = _is_compact_mode()
+            summarize_threshold = 50 if compact else 100
+            should_summarize = (compact and num_selected > summarize_threshold) or (not compact and start_line == 1 and end_line is None and num_selected > summarize_threshold)
+            if should_summarize:
                 _debug(f"read_anywhere: triggering summarize for {p.name} ({num_selected} lines)")
                 summary = await _gemini_summarize(
                     "".join(selected),

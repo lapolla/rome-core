@@ -560,7 +560,7 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
     pending = set(task_ids)
     results: dict[str, dict[str, Any]] = {}
 
-    def _collect_completed(tid: str, task: dict[str, Any]) -> None:
+    async def _collect_completed(tid: str, task: dict[str, Any]) -> None:
         status = task.get("status", "")
         # Normalize SUCCESS/OK from shell_executor to "completed"
         normalized = "completed" if status.upper() in ("SUCCESS", "OK", "COMPLETED") else status
@@ -588,14 +588,19 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
             else:
                 content = _read_report_content(task["report_path"])
                 if content:
-                    results[tid]["report"] = _track_output(content)
+                    if len(content) > 2000 and not full:
+                        summary = await _summarize_report(content)
+                        task_registry.update_task(tid, {"summary": summary})
+                        results[tid]["report"] = _track_output(summary)
+                    else:
+                        results[tid]["report"] = _track_output(content)
         pending.discard(tid)
 
     # Phase 1: Check already-completed tasks in registry
     for tid in list(pending):
         task = task_registry.get(tid)
         if task and task.get("status", "").upper() in ("COMPLETED", "FAILED", "CANCELLED", "SUCCESS", "OK"):
-            _collect_completed(tid, task)
+            await _collect_completed(tid, task)
 
     if not pending:
         all_ok = all(r.get("status") in ("completed", "SUCCESS") for r in results.values())
@@ -616,10 +621,10 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
             if event.type == "complete" and event.task_id in pending:
                 task = task_registry.get(event.task_id)
                 if task:
-                    _collect_completed(event.task_id, task)
+                    await _collect_completed(event.task_id, task)
                 else:
                     # Fallback: use event payload directly
-                    _collect_completed(event.task_id, event.payload)
+                    await _collect_completed(event.task_id, event.payload)
     finally:
         await event_bus.unsubscribe(sub_id)
 

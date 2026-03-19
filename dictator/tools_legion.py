@@ -472,6 +472,68 @@ def register(mcp):
         res = _recommend_capability_impl(task_description)
         return json.dumps(res, indent=2)
 
+
+    @mcp.tool()
+    async def consult_architect(question: str, context_files: list[str] | None = None, timeout: float = 120) -> str:
+        """Escalate to Claude for architectural decisions. Returns Claude's analysis.
+        Use for: design decisions, trade-offs, code review, complex debugging.
+        Do NOT use for: file I/O, simple edits, running commands."""
+        prompt_parts = [question]
+        if context_files:
+            for fpath in context_files[:5]:
+                try:
+                    content = Path(fpath).read_text(encoding="utf-8")
+                    if len(content) > 4000:
+                        total = len(content)
+                        content = content[:2000] + "\n... (" + str(total) + " chars total, truncated) ...\n" + content[-1000:]
+                    prompt_parts.append("\n--- " + fpath + " ---\n" + content)
+                except Exception:
+                    prompt_parts.append("\n--- " + fpath + " --- (unreadable)")
+        full_prompt = "\n".join(prompt_parts)
+
+        task_id = "architect-" + hashlib.md5(question[:50].encode()).hexdigest()[:8]
+        from dictator.ws_client import send_command_async
+        resp = await send_command_async("dispatch", {
+            "task_id": task_id,
+            "capability": "CLAUDE",
+            "prompt": full_prompt,
+        })
+        if not resp.get("accepted"):
+            return "ERR: Dispatch failed: " + str(resp.get("error", "unknown"))
+
+        # Await with fallback: if WS await fails, poll registry then read report directly
+        result = await send_command_async("await", {
+            "task_ids": [task_id],
+            "include_reports": True,
+            "timeout": timeout,
+        }, timeout=timeout + 10)
+
+        tasks = result.get("tasks", {})
+        task_result = tasks.get(task_id, {})
+        report = task_result.get("report", "")
+        status = task_result.get("status", "unknown")
+
+        # Fallback: if await returned error/timeout, check registry + read report file directly
+        if not report and status not in ("completed", "SUCCESS"):
+            import asyncio
+            for _ in range(int(timeout)):
+                check = await send_command_async("status", {"task_id": task_id}, timeout=5)
+                task_data = check.get("task", {})
+                if task_data and task_data.get("status", "").upper() in ("COMPLETED", "SUCCESS", "FAILED"):
+                    status = "completed" if task_data["status"].upper() in ("COMPLETED", "SUCCESS") else "failed"
+                    rpath = task_data.get("report_path", "")
+                    if rpath:
+                        try:
+                            report = Path(rpath).read_text(encoding="utf-8")
+                        except Exception:
+                            pass
+                    break
+                await asyncio.sleep(1)
+
+        if status in ("completed", "SUCCESS"):
+            return report or "Claude completed but no report. Check: legions/" + task_id + "/"
+        return "ERR (" + status + "): " + (report or "No response. Check daemon logs.")
+
     @mcp.tool()
     async def launch_centurion(campaign_id: str, tasks: list[dict]) -> str:
         """Launch a campaign with the Centurion CLI dashboard (blocks until complete, renders bars in terminal)."""
