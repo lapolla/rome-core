@@ -1,0 +1,13 @@
+name: research
+params:
+  topic: ""
+  scope: ""
+
+tasks:
+  - id: research
+    capability: GEMINI
+    prompt: >
+      Research: {topic}
+      Scope: {scope}
+      Search the codebase, read relevant files, and write a concise report.
+      Include file paths, line numbers, and key findings. No fluff.

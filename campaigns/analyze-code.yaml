@@ -1,0 +1,12 @@
+name: analyze-code
+params:
+  files: ""
+  question: ""
+
+tasks:
+  - id: analyze
+    capability: GEMINI
+    prompt: >
+      Read these files: {files}
+      {question}
+      Write a concise report — bullet points, line numbers, key findings only.

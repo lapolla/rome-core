@@ -12,6 +12,7 @@ import sys
 import threading
 import time as _time
 from pathlib import Path
+import yaml
 
 from mcp.server.fastmcp import Context
 
@@ -366,12 +367,16 @@ def register(mcp):
         ctx: Context,
         task_id: str,
         capability: str,
-        prompt: str,
+        prompt: str = "",
+        prompt_file: str = "",
         input_files: list[str] | None = None,
         no_cache: bool = False,
         output_path: str | None = None,
         fire_and_forget: bool = False
     ) -> str:
+        if prompt_file and not prompt:
+            from pathlib import Path
+            prompt = Path(prompt_file).read_text()
         """Quick dispatch. output_path: agent writes directly. fire_and_forget: returns immediately, task runs in background."""
         task_dir = ROME_ROOT / "legions" / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
@@ -392,7 +397,8 @@ def register(mcp):
             # Delegate to daemon process — MCP stays lightweight
             from dictator.ws_client import send_command_async
             payload = {"task_id": task_id, "capability": capability,
-                    "prompt_file": str(task_dir / "task.md"),
+                    "prompt": prompt,
+                    "prompt_file": prompt_file,
                     "input_files": input_files, "no_cache": no_cache,
                     "output_path": output_path}
             resp = await send_command_async("dispatch", payload)
@@ -483,6 +489,56 @@ def register(mcp):
         exit_code = r.get("exit_code", "?")
         return f"Campaign {campaign_id} complete | {len(tasks)} tasks | exit={exit_code}"
 
+    @mcp.tool()
+    async def campaign_run(template: str, overrides: dict | None = None) -> str:
+        """Load a campaign YAML template and dispatch all tasks. Returns task IDs."""
+        campaign_file = ROME_ROOT / "campaigns" / f"{template}.yaml"
+        if not campaign_file.exists():
+            return f"Error: Campaign template '{template}.yaml' not found."
+
+        try:
+            campaign_data = yaml.safe_load(campaign_file.read_text())
+        except yaml.YAMLError as e:
+            return f"Error parsing YAML campaign file: {e}"
+
+        tasks_to_dispatch = []
+        dispatched_task_ids = []
+
+        if not isinstance(campaign_data, dict) or "tasks" not in campaign_data:
+            return "Error: Invalid campaign YAML format. Missing 'tasks'."
+        
+        campaign_id = campaign_data.get("campaign_id") or campaign_data.get("name") or template
+        
+        for task in campaign_data.get("tasks", []):
+            task_id = f"{campaign_id}_{task['id']}"
+            prompt = task.get("prompt", "")
+            
+            # Substitute overrides into the prompt
+            if overrides:
+                for key, value in overrides.items():
+                    prompt = prompt.replace(f"{{{key}}}", str(value))
+
+            tasks_to_dispatch.append({
+                "task_id": task_id,
+                "capability": task["capability"],
+                "prompt": prompt,
+                "input_files": task.get("input_files"),
+                "no_cache": task.get("no_cache", False),
+                "output_path": task.get("output_path"),
+                "fire_and_forget": True # Always fire and forget for campaign_run
+            })
+            dispatched_task_ids.append(task_id)
+
+        from dictator.ws_client import send_command_async
+        results = []
+        for task_payload in tasks_to_dispatch:
+            resp = await send_command_async("dispatch", task_payload)
+            if not resp.get("accepted"):
+                results.append(f"Error dispatching {task_payload['task_id']}: {resp.get('error', 'unknown error')}")
+            else:
+                results.append(f"Dispatched {task_payload['task_id']}")
+        
+        return json.dumps({"dispatched_task_ids": dispatched_task_ids, "dispatch_results": results}, indent=2)
 
 async def _execute_legion_impl(
     task_id: str,

@@ -1,0 +1,13 @@
+name: edit-function
+params:
+  file: ""
+  function: ""
+  instruction: ""
+
+tasks:
+  - id: edit
+    capability: GEMINI
+    prompt: >
+      Edit {file} — find the function {function}.
+      {instruction}
+      Surgical edit only — do NOT rewrite the entire file.

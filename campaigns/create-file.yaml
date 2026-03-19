@@ -1,0 +1,14 @@
+name: create-file
+params:
+  path: ""
+  description: ""
+  reference: ""
+
+tasks:
+  - id: create
+    capability: GEMINI
+    prompt: >
+      Create the file {path}.
+      {description}
+      If a reference file is specified, read it first for style/patterns: {reference}
+      Write the complete file using your file tools.

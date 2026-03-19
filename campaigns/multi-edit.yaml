@@ -1,0 +1,28 @@
+name: multi-edit
+params:
+  instruction: ""
+  file1: ""
+  file2: ""
+  file3: ""
+
+tasks:
+  - id: edit1
+    capability: GEMINI
+    prompt: >
+      {instruction}
+      Your file: {file1}
+      Surgical edit only.
+
+  - id: edit2
+    capability: GEMINI
+    prompt: >
+      {instruction}
+      Your file: {file2}
+      Surgical edit only.
+
+  - id: edit3
+    capability: GEMINI
+    prompt: >
+      {instruction}
+      Your file: {file3}
+      Surgical edit only.

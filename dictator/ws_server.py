@@ -98,6 +98,24 @@ async def _load_capabilities() -> dict[str, bool]:
 
 _WEBSOCKET_TOKEN = _load_config_token()
 
+_session_chars = 0  # cumulative chars returned to MCP client this session
+_LEAN_THRESHOLD = 100_000  # chars before switching to lean mode
+_ULTRA_LEAN_THRESHOLD = 300_000  # chars before ultra-lean mode
+
+def _track_output(text: str) -> str:
+    """Track cumulative output size and return the text unchanged."""
+    global _session_chars
+    _session_chars += len(text)
+    return text
+
+def get_lean_level() -> int:
+    """0=normal, 1=lean (>100K chars), 2=ultra-lean (>300K chars)."""
+    if _session_chars >= _ULTRA_LEAN_THRESHOLD:
+        return 2
+    if _session_chars >= _LEAN_THRESHOLD:
+        return 1
+    return 0
+
 _HEARTBEAT_SECONDS = 15
 _ACTIVE_TASKS: dict[str, asyncio.Task[Any]] = {}
 _ACTIVE_TASKS_LOCK = asyncio.Lock()
@@ -379,6 +397,8 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     input_files = payload.get("input_files") or None
     no_cache = bool(payload.get("no_cache", False))
     prompt_file = str(payload.get("prompt_file") or "")
+    if prompt_file and not prompt:
+        prompt = Path(prompt_file).read_text(encoding="utf-8").strip()
     output_path = str(payload.get("output_path") or "") or None
 
     if not task_id:
@@ -390,11 +410,7 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     if input_files is not None and not isinstance(input_files, list):
         raise ValueError("payload.input_files must be a list when provided")
 
-    # --- Resolve prompt_file to prompt content for worker routing ---
-    if prompt_file and not prompt:
-        pf = Path(prompt_file)
-        if pf.exists():
-            prompt = pf.read_text(encoding="utf-8").strip()
+
 
     # --- Persistent worker routing ---
     # Check if a persistent worker can handle this capability (skip for SAFE_SHELL
@@ -449,6 +465,11 @@ async def handle_submit_result(payload: dict[str, Any]) -> dict[str, Any]:
     report_path = task_dir / f"report_{task_id}.txt"
     report_path.write_text(content, encoding="utf-8")
 
+    summary = None
+    if len(content) > 2000:
+        summary = await _summarize_report(content)
+        task_registry.update_task(task_id, {"summary": summary})
+
     status = "completed"
     task_registry.complete(task_id, status, str(report_path))
     await emit_complete(event_bus, task_id, status, str(report_path), None)
@@ -457,6 +478,7 @@ async def handle_submit_result(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def handle_status(payload: dict[str, Any]) -> dict[str, Any]:
+    lean_level = get_lean_level()
     if payload.get("summary"):
         tasks = task_registry.get_all()
         active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
@@ -471,7 +493,14 @@ async def handle_status(payload: dict[str, Any]) -> dict[str, Any]:
     if task_id:
         task = task_registry.get(task_id)
         return {"task": task, "found": task is not None}
-    return {"tasks": task_registry.get_all()}
+    
+    # Normal client request for all tasks
+    all_tasks = task_registry.get_all()
+    if lean_level >= 2: # Ultra-lean mode: only return active task count and IDs
+        active_tasks_count = sum(1 for t in all_tasks.values() if t.get("status") in {"registered", "running"})
+        return {"active_tasks_count": active_tasks_count, "task_ids": list(all_tasks.keys())}
+
+    return {"tasks": all_tasks}
 
 
 async def handle_cancel(payload: dict[str, Any]) -> dict[str, Any]:
@@ -521,7 +550,8 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
     """Block until all specified tasks complete. Event-driven via EventBus."""
     task_ids = payload.get("task_ids", [])
     include_reports = payload.get("include_reports", False)
-    summarize = payload.get("summarize", False)
+    summarize = payload.get("summarize", False) # Legacy: use this if summary is needed, but full=False
+    full = payload.get("full", False) # New: force full report even if summary exists
     timeout = float(payload.get("timeout", 120))
 
     if not task_ids:
@@ -534,15 +564,31 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
         status = task.get("status", "")
         # Normalize SUCCESS/OK from shell_executor to "completed"
         normalized = "completed" if status.upper() in ("SUCCESS", "OK", "COMPLETED") else status
+        
+        lean_level = get_lean_level()
         results[tid] = {
             "status": normalized,
             "report_path": task.get("report_path"),
             "usage": task.get("usage", {}),
         }
+        if lean_level >= 2: # Ultra-lean: no report at all
+            pending.discard(tid)
+            return
+
         if include_reports and task.get("report_path"):
-            content = _read_report_content(task["report_path"])
-            if content:
-                results[tid]["report"] = content
+            if lean_level >= 1: # Lean: always summarize
+                if task.get("summary"):
+                    results[tid]["report"] = _track_output(task["summary"])
+                else:
+                    content = _read_report_content(task["report_path"])
+                    if content:
+                        results[tid]["report"] = _track_output(await _summarize_report(content))
+            elif not full and task.get("summary"):
+                results[tid]["report"] = _track_output(task["summary"])
+            else:
+                content = _read_report_content(task["report_path"])
+                if content:
+                    results[tid]["report"] = _track_output(content)
         pending.discard(tid)
 
     # Phase 1: Check already-completed tasks in registry
@@ -552,12 +598,6 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
             _collect_completed(tid, task)
 
     if not pending:
-        # Summarize before returning
-        if summarize:
-            for tid, r in results.items():
-                report = r.get("report")
-                if report and len(report) > 500:
-                    r["report"] = await _summarize_report(report)
         all_ok = all(r.get("status") in ("completed", "SUCCESS") for r in results.values())
         return {"ok": all_ok, "tasks": results}
 
@@ -586,13 +626,8 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
     # Any still-pending tasks are timeouts
     for tid in list(pending):
         results[tid] = {"status": "timeout", "report_path": None, "usage": {}}
+    
 
-    # Summarize reports via Gemini if requested
-    if summarize:
-        for tid, r in results.items():
-            report = r.get("report")
-            if report and len(report) > 500:
-                r["report"] = await _summarize_report(report)
 
     all_ok = all(r.get("status") in ("completed", "SUCCESS") for r in results.values())
     return {"ok": all_ok if not pending else False, "tasks": results}
@@ -611,6 +646,14 @@ async def handle_clear(_: dict[str, Any]) -> dict[str, Any]:
 async def handle_recent_events(payload: dict[str, Any]) -> dict[str, Any]:
     """Return tasks that changed since a given timestamp. Used by hooks for event injection."""
     since = payload.get("since", time.time() - 30)  # default: last 30 seconds
+    limit = payload.get("limit", 3)  # cap events for context diet
+
+    lean_level = get_lean_level()
+    if lean_level >= 2:
+        return {"ok": True, "events": [], "since": since}
+    if lean_level >= 1:
+        limit = 1
+
     tasks = task_registry.get_all()
     recent = []
     for tid, t in tasks.items():
@@ -618,12 +661,12 @@ async def handle_recent_events(payload: dict[str, Any]) -> dict[str, Any]:
             status = t.get("status", "?")
             cap = t.get("capability", "?")
             if status in ("completed", "failed", "SUCCESS"):
-                recent.append(f"[{status.upper()}] {tid} ({cap})")
+                recent.append(_track_output(f"[{status.upper()}] {tid} ({cap})"))
             elif status == "running":
                 pct = t.get("progress_percent", 0)
                 msg = t.get("progress_message", "")
-                recent.append(f"[RUNNING] {tid} ({cap}) {pct:.0f}% {msg}")
-    return {"ok": True, "events": recent, "since": since}
+                recent.append(_track_output(f"[RUNNING] {tid} ({cap}) {pct:.0f}% {msg}"))
+    return {"ok": True, "events": recent[-limit:], "since": since}
 
 async def handle_get_state(payload: dict[str, Any]) -> dict[str, Any]:
     import time
