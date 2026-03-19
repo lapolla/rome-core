@@ -26,12 +26,12 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 - **`client/orchestrator.py`** — Headless CLI: Haiku/Flash → subtask JSON → WS dispatch → JSONL stdout.
 - **`tests/`** — pytest suite: tools, signals, usage parsing, WS protocol, EventBus.
 
-## MCP Server (50 tools, 12 modules)
+## MCP Server (55 tools, 12 modules)
 
 - **`tools_fs`**: shell_exec, fs_read, fs_write, read_anywhere, write_anywhere, list_directory
 - **`tools_git`**: git_status, git_diff, git_commit, git_push *(all accept `repo_path` param)*
 - **`tools_drupal`**: rsync_ftk_modules, drush_run, drupal_fj_run
-- **`tools_legion`**: execute_legion, execute_campaign, rome_dispatch, recommend_capability, launch_centurion, clear_cache
+- **`tools_legion`**: execute_legion, execute_campaign, rome_dispatch, recommend_capability, launch_centurion, clear_cache, campaign_run
 - **`tools_skyrim`**: skyrim_console, skyrim_read_state, skyrim_face_actor, skyrim_follow_actor, skyrim_pivot, skyrim_compound_move, compile_papyrus
 - **`tools_desktop`**: desktop_screenshot, desktop_click, desktop_type_text, desktop_press_key, desktop_find_window, desktop_focus_window, desktop_get_mouse_location, desktop_notify
 - **`tools_media`**: http_fetch, fetch_mo2_mod
@@ -75,6 +75,24 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 - **Claude Code hook**: PreToolUse hook (`~/.claude/hooks/block_builtin_io.sh`) blocks built-in Read/Bash/Grep/Glob — forces all I/O through MCP compact tools.
 - **`rome_events`**: Drains buffered daemon events as compact one-liners (`HH:MM:SS [STATUS] task_id`). Background WS listener starts on first call. Call between tool calls to stay event-aware without polling.
 - **Principle**: Full data stays on disk. Only summaries and targeted excerpts enter the context window.
+## Profiles (ROME_PROFILE)
+
+Set `ROME_PROFILE` env var to load only needed tools per session:
+- **`core`** (12 tools) — fs, ws, legion basics. Minimal context footprint.
+- **`drupal`** (21 tools) — core + git, drupal tools.
+- **`skyrim`** (29 tools) — core + skyrim, desktop tools.
+- **`orchestrate`** (26 tools) — core + gc, stats tools.
+- **`full`** (55 tools) — all modules. Default when unset.
+
+Profiles defined in `dictator/profiles.py`. Per-profile tool excludes strip rarely-needed tools from loaded modules.
+
+## Result Compression & Auto-Lean
+
+- **Result compression**: Worker results >2000 chars auto-summarized via Gemini Flash on submit. Summary stored in task registry; `rome_await` returns summary by default (`full=True` for raw).
+- **Auto-lean mode**: Daemon tracks cumulative output chars per session. At 100K chars → lean (1 event max, prefer summaries). At 300K chars → ultra-lean (no events, status-only responses).
+- **`prompt_file`**: `rome_dispatch` and daemon `dispatch` command accept `prompt_file` param — prompt stays on disk, never enters context.
+- **Campaign templates**: `campaign_run(template="edit-function", overrides={...})` loads YAML from `campaigns/`, substitutes params, dispatches. Keeps MCP tool calls terse.
+
 ## WS Protocol Notes
 
 - All daemon communication is pure WebSocket. No HTTP API routes (`/api/*` returns 404).
@@ -83,13 +101,14 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 - `reset` command clears all tasks in the registry including REGISTERED zombies.
 - RUNNING dashboard counter excludes REGISTERED state (only counts truly running tasks).
 - Heartbeat every 10–15s.
-- **Daemon managed by systemd**: `rome-daemon.service` (user unit). Restart via `systemctl --user restart rome-daemon`. MCP server (`asshole.py`) is separate process — needs `/mcp` reconnect after code changes.
+- **Daemon managed by systemd**: `rome-daemon.service` (user unit). Restart via `systemctl --user restart rome-daemon`. MCP server entry point: `dictator/dictator.py` (stdio) — needs `/mcp` reconnect after code changes.
 
 ## Campaign Templates
 
 - **`campaigns/`** — YAML-defined task pipelines. `loader.py` reads any YAML, dispatches via WS, awaits results.
 - **Format**: `name`, `tasks[]` with `id`, `capability`, `prompt`, `input_files`, `depends_on`.
-- **Usage**: `python3 campaigns/loader.py campaigns/example.yaml` — or dispatch a GEMINI worker to run a campaign by name.
+- **Usage**: `campaign_run(template="name", overrides={...})` from MCP, or `python3 campaigns/loader.py campaigns/example.yaml` from CLI.
+- **Templates**: edit-function, create-file, analyze-code, research, multi-edit — parameterized YAML for common operations.
 
 ## Prefect Agents
 
