@@ -26,12 +26,12 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 - **`client/orchestrator.py`** — Headless CLI: Haiku/Flash → subtask JSON → WS dispatch → JSONL stdout.
 - **`tests/`** — pytest suite: tools, signals, usage parsing, WS protocol, EventBus.
 
-## MCP Server (55 tools, 12 modules)
+## MCP Server (56 tools, 12 modules)
 
 - **`tools_fs`**: shell_exec, fs_read, fs_write, read_anywhere, write_anywhere, list_directory
 - **`tools_git`**: git_status, git_diff, git_commit, git_push *(all accept `repo_path` param)*
 - **`tools_drupal`**: rsync_ftk_modules, drush_run, drupal_fj_run
-- **`tools_legion`**: execute_legion, execute_campaign, rome_dispatch, recommend_capability, launch_centurion, clear_cache, campaign_run
+- **`tools_legion`**: execute_legion, execute_campaign, rome_dispatch, recommend_capability, consult_architect, launch_centurion, clear_cache, campaign_run
 - **`tools_skyrim`**: skyrim_console, skyrim_read_state, skyrim_face_actor, skyrim_follow_actor, skyrim_pivot, skyrim_compound_move, compile_papyrus
 - **`tools_desktop`**: desktop_screenshot, desktop_click, desktop_type_text, desktop_press_key, desktop_find_window, desktop_focus_window, desktop_get_mouse_location, desktop_notify
 - **`tools_media`**: http_fetch, fetch_mo2_mod
