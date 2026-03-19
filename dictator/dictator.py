@@ -5,6 +5,7 @@ Thin entry point: uses the orchestrator to load tools.
 """
 
 import sys
+import os
 from pathlib import Path
 
 # When invoked as `python3 dictator/dictator.py`, ensure the parent dir
@@ -17,7 +18,9 @@ if _parent not in sys.path:
 from dictator.orchestrator import create_mcp_server
 
 # Initialize the MCP instance by discovering all tools_*.py in the package
-mcp = create_mcp_server("asshole")
+profile = os.environ.get("ROME_PROFILE")
+print(f"ROME: Active profile: {'full' if profile is None else profile}", file=sys.stderr)
+mcp = create_mcp_server("asshole", profile=profile)
 
 if __name__ == "__main__":
     # Startup GC: clean old legion dirs before serving
