@@ -113,26 +113,11 @@ def register(mcp):
         return json.dumps(result)
 
     @mcp.tool()
-    async def rome_await(task_ids: list[str], timeout: float = 120.0, include_reports: bool = False, summarize: bool = False) -> str:
-        """
-        Block until all specified tasks complete. Event-driven — no polling.
-        Returns status + optional report content for each task.
-        summarize=True runs reports through Gemini Flash for a 3-5 bullet digest (saves tokens).
-        """
-        result = await send_command_async("await", {
-            "task_ids": task_ids,
-            "include_reports": include_reports,
-            "summarize": summarize,
-            "timeout": timeout,
-        }, timeout=timeout + 5)  # WS timeout slightly longer than await timeout
-        return json.dumps(result)
-
-    @mcp.tool()
-    async def rome_submit_result(task_id: str, content: str) -> str:
+    async def rome_submit_result(task_id: str, content: str, token: str | None = None) -> str:
         """
         Submits the agent's result for a given task.
         """
-        result = await submit_agent_result_async(task_id, content)
+        result = await submit_agent_result_async(task_id, content, token=token)
         return json.dumps(result)
 
     @mcp.tool()

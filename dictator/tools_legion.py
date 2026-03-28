@@ -256,7 +256,8 @@ def register(mcp):
                 args=t['args'],
                 input_files=t.get('input_files', []),
                 on_progress=on_progress,
-                ctx=ctx
+                ctx=ctx,
+                parent_task_id=campaign_id
             )
 
         async def run_task_with_deps(t):
@@ -379,6 +380,11 @@ def register(mcp):
             prompt = Path(prompt_file).read_text()
         """Quick dispatch. output_path: agent writes directly. fire_and_forget: returns immediately, task runs in background."""
         task_dir = ROME_ROOT / "legions" / task_id
+        if task_dir.exists():
+            # Clear stale state from previous dispatch (e.g. interrupted MCP call)
+            stale_task = task_dir / "task.md"
+            if stale_task.exists():
+                stale_task.unlink()
         task_dir.mkdir(parents=True, exist_ok=True)
         full_prompt = prompt
         if output_path:
@@ -612,17 +618,20 @@ async def _execute_legion_impl(
     on_progress: Callable | None = None,
     _is_retry: bool = False,
     ctx: Context | None = None,
+    parent_task_id: str | None = None,
 ) -> dict:
     """Core legion logic. Returns a result dict (not JSON string)."""
     t0 = _time.monotonic()
     capability = capability.upper()
-    task_registry.register(task_id, capability)
-    await emit_dispatch_start(event_bus, task_id, capability)
-    emit_dispatch_start_ws(task_id, capability)
-    # Immediately mark as running so dashboard doesn't sit at REGISTERED
-    task_registry.update_progress(task_id, 0, "Starting...")
-    await emit_progress(event_bus, task_id, 0, "Starting...")
-    emit_progress_ws(task_id, 0, "Starting...")
+    # Only register if not already registered (daemon's _dispatch_runner registers first)
+    if not task_registry.get(task_id):
+        task = task_registry.register(task_id, capability, parent_task_id=parent_task_id)
+        await emit_dispatch_start(event_bus, task_id, capability)
+        emit_dispatch_start_ws(task_id, capability)
+        # Immediately mark as running so dashboard doesn't sit at REGISTERED
+        task_registry.update_progress(task_id, 0, "Starting...")
+        await emit_progress(event_bus, task_id, 0, "Starting...")
+        emit_progress_ws(task_id, 0, "Starting...")
 
     def default_on_progress(line):
         m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
@@ -707,12 +716,25 @@ async def _execute_legion_impl(
         task_dir2.mkdir(parents=True, exist_ok=True)
         shell_cmd = args[0] if args else ""
         shell_script = str(Path(__file__).parent.parent / "legions" / "shell_executor.py")
-        # Fire and forget — shell_executor sends completion event via WS
-        _sp.Popen(
-            ["python3", shell_script, task_id, str(_time2.time()), shell_cmd],
-            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-            start_new_session=True,
-        )
+        stderr_log = task_dir2 / "spawn_stderr.log"
+        try:
+            proc = _sp.Popen(
+                ["python3", shell_script, task_id, str(_time2.time()), shell_cmd],
+                stdout=_sp.DEVNULL, stderr=open(stderr_log, "w"),
+                start_new_session=True,
+            )
+            # Check if process died immediately (give it 100ms)
+            _time2.sleep(0.1)
+            if proc.poll() is not None and proc.returncode != 0:
+                err_msg = stderr_log.read_text()[:500] if stderr_log.exists() else "unknown"
+                log_event(tool="SAFE_SHELL", message=f"Spawn failed (rc={proc.returncode}): {err_msg}", task_id=task_id)
+                task_registry.complete(task_id, "failed", None)
+                return {"ok": False, "task_id": task_id,
+                        "message": f"SAFE_SHELL spawn failed (rc={proc.returncode}): {err_msg}"}
+        except OSError as e:
+            log_event(tool="SAFE_SHELL", message=f"Popen OSError: {e}", task_id=task_id)
+            task_registry.complete(task_id, "failed", None)
+            return {"ok": False, "task_id": task_id, "message": f"SAFE_SHELL spawn error: {e}"}
         return {"ok": True, "status": "DISPATCHED", "task_id": task_id,
                 "message": "SAFE_SHELL launched — completion via EventBus"}
 
@@ -740,7 +762,12 @@ async def _execute_legion_impl(
 
     log_event(tool="execute_legion", task_id=task_id, message=f"cap={capability} timeout={timeout_s}s")
 
-    env = {**os.environ, "ROME_TASK_DIR": str(task_dir)}
+    env = {
+        **os.environ,
+        "ROME_TASK_DIR": str(task_dir),
+        "ROME_TASK_ID": task_id,
+        "ROME_TASK_TOKEN": task.get("token", "")
+    }
     fallback_used = None
     try:
         r = await asyncio.wait_for(run_cmd_stream(command, cwd=task_dir, env=env, on_stderr=actual_on_progress), timeout=timeout_s)

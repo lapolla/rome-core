@@ -44,7 +44,6 @@ Communicates over **stdio** (stdin/stdout JSON-RPC). Intended to be launched by 
 
 | Tool | Description |
 |------|-------------|
-| `shell_exec` | Run a shell command (cwd: `/var/www/ftk_lms`) |
 | `fs_read` | Read a file relative to `/var/www/ftk_lms` |
 | `fs_write` | Write a file relative to `/var/www/ftk_lms` |
 | `read_anywhere` | Read any file on the system (absolute path) |

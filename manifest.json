@@ -1,11 +1,11 @@
 {
-  "rome_v": "2.0",
+  "rome_v": "3.0.0",
   "task_id": "test-gemini-debug",
   "status": "FAILED",
   "metadata": {},
   "usage": null,
   "progress": [
-    "0% + [1773185006.1s] Engaged (V2.0).",
+    "0% + [1773185006.1s] Engaged (3.0.0).",
     "0% x [1773185006.3s] Awaiting thought...",
     "0% * [1773185006.5s] Awaiting thought...",
     "0% . [1773185006.7s] Awaiting thought...",

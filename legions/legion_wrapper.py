@@ -319,14 +319,19 @@ def main():
         stderr=subprocess.STDOUT,
         bufsize=0,
         start_new_session=True,
-        env={**os.environ, "PYTHONUNBUFFERED": "1", "ROME_TASK_ID": task_id}
+        env={
+            **os.environ,
+            "PYTHONUNBUFFERED": "1",
+            "ROME_TASK_ID": task_id,
+            "ROME_TASK_TOKEN": os.environ.get("ROME_TASK_TOKEN", "")
+        }
     )
     
     fd = process.stdout.fileno()
     fl = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
     
-    ui.log(0, "Engaged (V2.0).")
+    ui.log(0, "Engaged (3.0.0).")
     
     full_output = []
     _idle_ticks = 0

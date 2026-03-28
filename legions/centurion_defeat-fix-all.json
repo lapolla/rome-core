@@ -1,0 +1,24 @@
+{
+  "campaign_id": "defeat-fix-all",
+  "success": 3,
+  "failed": 0,
+  "elapsed_s": 0.25,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "tasks": {
+    "fix-bridge-papyrus": {
+      "status": "SUCCESS",
+      "exit_code": 0
+    },
+    "fix-repacify-cpp": {
+      "status": "SUCCESS",
+      "exit_code": 0
+    },
+    "bump-18": {
+      "status": "SUCCESS",
+      "exit_code": 0
+    }
+  }
+}

@@ -9,11 +9,12 @@ import os
 import sys
 from pathlib import Path
 
-os.environ["ROME_DAEMON"] = "1"
-
 _PARENT = str(Path(__file__).resolve().parent.parent)
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
+
+import dictator.core as core
+core.IS_DAEMON = True
 
 import uvicorn
 from contextlib import asynccontextmanager
@@ -99,7 +100,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    os.environ["ROME_DAEMON"] = "1"
     args = parse_args(argv)
 
     import socket

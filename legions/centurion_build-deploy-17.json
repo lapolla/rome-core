@@ -1,0 +1,20 @@
+{
+  "campaign_id": "build-deploy-17",
+  "success": 2,
+  "failed": 0,
+  "elapsed_s": 9.77,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "tasks": {
+    "bump-17": {
+      "status": "SUCCESS",
+      "exit_code": 0
+    },
+    "build-17": {
+      "status": "SUCCESS",
+      "exit_code": 0
+    }
+  }
+}

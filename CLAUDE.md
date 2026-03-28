@@ -1,4 +1,4 @@
-# ROME Core — Imperial Directives (v2.5)
+# ROME Core — Imperial Directives (v3.0.0)
 
 > **I am not here to do work. I am here to decompose it and get out of the way.**
 
@@ -9,7 +9,7 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 ## Architecture
 
 - **`dictator/daemon.py`** — ASGI app (Starlette + Uvicorn); mounts FastMCP SSE at `/mcp`, WS at `/ws`, dashboard at `/dashboard/`. Port 8741.
-- **`dictator/dictator.py`** — Legacy stdio entry point (kept for fallback).
+- **`dictator/cli.py`** — Legacy stdio entry point (kept for fallback).
 - **`dictator/core.py`** — Central registry: config, `run_cmd`, `run_cmd_stream`, EventBus, mcp instance. All subprocesses use `start_new_session=True` (process group isolation).
 - **`dictator/config.json`** — Externalized path constants (17 keys: root_dir, git_root, rome_root, ws_token, daemon_port, etc.).
 - **`dictator/ws_server.py`** — WS connection manager + command dispatcher (dispatch, status, get_state, cancel, ping, read_report, await, reset, clear, event, submit_result).
@@ -41,7 +41,7 @@ Model-agnostic Python MCP orchestration framework. Persistent ASGI daemon expose
 - **`tools_docs`**: update_project_docs
 - **`tools_ws`**: ws_send, rome_await, rome_submit_result, rome_events
 
-## ROME Protocol Rules (v2.5)
+## ROME Protocol Rules (v3.0.0)
 
 1. **Atomic Changes**: Surgical commits, one concern per commit.
 2. **Sub-division**: Tasks exceeding 45s should be split into smaller units.
@@ -111,7 +111,7 @@ Gemini CLI can run as the primary interactive agent ("Dictator") with Claude as 
 - `reset` command clears all tasks in the registry including REGISTERED zombies.
 - RUNNING dashboard counter excludes REGISTERED state (only counts truly running tasks).
 - Heartbeat every 10–15s.
-- **Daemon managed by systemd**: `rome-daemon.service` (user unit). Restart via `systemctl --user restart rome-daemon`. MCP server entry point: `dictator/dictator.py` (stdio) — needs `/mcp` reconnect after code changes.
+- **Daemon managed by systemd**: `rome-dictator.service` (system unit). Restart via `sudo systemctl restart rome-dictator`. MCP server entry point: `dictator/cli.py` (stdio) — needs `/mcp` reconnect after code changes.
 
 ## Campaign Templates
 

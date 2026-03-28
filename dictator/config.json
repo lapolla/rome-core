@@ -1,12 +1,12 @@
 {
   "root_dir": "/var/www/ftk_lms",
-  "git_root": "/home/paul-kane/projects/Drupal11",
-  "rome_root": "/home/paul-kane/projects/rome-core",
+  "git_root": "~/projects/Drupal11",
+  "rome_root": "~/projects/rome-core",
   "skyrim_state_file": "/media/paul-kane/SteamGames/steamapps/compatdata/489830/pfx/drive_c/tmp/skyrim_state.json",
   "mo2_downloads": "~/Games/MO2/downloads",
-  "drupal_modules_src": "/home/paul-kane/projects/Drupal11/modules/custom/",
+  "drupal_modules_src": "~/projects/Drupal11/modules/custom/",
   "drupal_modules_dest": "/var/www/ftk_lms/web/modules/custom/",
-  "drupal_themes_src": "/home/paul-kane/projects/Drupal11/themes/custom/",
+  "drupal_themes_src": "~/projects/Drupal11/themes/custom/",
   "drupal_themes_dest": "/var/www/ftk_lms/web/themes/custom/",
   "skyrim_game_dir": "/media/paul-kane/SteamGames/Games/SkyrimSE/",
   "mo2_mods_dir": "/media/paul-kane/SteamGames/Games/mods/",
@@ -18,5 +18,5 @@
   "max_output_bytes": 10485760,
   "daemon_host": "127.0.0.1",
   "daemon_port": 8741,
-  "ws_token": "YOUR_SECRET_WEBSOCKET_TOKEN"
+  "ws_token": ""
 }

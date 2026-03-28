@@ -1,4 +1,4 @@
-"""ROME capability profiles — controls which tool modules load per session."""
+"""ROME capability profiles \u2014 controls which tool modules load per session."""
 
 CORE_MODULES = ["fs", "ws", "legion"]
 
@@ -16,7 +16,13 @@ TOOL_EXCLUDES = {
     "drupal": ["execute_legion", "launch_centurion", "rome_submit_result"],
     "skyrim": ["execute_legion", "launch_centurion", "rome_submit_result"],
     "orchestrate": [],
-    "gemini": ["execute_legion", "execute_campaign", "launch_centurion", "rome_submit_result"],
+    "gemini": [
+        "execute_legion", 
+        "execute_campaign", 
+        "launch_centurion", 
+        "rome_submit_result",
+        "get_state"  # Prevent raw registry dumps in main session context
+    ],
     "full": [],
 }
 

@@ -20,8 +20,9 @@ async def main():
     
     server_params = StdioServerParameters(
         command="python3",
-        args=["/home/paul-kane/projects/rome-core/dictator/dictator.py"],
-        env=None
+        args=["/home/paul-kane/projects/rome-core/dictator/cli.py"],
+        timeout=120,
+
     )
 
     async with stdio_client(server_params) as (read, write):

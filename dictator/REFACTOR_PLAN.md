@@ -4,7 +4,7 @@
 Transition the ROME MCP (Dictator) from a monolithic import structure to a dynamic, plugin-based architecture. This will improve maintainability, allow for easier extension by third parties, and enable conditional tool loading.
 
 ## 1. Dynamic Tool Discovery
-Replace the hardcoded imports in `dictator.py` with an automated discovery mechanism.
+Replace the hardcoded imports in `cli.py` with an automated discovery mechanism.
 - **Implementation:** Use `pkgutil` or `importlib` to iterate over the `dictator/` directory and import all modules starting with `tools_`.
 - **Benefit:** Adding a new toolset only requires creating a new `tools_*.py` file; no changes to the entry point are needed.
 

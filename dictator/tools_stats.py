@@ -23,35 +23,38 @@ def register(mcp):
         if not log_path.exists():
             return f"Error: Log file not found at {log_path}"
 
-        lines = collections.deque(maxlen=n)
+        import subprocess
+        from shlex import quote
+        
         try:
-            with open(log_path, encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        if task_id:
-                            try:
-                                d = json.loads(line)
-                                if d.get("task_id") == task_id:
-                                    lines.append(line)
-                            except json.JSONDecodeError:
-                                # If it's not valid JSON, we can't check task_id, so skip
-                                continue
-                        else:
-                            lines.append(line)
+            if task_id:
+                # Use grep to find tasks efficiently
+                cmd = f"grep {quote(task_id)} {log_path} | tail -n {int(n)}"
+                raw_lines = subprocess.check_output(cmd, shell=True, text=True).splitlines()
+            else:
+                # Simple tail for global logs
+                cmd = f"tail -n {int(n)} {log_path}"
+                raw_lines = subprocess.check_output(cmd, shell=True, text=True).splitlines()
+        except subprocess.CalledProcessError:
+            raw_lines = []
         except Exception as e:
-            return f"Error: {e}"
+            return f"Error executing tail/grep: {e}"
 
         entries = []
-        for line in lines:
+        for line in raw_lines:
             try:
                 d = json.loads(line)
-                ts = d.get("timestamp", "?")
-                tool = d.get("tool", "?")
-                status = d.get("status", "?")
+                # Handle both legacy rome_log format and new RomeEvent hydration format
+                ts = d.get("timestamp") or d.get("ts", "?")
+                tool = d.get("tool") or d.get("type", "?")
+                status = d.get("status") or "ok"
+                tid = d.get("task_id", "")
                 dur = d.get("duration_s", 0.0)
-                msg = d.get("message", "")
+                msg = d.get("message") or str(d.get("payload", ""))
 
-                entry = f"[{ts}] {tool} {status} {dur}s {msg}"
+                entry = f"[{ts}] {tool} {status} {dur}s {msg[:200]}"
+                if tid and not task_id:
+                    entry = f"[{ts}] [{tid}] {tool} {status} {dur}s {msg[:200]}"
 
                 usage = d.get("usage")
                 if isinstance(usage, dict):
@@ -63,6 +66,8 @@ def register(mcp):
             except (json.JSONDecodeError, TypeError, AttributeError):
                 continue
 
+        if not entries:
+            return "(no entries)"
         return f"Last {len(entries)} entries:\n" + "\n".join(entries)
 
     @mcp.tool()

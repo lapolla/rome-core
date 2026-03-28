@@ -1,0 +1,21 @@
+#!/bin/sh
+#
+# PROVIDE: rome_dictator
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="rome_dictator"
+rcvar="rome_dictator_enable"
+
+load_rc_config $name
+
+: ${rome_dictator_enable:="NO"}
+
+pidfile="/var/run/${name}.pid"
+command="/usr/sbin/daemon"
+command_args="-r -P ${pidfile} -u paul-kane /usr/bin/env PYTHONPATH=/home/paul-kane/projects/rome-core python3 -m dictator.daemon --port 8741"
+rome_dictator_chdir="/home/paul-kane/projects/rome-core"
+
+run_rc_command "$1"

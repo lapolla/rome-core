@@ -16,7 +16,7 @@ Emperor (You)
 ```
 dictator/
   daemon.py          ASGI app — mounts MCP SSE + WS + dashboard (port 8741)
-  dictator.py        Stdio entry point (Claude Code MCP transport)
+  cli.py             Stdio entry point (Claude Code MCP transport)
   core.py            Config, run_cmd/run_cmd_stream, EventBus, mcp instance
   ws_server.py       WS protocol handler (dispatch, cancel, status, reset, ping)
   ws_client.py       Internal WS sender used by MCP tools (fire-and-forget + sync)
@@ -58,7 +58,7 @@ In `~/.claude/mcp-servers.json`:
   "mcpServers": {
     "asshole": {
       "command": "python3",
-      "args": ["/home/paul-kane/projects/rome-core/dictator/dictator.py"],
+      "args": ["/home/paul-kane/projects/rome-core/dictator/cli.py"],
       "cwd": "/home/paul-kane/projects/rome-core"
     }
   }

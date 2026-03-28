@@ -40,10 +40,10 @@ def register_all_tools(mcp: FastMCP, filter_capabilities: bool = False, profile:
     if profile:
         from dictator.profiles import get_profile, get_tool_excludes
         allowed_modules = get_profile(profile)  # None for "full", list for others
-        if allowed_modules is not None:
-            print(f"[ROME] Profile '{profile}': loading {allowed_modules}", file=sys.stderr)
-        else:
-            print(f"[ROME] Profile '{profile}': loading all modules", file=sys.stderr)
+        # if allowed_modules is not None:
+        #     print(f"[ROME] Profile '{profile}': loading {allowed_modules}", file=sys.stderr)
+        # else:
+        #     print(f"[ROME] Profile '{profile}': loading all modules", file=sys.stderr)
         excludes = get_tool_excludes(profile)
 
     for loader, module_name, is_pkg in pkgutil.iter_modules([package_path]):
@@ -65,7 +65,7 @@ def register_all_tools(mcp: FastMCP, filter_capabilities: bool = False, profile:
                     # Remove excluded tools
                     for tool_name in list(mcp._tool_manager._tools.keys()):
                         if tool_name in excludes:
-                            print(f"[ROME] Profile '{profile}': excluding tool '{tool_name}'", file=sys.stderr)
+                            # print(f"[ROME] Profile '{profile}': excluding tool '{tool_name}'", file=sys.stderr)
                             del mcp._tool_manager._tools[tool_name]
             except Exception as e:
                 print(f"Failed to load toolset {module_name}: {e}", file=sys.stderr)

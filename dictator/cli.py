@@ -8,7 +8,7 @@ import sys
 import os
 from pathlib import Path
 
-# When invoked as `python3 dictator/dictator.py`, ensure the parent dir
+# When invoked as `python3 dictator/cli.py`, ensure the parent dir
 # (rome-core/) is on sys.path so `from dictator.xxx` imports work.
 _parent = str(Path(__file__).resolve().parent.parent)
 if _parent not in sys.path:
@@ -17,16 +17,15 @@ if _parent not in sys.path:
 # The orchestrator handles dynamic tool discovery and registration
 from dictator.orchestrator import create_mcp_server
 
-# Initialize the MCP instance by discovering all tools_*.py in the package
-profile = os.environ.get("ROME_PROFILE")
-print(f"ROME: Active profile: {'full' if profile is None else profile}", file=sys.stderr)
-mcp = create_mcp_server("asshole", profile=profile)
+# profile = os.environ.get("ROME_PROFILE")
+# sys.stderr.write(f"ROME: Active profile: {'full' if profile is None else profile}\n")
+mcp = create_mcp_server("asshole", profile=os.environ.get("ROME_PROFILE"))
 
 if __name__ == "__main__":
     # Startup GC: clean old legion dirs before serving
-    from dictator.tools_gc import auto_gc
-    try:
-        auto_gc()
-    except Exception:
-        pass
+    # from dictator.tools_gc import auto_gc
+    # try:
+    #     auto_gc()
+    # except Exception:
+    #     pass
     mcp.run(transport="stdio")

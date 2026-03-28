@@ -47,8 +47,8 @@ def shell_executor():
 
     shell_timeout = float(os.environ.get('SHELL_TIMEOUT', 600))
 
-    # task_dir = /home/paul-kane/projects/rome-core/legions/<task_id>/ — create if needed
-    base_dir = "/home/paul-kane/projects/rome-core/legions"
+    # task_dir = <rome-core>/legions/<task_id>/ — create if needed
+    base_dir = os.path.dirname(os.path.abspath(__file__))
     task_dir = os.path.join(base_dir, task_id)
     os.makedirs(task_dir, exist_ok=True)
 
@@ -74,6 +74,13 @@ def shell_executor():
             elapsed = time.time() - start_t
             # Print per-line progress to own stdout: PROGRESS:{task_id}:{elapsed:.1f}s:{last_line[:80]}
             print(f"PROGRESS:{tid}:{elapsed:.1f}s:{last_line[:80]}", flush=True)
+
+            # Send real-time progress via WebSocket if available (throttled)
+            if send_event and (len(output_list) % 5 == 0 or elapsed < 2):
+                # We don't have a real total, so we use a rolling 'pseudo-progress'
+                # that increments with line count, capped at 99%.
+                percent = min(1 + (len(output_list) // 5), 99)
+                send_event("progress", tid, {"percent": float(percent), "message": last_line[:80]})
         proc.stdout.close()
 
     reader_thread = threading.Thread(target=read_output, args=(process, full_output, task_id, start_time))

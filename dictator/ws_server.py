@@ -3,20 +3,101 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import re
+import shlex
+import shutil
+import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+import yaml
 
 from starlette.routing import WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from dictator.core import event_bus, task_registry, DAEMON_START_TIME, ROME_ROOT, ARSENAL_PATH
+from dictator.core import event_bus, task_registry, DAEMON_START_TIME, ROME_ROOT, ARSENAL_PATH, IS_DAEMON
 from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_dispatch_start, emit_error, emit_capability_status, emit_system_status
 from dictator.tools_legion import _execute_legion_impl
 
 CONFIG_PATH = Path(ROME_ROOT) / "dictator" / "config.json"
 GEMINI_CLI = "/home/paul-kane/.nvm/versions/node/v20.20.0/bin/gemini"
+
+FALLBACK_CHAIN = {"GEMINI": "CODEX", "CODEX": "OPENCODE"}
+BUSY_PATTERNS = ["service temporarily unavailable", "overloaded", "rate_limit",
+                 "rate limit", "quota", "503", "429", "capacity"]
+
+CACHE_DIR = ROME_ROOT / "legions" / ".cache"
+CACHE_TTL = 3600  # 1 hour
+MAX_OUTPUT_CHARS = 2000
+
+
+def _is_busy(r: dict) -> bool:
+    if r.get("ok"):
+        return False
+    text = (r.get("stdout", "") + r.get("stderr", "")).lower()
+    # Also check if it's a dict with an 'error' or 'message' field
+    if not text:
+        text = str(r.get("error", "") + r.get("message", "")).lower()
+    return any(p in text for p in BUSY_PATTERNS)
+
+
+def _cache_key(capability: str, args: list, task_dir=None) -> str:
+    key_str = f"{capability}:{':'.join(str(a) for a in args)}"
+    if task_dir:
+        t_md = task_dir / "task.md"
+        if t_md.exists():
+            try:
+                key_str += ":" + t_md.read_text(encoding="utf-8")
+            except Exception:
+                pass
+    for arg in args:
+        if isinstance(arg, str) and arg.endswith(".md") and Path(arg).exists():
+            try:
+                key_str += ":" + Path(arg).read_text(encoding="utf-8")
+            except Exception:
+                pass
+    return hashlib.sha256(key_str.encode()).hexdigest()[:16]
+
+
+def _recommend_capability_impl(task_description: str) -> dict:
+    """Core logic for capability recommendation."""
+    desc = task_description.lower()
+    word_count = len(desc.split())
+
+    kw_gemini = ["review", "analyze", "security", "architect", "complex", "audit", "refactor", "design"]
+    kw_centurion = ["multi-step", "complex", "review and fix", "analyze and edit", "refactor across"]
+    kw_codex = ["fix", "implement", "update", "write", "add", "small", "patch", "rename"]
+    kw_shell = ["grep", "build", "test", "find", "run", "execute", "shell", "bash", "compile", "move", "copy", "delete"]
+
+    files_match = re.search(r'(\d+)\s+files?', desc)
+    lines_match = re.search(r'(\d+)\s+lines?', desc)
+    file_count = int(files_match.group(1)) if files_match else 0
+    line_count = int(lines_match.group(1)) if lines_match else 0
+
+    sg = sum(1 for k in kw_gemini if k in desc)
+    scen = sum(1 for k in kw_centurion if k in desc)
+    sc = sum(1 for k in kw_codex if k in desc)
+    ss = sum(1 for k in kw_shell if k in desc)
+
+    if file_count > 10 or line_count > 1000:
+        sg += 3
+
+    if ss > sg and ss > scen and ss > sc:
+        rec, reason = "SAFE_SHELL", "Task dominated by execution/search/build operations."
+    elif sg >= scen and sg >= sc and word_count <= 50:
+        rec, reason = "GEMINI", "High reasoning or large context requirements detected."
+    elif scen >= sc or word_count > 50:
+        rec, reason = "CENTURION", "Multi-step complex task requiring orchestrator oversight."
+    else:
+        rec, reason = "CODEX", "Focused implementation or small fix with moderate context."
+
+    return {
+        "recommendation": rec,
+        "reasoning": reason,
+        "scores": {"gemini": sg, "centurion": scen, "codex": sc, "shell": ss},
+    }
 
 
 async def _summarize_report(content: str, max_input_lines: int = 200) -> str:
@@ -218,6 +299,149 @@ def _response(request_id: str | None, ok: bool, payload: dict[str, Any] | None =
     return body
 
 
+class OrchestratorUI:
+    def __init__(self, task_ids):
+        self.task_ids = task_ids
+        self.stats = {tid: {"percent": 0, "msg": "Standing by", "elapsed": 0.0, "status": "PENDING"} for tid in task_ids}
+        self.lock = threading.Lock()
+
+    def update(self, task_id, line):
+        m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
+        if m:
+            with self.lock:
+                self.stats[task_id].update({
+                    "percent": int(m.group(1)),
+                    "elapsed": float(m.group(2)),
+                    "msg": m.group(3).strip(),
+                })
+        elif any(x in line.upper() for x in ("MISSION COMPLETE", "SUCCESS", "COMPLETED")):
+            with self.lock:
+                self.stats[task_id]["status"] = "SUCCESS"
+                self.stats[task_id]["percent"] = 100
+        elif any(x in line.upper() for x in ("FAILED", "ERR:")):
+            with self.lock:
+                self.stats[task_id]["status"] = "FAILED"
+
+
+async def _execute_legion_native(
+    task_id: str,
+    capability: str,
+    args: list[str],
+    input_files: list[str] | None = None,
+    no_cache: bool = False,
+    prompt_file: str = "",
+    _is_retry: bool = False,
+    parent_task_id: str | None = None,
+) -> dict:
+    t0 = time.monotonic()
+    capability = capability.upper()
+    if not task_registry.get(task_id):
+        task_registry.register(task_id, capability, parent_task_id=parent_task_id)
+        await emit_dispatch_start(event_bus, task_id, capability)
+
+    async def on_progress(line):
+        m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
+        if m:
+            try:
+                p, msg = int(m.group(1)), m.group(3).strip()
+                task_registry.update_progress(task_id, p, msg)
+                await emit_progress(event_bus, task_id, p, msg)
+            except Exception: pass
+
+    if capability == "AUTO":
+        capability = _recommend_capability_impl(args[0] if args else "")["recommendation"].upper()
+
+    if not ARSENAL_PATH.exists(): return {"ok": False, "error": "Arsenal missing"}
+    arsenal = json.loads(ARSENAL_PATH.read_text())
+    cap = arsenal.get("capabilities", {}).get(capability)
+    if not cap: return {"ok": False, "error": f"Cap {capability} unknown"}
+
+    task_dir = ROME_ROOT / "legions" / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    for f in (input_files or []):
+        f_path = Path(f)
+        src = f_path.resolve() if f_path.is_absolute() else (ROME_ROOT / f_path).resolve()
+        dest = task_dir / f_path.name
+        if src.exists() and src.resolve() != dest.resolve():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src), str(dest))
+
+    if prompt_file:
+        pf = Path(prompt_file)
+        if pf.exists():
+            (task_dir / "task.md").write_text(pf.read_text(encoding="utf-8"))
+            if capability == "SAFE_SHELL": args = [pf.read_text()]
+
+    if capability == "SAFE_SHELL":
+        import subprocess as _sp
+        shell_script = str(ROME_ROOT / "legions" / "shell_executor.py")
+        try:
+            proc = _sp.Popen(
+                ["python3", shell_script, task_id, str(time.time()), args[0] if args else ""],
+                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, start_new_session=True,
+            )
+            return {"ok": True, "status": "DISPATCHED", "task_id": task_id}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    cap_args = " ".join(cap.get("args", []))
+    quoted_args = shlex.quote(" ".join(args)) if cap_args.rstrip().endswith("-p") else " ".join(shlex.quote(a) for a in args)
+    command = f"{cap['exec']} {task_id} {time.time()} {cap_args} {quoted_args}"
+
+    # Cache check
+    cache_f = CACHE_DIR / f"{_cache_key(capability, args, task_dir)}.json"
+    if not no_cache and cache_f.exists():
+        try:
+            cached = json.loads(cache_f.read_text())
+            if time.time() - cached.get("timestamp", 0) < CACHE_TTL:
+                return json.loads(cached["result"])
+        except Exception: pass
+
+    try:
+        from dictator.core import run_cmd_stream
+        r = await asyncio.wait_for(run_cmd_stream(command, cwd=task_dir, on_stderr=on_progress), timeout=cap.get("timeout", 300))
+        
+        # Fallback chain
+        while not r.get("ok") and _is_busy(r) and FALLBACK_CHAIN.get(capability):
+            capability = FALLBACK_CHAIN[capability]
+            cap = arsenal["capabilities"][capability]
+            command = f"{cap['exec']} {task_id} {time.time()} {' '.join(cap.get('args', []))} {shlex.quote(' '.join(args)) if ' '.join(cap.get('args', [])).endswith('-p') else quoted_args}"
+            r = await asyncio.wait_for(run_cmd_stream(command, cwd=task_dir, on_stderr=on_progress), timeout=cap.get("timeout", 120))
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    ok, output = r.get("ok", False), r.get("stdout", "")
+    report_f = task_dir / f"report_{task_id}.txt"
+    if ok and not output.strip() and (not report_f.exists() or report_f.stat().st_size == 0) and not _is_retry:
+        return await _execute_legion_native(task_id, capability, args, input_files, True, prompt_file, True, parent_task_id)
+
+    # Usage parsing
+    usage, manifest_f = None, task_dir / "manifest.json"
+    if manifest_f.exists():
+        try:
+            m = json.loads(manifest_f.read_text())
+            usage = m.get("usage")
+        except Exception: pass
+
+    res = {"ok": ok, "task_id": task_id, "capability": capability, "elapsed_s": round(time.monotonic() - t0, 2), "usage": usage}
+    if not ok: res["error"] = r.get("message", r.get("stderr", "unknown"))
+    else: res["stdout"] = output
+
+    if ok and len(output) > MAX_OUTPUT_CHARS:
+        if not report_f.exists(): report_f.write_text(output)
+        res["stdout"] = output[:200] + f"\n...[TRUNCATED: {report_f}]"
+        res["report_path"] = str(report_f)
+
+    if ok and not no_cache:
+        try:
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache_f.write_text(json.dumps({"timestamp": time.time(), "result": json.dumps(res)}))
+        except Exception: pass
+
+    return res
+
+
 async def _emit_heartbeat(websocket: WebSocket) -> None:
     while True:
         await asyncio.sleep(_HEARTBEAT_SECONDS)
@@ -310,13 +534,13 @@ async def _dispatch_runner(
     output_path: str | None = None,
 ) -> None:
     import os
-    if os.environ.get("ROME_DAEMON"):
+    if IS_DAEMON:
         task_registry.register(task_id, capability)
         await emit_dispatch_start(event_bus, task_id, capability)
         # Immediately mark as running so dashboard doesn't sit at REGISTERED
         task_registry.update_progress(task_id, 0, "Starting...")
     try:
-        result = await _execute_legion_impl(
+        result = await _execute_legion_native(
             task_id=task_id,
             capability=capability,
             args=[prompt],
@@ -326,7 +550,7 @@ async def _dispatch_runner(
         )
         usage = result.get("usage")
         if usage is not None:
-            if os.environ.get("ROME_DAEMON"):
+            if IS_DAEMON:
                 task_registry.update_usage(task_id, usage)
                 await emit_cost_update(event_bus, task_id, usage)
                 total_tokens = usage.get("total_tokens")
@@ -350,20 +574,20 @@ async def _dispatch_runner(
             if rp.exists() and rp.stat().st_size > 20:
                 if not (op.exists() and op.stat().st_size > 0):
                     shutil.copy2(str(rp), str(op))
-        if os.environ.get("ROME_DAEMON") and not is_fire_and_forget:
+        if IS_DAEMON and not is_fire_and_forget:
             task_registry.complete(task_id, status, report_path)
             await emit_complete(event_bus, task_id, status, report_path, usage)
         if not result.get("ok"):
             await emit_error(event_bus, task_id, str(result.get("error") or result.get("message") or "dispatch_failed"))
     except asyncio.CancelledError:
-        if os.environ.get("ROME_DAEMON"):
+        if IS_DAEMON:
             task_registry.complete(task_id, "cancelled", None)
             await emit_complete(event_bus, task_id, "cancelled", None, None)
         raise
     except Exception as exc:
         import traceback, logging
         logging.getLogger("uvicorn.error").error("_dispatch_runner EXCEPTION task=%s: %s", task_id, traceback.format_exc())
-        if os.environ.get("ROME_DAEMON"):
+        if IS_DAEMON:
             task_registry.complete(task_id, "failed", None)
             await emit_error(event_bus, task_id, str(exc))
     finally:
@@ -423,7 +647,7 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     if worker_ws is not None:
         # Register task in daemon's registry so await/status/dashboard work
         import os
-        if os.environ.get("ROME_DAEMON"):
+        if IS_DAEMON:
             task_registry.register(task_id, capability)
             await emit_dispatch_start(event_bus, task_id, capability)
             task_registry.update_progress(task_id, 0, "Routing to persistent worker...")
@@ -450,6 +674,9 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
             task.cancel()
             raise ValueError(f"task {task_id} is already running")
         _ACTIVE_TASKS[task_id] = task
+        # Reset stale registry entry so re-dispatched tasks get clean state
+        if task_registry.get(task_id):
+            task_registry.remove(task_id)
 
     return {"task_id": task_id, "capability": capability, "accepted": True}
 
@@ -511,10 +738,13 @@ async def handle_cancel(payload: dict[str, Any]) -> dict[str, Any]:
     async with _ACTIVE_TASKS_LOCK:
         task = _ACTIVE_TASKS.get(task_id)
 
-    if task is None:
-        return {"task_id": task_id, "cancelled": False, "reason": "not_running"}
+    if task is None or task.done():
+        # No running asyncio task — just clean the registry entry (zombie)
+        removed = task_registry.remove(task_id)
+        return {"task_id": task_id, "cancelled": removed, "reason": "cleaned" if removed else "not_found"}
 
     task.cancel()
+    task_registry.remove(task_id)
     return {"task_id": task_id, "cancelled": True}
 
 
@@ -544,6 +774,88 @@ async def handle_read_report(payload: dict[str, Any]) -> dict[str, Any]:
     if content is None:
         return {"report_path": report_path, "content": "File not found or no report generated."}
     return {"report_path": report_path, "content": content}
+
+
+async def handle_read_file(payload: dict[str, Any]) -> dict[str, Any]:
+    path = Path(payload.get("path", "")).expanduser().resolve()
+    start_line = int(payload.get("start_line", 1))
+    end_line = payload.get("end_line")
+    if end_line is not None:
+        end_line = int(end_line)
+
+    if not path.exists():
+        return {"ok": False, "error": f"File not found: {path}"}
+
+    try:
+        if start_line == 0:
+            # Special overview mode
+            import subprocess
+            res = subprocess.run(["grep", "-n", ".", str(path)], capture_output=True, text=True, timeout=5)
+            lines = res.stdout.splitlines()
+            overview = []
+            # Heuristic for important lines (imports, defs, classes)
+            for l in lines:
+                if any(x in l for x in ("import ", "from ", "def ", "class ", "async def ")):
+                    overview.append(l)
+                if len(overview) > 100: break
+            return {"ok": True, "path": str(path), "overview": "\n".join(overview), "total_lines": len(lines)}
+
+        with open(path, "r", encoding="utf-8") as f:
+            all_lines = f.readlines()
+
+        if end_line is None:
+            selected = all_lines[start_line-1:]
+        else:
+            selected = all_lines[start_line-1:end_line]
+        
+        return {
+            "ok": True,
+            "path": str(path),
+            "content": "".join(selected),
+            "start_line": start_line,
+            "end_line": start_line + len(selected) - 1,
+            "total_lines": len(all_lines)
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+async def handle_write_file(payload: dict[str, Any]) -> dict[str, Any]:
+    path = Path(payload.get("path", "")).expanduser().resolve()
+    content = payload.get("content", "")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return {"ok": True, "path": str(path), "size": len(content)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+async def handle_list_dir(payload: dict[str, Any]) -> dict[str, Any]:
+    dir_path = Path(payload.get("dir_path", ".")).expanduser().resolve()
+    max_depth = int(payload.get("max_depth", 2))
+    limit = int(payload.get("limit", 100))
+
+    if not dir_path.is_dir():
+        return {"ok": False, "error": f"Not a directory: {dir_path}"}
+
+    try:
+        entries = []
+        for p in dir_path.rglob("*"):
+            rel = p.relative_to(dir_path)
+            depth = len(rel.parts)
+            if depth > max_depth: continue
+            entries.append({
+                "name": p.name,
+                "path": str(p),
+                "type": "directory" if p.is_dir() else "file",
+                "depth": depth - 1
+            })
+            if len(entries) >= limit: break
+        
+        return {"ok": True, "dir_path": str(dir_path), "entries": entries, "count": len(entries)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
@@ -802,6 +1114,9 @@ async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
         "submit_result": handle_submit_result,
         "dashboard_stats": handle_dashboard_stats,
         "workers": _handle_workers,
+        "read_file": handle_read_file,
+        "write_file": handle_write_file,
+        "list_dir": handle_list_dir,
     }
     handler = handlers.get(command)
     if handler is None:

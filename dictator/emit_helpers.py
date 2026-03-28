@@ -10,7 +10,7 @@ async def emit_events(ok, task_id, task_dir, result, usage):
     status = "SUCCESS" if ok else "FAILED"
 
     # Local path: running inside daemon process (shared memory)
-    if os.environ.get("ROME_DAEMON"):
+    if IS_DAEMON:
         try:
             if ok and usage:
                 await emit_cost_update(event_bus, task_id, usage)

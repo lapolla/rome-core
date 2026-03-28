@@ -1,8 +1,8 @@
-# ROME Protocol v2.0 Specification
-**Status:** DRAFT | **Authority:** Absolute | **Version:** 2.0.0
+# ROME Protocol v3.0.0 Specification
+**Status:** DRAFT | **Authority:** Absolute | **Version:** 3.0.0
 
 ## 1. Overview
-The ROME (Remote Orchestrated Model Execution) Protocol v2.0 transitions from unstructured text concatenation to a structured, dependency-aware artifact management system. It introduces the "ROME Signal" for model-to-orchestrator communication and a mandatory "Manifest" for all task outputs.
+The ROME (Remote Orchestrated Model Execution) Protocol v3.0.0 transitions from unstructured text concatenation to a structured, dependency-aware artifact management system. It introduces the "ROME Signal" for model-to-orchestrator communication and a mandatory "Manifest" for all task outputs.
 
 ## 2. The ROME Signal
 Models MUST use specialized tags to demarcate their primary output and provide metadata to the `legion_wrapper`.
@@ -16,7 +16,7 @@ Every task execution MUST produce a `manifest.json` in its sandbox directory.
 
 ```json
 {
-  "rome_v": "2.0",
+  "rome_v": "3.0.0",
   "task_id": "TASK_ID",
   "status": "SUCCESS",
   "metadata": {
@@ -30,7 +30,7 @@ Every task execution MUST produce a `manifest.json` in its sandbox directory.
     "cost_usd": null
   },
   "progress": [
-    "0% + [0.0s] Engaged (V2.0).",
+    "0% + [0.0s] Engaged (v3.0.0).",
     "20% x [1.2s] Reasoning...",
     "100% * [8.3s] Mission complete."
   ],
@@ -50,14 +50,14 @@ Every task execution MUST produce a `manifest.json` in its sandbox directory.
 ## 4. Dependency-Aware Orchestration (DAG)
 Tasks in a campaign can now define dependencies. The Orchestrator (`centurion_v2`) will only execute a task when all its `depends_on` requirements are met with a `SUCCESS` status.
 
-## 5. Structured Suture (Suture v3.0)
+## 5. Structured Suture (Suture v3.0.0)
 The Suture capability no longer performs simple concatenation. It:
 1.  Collects all `manifest.json` files from a campaign.
 2.  Validates exported symbols and file paths.
 3.  Uses a "Blueprint" template to inject artifacts into their final destination files.
 4.  Resolves naming collisions and ensures correct logic ordering.
 
-## 6. Slave Roles (v2.0)
+## 6. Slave Roles (v3.0.0)
 *   **GEMINI (Senate/Architect):** High-level logic, complex Python, and Suture consolidation.
 *   **CLAUDE (Security/Review):** Code review, security audits, and edge-case detection.
 *   **OPENCODE (I/O Slave):** File system operations, shell scripting, and boilerplate generation.

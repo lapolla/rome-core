@@ -8,7 +8,7 @@ import os
 import time
 from pathlib import Path
 
-ROME_ROOT = Path(os.environ.get("ROME_ROOT", "/home/paul-kane/projects/rome-core"))
+ROME_ROOT = Path(__file__).resolve().parent.parent
 LOG_DIR = ROME_ROOT / "logs"
 LOG_FILE = LOG_DIR / "rome.jsonl"
 MAX_SIZE = 50 * 1024 * 1024  # 50 MB
@@ -36,6 +36,7 @@ def log_event(
     duration_s: float = 0.0,
     message: str = "",
     usage: dict | None = None,
+    sequence: int = 0,
 ):
     """Append one JSON line to the ROME log."""
     try:
@@ -44,13 +45,16 @@ def log_event(
         if LOG_FILE.exists() and LOG_FILE.stat().st_size >= MAX_SIZE:
             _rotate()
 
+        now = time.time()
         entry = {
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "ts": round(now, 4),
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now)) + f".{int((now % 1) * 10000):04d}",
             "tool": tool,
             "task_id": task_id,
             "status": status,
             "duration_s": round(duration_s, 3),
             "message": message[:500],
+            "sequence": sequence,
         }
         if usage:
             entry["usage"] = usage

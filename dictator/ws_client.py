@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue
 import time
 import threading
@@ -265,11 +266,30 @@ async def send_command_async(command: str, payload: dict[str, Any], timeout: flo
         return {"ok": False, "error": str(e)}
 
 
-def submit_agent_result_sync(task_id: str, content: str, timeout: float = 10.0) -> dict[str, Any]:
+def submit_agent_result_sync(task_id: str, content: str, token: str | None = None, timeout: float = 10.0) -> dict[str, Any]:
     """Sync version of submit_agent_result — sends submit_result command."""
-    return send_command_sync("submit_result", {"task_id": task_id, "content": content}, timeout)
+    if not token:
+        token = os.environ.get("ROME_TASK_TOKEN", "")
+    return send_command_sync("submit_result", {"task_id": task_id, "token": token, "content": content}, timeout)
 
 
-async def submit_agent_result_async(task_id: str, content: str, timeout: float = 10.0) -> dict[str, Any]:
+async def submit_agent_result_async(task_id: str, content: str, token: str | None = None, timeout: float = 10.0) -> dict[str, Any]:
     """Async version of submit_agent_result — sends submit_result command."""
-    return await send_command_async("submit_result", {"task_id": task_id, "content": content}, timeout)
+    if not token:
+        token = os.environ.get("ROME_TASK_TOKEN", "")
+    return await send_command_async("submit_result", {"task_id": task_id, "token": token, "content": content}, timeout)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: python3 ws_client.py <command> <payload_json>")
+        sys.exit(1)
+    
+    cmd = sys.argv[1]
+    try:
+        payload = json.loads(sys.argv[2])
+    except json.JSONDecodeError:
+        payload = {}
+    
+    resp = send_command_sync(cmd, payload)
+    print(json.dumps(resp))

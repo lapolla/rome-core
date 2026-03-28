@@ -1,0 +1,28 @@
+{
+  "campaign_id": "slm-defeat-analysis",
+  "success": 3,
+  "failed": 1,
+  "elapsed_s": 0.25,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "tasks": {
+    "analyze-defeat-logic": {
+      "status": "FAILED",
+      "exit_code": 1
+    },
+    "grab-slm-log": {
+      "status": "SUCCESS",
+      "exit_code": 0
+    },
+    "grab-papyrus-slm": {
+      "status": "SUCCESS",
+      "exit_code": 0
+    },
+    "grab-defeat-code": {
+      "status": "SUCCESS",
+      "exit_code": 0
+    }
+  }
+}

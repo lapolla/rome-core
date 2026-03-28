@@ -66,15 +66,18 @@ async def test_handle_await_waits_for_completion(fresh_registry):
             reg.complete("pending-1", "completed", "/tmp/r.txt")
             await emit_complete(bus, "pending-1", "completed", "/tmp/r.txt", {"total_tokens": 100})
 
-        # Push-based: handle_await returns immediately with pending list
+        # Start completion in background
+        asyncio.create_task(complete_after_delay())
+
+        # Blocks until complete (v3.0.0 behavior)
         result = await ws_server.handle_await({
             "task_ids": ["pending-1"],
             "include_reports": False,
         })
 
-    assert result["ok"] == "pending"
-    assert "pending-1" in result["pending"]
-    assert result["completed"] == {}
+    assert result["ok"] is True
+    assert "pending-1" in result["tasks"]
+    assert result["tasks"]["pending-1"]["status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -90,12 +93,20 @@ async def test_handle_await_mixed_complete_and_pending(fresh_registry):
     with patch.object(ws_server, "event_bus", bus), \
          patch.object(ws_server, "task_registry", reg):
 
-        # Push-based: returns completed tasks immediately, pending as list
+        async def complete_after_delay():
+            await asyncio.sleep(0.3)
+            reg.complete("b", "completed", "/tmp/r.txt")
+            await emit_complete(bus, "b", "completed", "/tmp/r.txt", {"total_tokens": 100})
+
+        # Start completion for pending task 'b' in background
+        asyncio.create_task(complete_after_delay())
+
+        # Blocks until ALL tasks are complete
         result = await ws_server.handle_await({"task_ids": ["a", "b"]})
 
-    assert result["ok"] == "pending"
-    assert result["completed"]["a"]["status"] == "completed"
-    assert "b" in result["pending"]
+    assert result["ok"] is True
+    assert result["tasks"]["a"]["status"] == "completed"
+    assert result["tasks"]["b"]["status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -140,7 +151,8 @@ async def test_handle_await_with_reports(fresh_registry, tmp_path):
 
     from dictator import ws_server
     with patch.object(ws_server, "event_bus", bus), \
-         patch.object(ws_server, "task_registry", reg):
+         patch.object(ws_server, "task_registry", reg), \
+         patch.object(ws_server, "_summarize_report", side_effect=lambda x: "summary: " + x[:50]):
         result = await ws_server.handle_await({
             "task_ids": ["rpt-1"],
             "include_reports": True,
@@ -151,7 +163,7 @@ async def test_handle_await_with_reports(fresh_registry, tmp_path):
 
 @pytest.mark.asyncio
 async def test_handle_await_report_truncation(fresh_registry, tmp_path):
-    """Reports > 4000 chars are truncated."""
+    """Reports > 2000 chars are truncated/summarized."""
     bus, reg = fresh_registry
 
     report = tmp_path / "big_report.txt"
@@ -162,11 +174,14 @@ async def test_handle_await_report_truncation(fresh_registry, tmp_path):
 
     from dictator import ws_server
     with patch.object(ws_server, "event_bus", bus), \
-         patch.object(ws_server, "task_registry", reg):
+         patch.object(ws_server, "task_registry", reg), \
+         patch.object(ws_server, "_summarize_report", side_effect=lambda x: "summary: " + x[:50] + " [TRUNCATED]"):
         result = await ws_server.handle_await({
             "task_ids": ["big-1"],
             "include_reports": True,
         })
+
+    assert result["tasks"]["big-1"]["report"] == "summary: " + ("x" * 50) + " [TRUNCATED]"
 
     content = result["tasks"]["big-1"]["report"]
     assert len(content) < 5000

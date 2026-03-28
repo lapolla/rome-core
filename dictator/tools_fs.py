@@ -1,4 +1,4 @@
-"""Filesystem tools: shell_exec, fs_read, fs_write, read_anywhere, write_anywhere, list_directory."""
+"""Filesystem tools: fs_read, fs_write, read_anywhere, write_anywhere, list_directory."""
 
 import asyncio
 import json
@@ -14,13 +14,13 @@ def _debug(msg: str):
 
 async def _gemini_summarize(content: str, instruction: str, timeout: int = 15) -> str | None:
     """Quick Gemini Flash summarization. Returns summary or None on failure."""
-    GEMINI_CLI = "/home/paul-kane/.nvm/versions/node/v20.20.0/bin/gemini"
+    GEMINI_CLI = "/home/paul-kane/projects/gemini-cli/bundle/gemini.js"
     prompt = f"{instruction}\n\n```\n{content[:8000]}\n```"
     try:
         proc = await asyncio.create_subprocess_exec(
             GEMINI_CLI, "-p", prompt,
             "--sandbox", "false",
-            "-m", "gemini-2.5-flash",
+            "-m", "gemini-3.1-pro",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -44,45 +44,6 @@ def _is_compact_mode() -> bool:
 
 def register(mcp):
     """Register FS tools with the given FastMCP instance."""
-
-    @mcp.tool()
-    async def shell_exec(command: str) -> str:
-        """Execute a shell command (cwd = /var/www/ftk_lms)."""
-        from dictator.core import run_cmd_stream
-        from dictator.rome_log import log_event
-        log_event(tool="shell_exec", message=command[:200])
-        r = await run_cmd_stream(command, cwd=ROOT_DIR)
-        out = r.get("stdout", "").strip()
-        
-        if r.get("truncated"):
-            out += "\n\n[ROME: Output truncated for context safety. Use 'read_anywhere' on the report for full logs.]"
-
-        if not r.get("ok", False):
-            err = r.get("stderr", r.get("message", ""))
-            exit_code = r.get("exit_code", "?")
-            return f"ERR({exit_code}): {err}" if err else f"ERR({exit_code})"
-
-        lines = out.splitlines()
-        n = len(lines)
-
-        # Compact: first 20 + last 10 lines if output is large
-        if n > 40:
-            trimmed = lines[:20] + [f"... ({n - 30} lines omitted) ..."] + lines[-10:]
-            out = "\n".join(trimmed)
-
-        # Smart summarize: compact mode >5 lines, normal >20 lines
-        summarize_above = 5 if _is_compact_mode() else 20
-        if n > summarize_above:
-            summary = await _gemini_summarize(
-                out,
-                "Summarize this command output in 1-3 lines. "
-                "Include: success/failure, key numbers (files compiled, tests passed, etc), "
-                "any errors or warnings. Be extremely concise."
-            )
-            if summary:
-                return f"[OK] {n} lines — {summary}"
-
-        return out if out else "OK"
 
     @mcp.tool()
     async def fs_read(path: str, start_line: int = 1, end_line: int | None = None) -> str:
