@@ -18,7 +18,7 @@ import yaml
 
 from websockets.exceptions import ConnectionClosed
 
-from dictator.core import event_bus, task_registry, DAEMON_START_TIME, ROME_ROOT, ARSENAL_PATH, IS_DAEMON
+from dictator.core import event_bus, task_registry, DAEMON_START_TIME, DAEMON_START_WALL, ROME_ROOT, ARSENAL_PATH, IS_DAEMON
 from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_dispatch_start, emit_error, emit_capability_status, emit_system_status
 from dictator.tools_legion import _execute_legion_impl, _resolve_arsenal_paths
 
@@ -203,12 +203,55 @@ def _load_config_token() -> str:
         return ""
 
 
+async def _get_session_usage() -> dict[str, Any]:
+    """Scan rome.jsonl for all usage events since DAEMON_START_WALL."""
+    log_path = ROME_ROOT / "logs" / "rome.jsonl"
+    if not log_path.exists():
+        return {"worker_tokens": 0, "dictator_tokens": 0, "cost_usd": 0.0}
+    
+    worker_tokens = 0
+    dictator_tokens = 0
+    cost_usd = 0.0
+    
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                    if entry.get("ts", 0) < DAEMON_START_WALL:
+                        continue
+                    
+                    usage = entry.get("usage", {})
+                    if not usage: continue
+                    
+                    tokens = int(usage.get("total_tokens", 0))
+                    cost = float(usage.get("cost_usd", 0.0) or 0.0)
+                    
+                    if entry.get("tool") == "legion_wrapper":
+                        worker_tokens += tokens
+                    else:
+                        dictator_tokens += tokens
+                    
+                    cost_usd += cost
+                except (json.JSONDecodeError, ValueError):
+                    continue
+    except Exception as e:
+        logger.error("Error reading session usage from log: %s", e)
+        
+    return {
+        "worker_tokens": worker_tokens,
+        "dictator_tokens": dictator_tokens,
+        "cost_usd": round(cost_usd, 6)
+    }
+
+
 async def _load_capabilities() -> dict[str, bool]:
     # ARSENAL_PATH is already imported
     import json
     import asyncio
     import os
     import logging
+    import shutil
 
     capabilities_status = {}
     try:
@@ -218,15 +261,30 @@ async def _load_capabilities() -> dict[str, bool]:
 
         with open(ARSENAL_PATH, "r", encoding="utf-8") as f:
             arsenal_config = _resolve_arsenal_paths(json.load(f))
-        import shutil
+        
+        # Get capabilities currently served by persistent workers
+        worker_caps = set()
+        for worker in await worker_registry.get_info():
+            worker_caps.update(worker.get("capabilities", []))
+
         for capability_name, details in arsenal_config.get("capabilities", {}).items():
             exec_path = details.get("exec", "")
+            
+            # 1. Internal commands (always available)
             if exec_path == "internal":
                 capabilities_status[capability_name] = True
+            
+            # 2. Persistent-only capabilities (LLMs)
+            elif capability_name in {"GEMINI", "CLAUDE", "CODEX", "OPENCODE"}:
+                capabilities_status[capability_name] = capability_name in worker_caps
+            
+            # 3. Local capabilities (fallback to disk check)
             elif exec_path:
                 capabilities_status[capability_name] = Path(exec_path).exists() or shutil.which(exec_path) is not None
+            
             else:
                 capabilities_status[capability_name] = False
+                
     except FileNotFoundError:
         logging.getLogger("rome.daemon").warning("Arsenal file not found at %s", ARSENAL_PATH)
     except json.JSONDecodeError:
@@ -856,11 +914,16 @@ async def handle_status(payload: dict[str, Any]) -> dict[str, Any]:
         active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
         caps = await _load_capabilities()
         workers = await worker_registry.get_info()
+        usage = await _get_session_usage()
+        
         return {"ok": True, "active_tasks": active, "total_tasks": len(tasks),
                 "uptime_s": round(time.monotonic() - DAEMON_START_TIME, 3),
                 "capabilities": list(caps.keys()),
                 "capability_status": caps,
-                "workers": workers}
+                "workers": workers,
+                "session_worker_tokens": usage["worker_tokens"],
+                "session_dictator_tokens": usage["dictator_tokens"],
+                "session_cost_usd": usage["cost_usd"]}
     task_id = str(payload.get("task_id") or "").strip()
     if task_id:
         task = task_registry.get(task_id)

@@ -516,10 +516,6 @@
                 <span id="wsLabel">WS CONNECTING</span>
               </div>
               <div class="chip">
-                <span>DAEMON</span>
-                <span id="httpLabel">PENDING</span>
-              </div>
-              <div class="chip">
                 <span>UPTIME</span>
                 <span id="uptimeLabel">--</span>
               </div>
@@ -535,8 +531,12 @@
           </div>
           <div class="controls">
             <div class="control-label">Connection</div>
-            <button id="connectButton" type="button">Reconnect</button>
-            <div class="hint">Reconnects the live WebSocket stream and refreshes daemon status.</div>
+            <div class="control-row">
+              <input type="text" id="wsUrlInput" placeholder="ws://localhost:8741/ws" style="flex: 2;">
+              <input type="password" id="wsTokenInput" placeholder="Token (Required for Remote)" style="flex: 1;">
+              <button id="connectButton" type="button" style="min-width: 120px;">Connect</button>
+            </div>
+            <div class="hint">Target a specific ROME node. Defaults to the serving daemon.</div>
           </div>
         </div>
         <div class="stats-grid">
@@ -557,10 +557,6 @@
             <div class="stat-value" id="workerCount">0 active</div>
           </div>
 
-          <div class="stat">
-            <div class="stat-label">Health</div>
-            <div class="stat-value" id="healthStatus">--</div>
-          </div>
           <div class="stat">
             <div class="stat-label">Tokens</div>
             <div class="stat-value" id="totalTokens" style="font-size:1.1rem">0</div>
@@ -599,10 +595,13 @@
       (function () {
         const cardsEl = document.getElementById("cards");
         const eventLogEl = document.getElementById("eventLog");
+        const wsUrlInput = document.getElementById("wsUrlInput");
+        const wsTokenInput = document.getElementById("wsTokenInput");
         const connectButton = document.getElementById("connectButton");
+
         const wsChip = document.getElementById("wsChip");
         const wsLabel = document.getElementById("wsLabel");
-        const httpLabel = document.getElementById("httpLabel");
+
         const uptimeLabel = document.getElementById("uptimeLabel");
         const hostLabel = document.getElementById("hostLabel");
         const activeTasksEl = document.getElementById("activeTasks");
@@ -614,7 +613,6 @@
         const throughputEl = document.getElementById("throughput");
         const queueCountsEl = document.getElementById("queueCounts");
         const workerCountEl = document.getElementById("workerCount");
-        const healthStatusEl = document.getElementById("healthStatus");
         const capabilitiesStripEl = document.getElementById("capabilitiesStrip");
 
         const logPanel = document.getElementById("logPanel");
@@ -1041,7 +1039,7 @@
 
           // Session Cost
           const totalTokens = state.workerTokens + state.dictatorTokens;
-          const sessionCost = (totalTokens / 1000) * state.tokenCostRate;
+          const sessionCost = state.sessionCost || (totalTokens / 1000) * state.tokenCostRate;
           sessionCostEl.textContent = formatCurrency(sessionCost);
 
           // Throughput
@@ -1058,22 +1056,6 @@
           // Workers
           const workersCount = state.workers ? state.workers.length : 0;
           workerCountEl.textContent = workersCount + " active";
-          
-          // Health
-          let healthText = "OK";
-          let healthColor = "var(--success)";
-          if (wsChip.dataset.state !== "connected") {
-            healthText = "WS Disconnected";
-            healthColor = "var(--failed)";
-          } else if (state.daemonStatus && state.daemonStatus.errors_count > 0) { // Assuming daemonStatus has errors_count
-            healthText = "Daemon Errors";
-            healthColor = "var(--failed)";
-          } else if (uptimeLabel.textContent === "--") { // Simple check if uptime is not reported yet
-            healthText = "Daemon Offline";
-            healthColor = "var(--failed)";
-          }
-          healthStatusEl.textContent = healthText;
-          healthStatusEl.style.color = healthColor; // Apply color directly or via class
           
           // Original Tokens Stat - remains unchanged but included for completeness in the new block
           const workerTok = state.workerTokens || 0;
@@ -1112,16 +1094,22 @@
           wsChip.dataset.state = kind;
           if (kind === "connected") {
             wsLabel.textContent = "WS CONNECTED";
+            connectButton.textContent = "Disconnect";
           } else if (kind === "connecting") {
             wsLabel.textContent = "WS CONNECTING";
+            connectButton.textContent = "Cancel";
           } else if (kind === "error") {
             wsLabel.textContent = "WS ERROR";
+            connectButton.textContent = "Connect";
           } else {
             wsLabel.textContent = detail ? "WS " + detail.toUpperCase() : "WS DISCONNECTED";
+            connectButton.textContent = "Connect";
           }
         }
 
         function wsUrl() {
+          const inputVal = wsUrlInput.value.trim();
+          if (inputVal) return inputVal;
           const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
           return protocol + "//" + window.location.host + "/ws";
         }
@@ -1142,6 +1130,7 @@
         function connectSocket() {
           if (state.socket && (state.socket.readyState === WebSocket.OPEN || state.socket.readyState === WebSocket.CONNECTING)) {
             state.socket.close();
+            return; // Act as disconnect
           }
           if (state.reconnectTimer) {
             clearTimeout(state.reconnectTimer);
@@ -1149,7 +1138,11 @@
           }
 
           setWsState("connecting");
-          const socket = new WebSocket(wsUrl());
+          const targetUrl = wsUrl();
+          const token = wsTokenInput.value.trim();
+          const finalUrl = token ? targetUrl + (targetUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token) : targetUrl;
+          
+          const socket = new WebSocket(finalUrl);
           state.socket = socket;
 
           socket.addEventListener("open", function () {
@@ -1179,7 +1172,6 @@
               if (data.ok && data.payload) {
                 if (data.payload.active_tasks !== undefined) {
                   state.daemonStatus = data.payload;
-                  httpLabel.textContent = "OK";
                   uptimeLabel.textContent = formatDuration(Number(data.payload.uptime_s));
                   // hostLabel.textContent = data.payload.host; // Host is now handled by system_status event
                 }
@@ -1199,9 +1191,19 @@
                   handleSnapshot(data.payload.tasks);
                   addLog("snapshot", "-", Object.keys(data.payload.tasks).length + " tasks", Date.now() / 1000);
                 }
-                if (data.payload.session_waste_tokens !== undefined) {
-                  state.dictatorTokens = Number(data.payload.session_waste_tokens);
+                if (data.payload.session_worker_tokens !== undefined) {
+                  state.workerTokens = data.payload.session_worker_tokens;
                 }
+                if (data.payload.session_dictator_tokens !== undefined) {
+                  state.dictatorTokens = data.payload.session_dictator_tokens;
+                }
+                if (data.payload.session_cost_usd !== undefined) {
+                  state.sessionCost = data.payload.session_cost_usd;
+                }
+                if (data.payload.session_waste_tokens !== undefined) {
+                  state.wasteTokens = data.payload.session_waste_tokens;
+                }
+
                 renderStats(); // Ensure stats are updated after processing initial state
               } else if (!data.ok) {
                 addLog("response_error", "-", data.error || "command failed", Date.now() / 1000);
@@ -1229,7 +1231,6 @@
 
         function refreshDaemonStatus() {
           if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
-            httpLabel.textContent = "OFFLINE";
             return;
           }
           sendCommand("status", { summary: true });

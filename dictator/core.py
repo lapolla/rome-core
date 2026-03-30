@@ -31,9 +31,6 @@ GIT_ROOT = _p("git_root", "~/projects/Drupal11")
 ROME_ROOT = Path(__file__).resolve().parent.parent
 IS_DAEMON = False
 ARSENAL_PATH = ROME_ROOT / "arsenal" / "core_arsenal.json"
-SKYRIM_STATE_FILE = _p("skyrim_state_file",
-    "/media/paul-kane/SteamGames/steamapps/compatdata/489830/pfx/drive_c/tmp/skyrim_state.json")
-MO2_DOWNLOADS = _p("mo2_downloads", "~/Games/MO2/downloads")
 
 # Drupal paths
 DRUPAL_MODULES_SRC = _p("drupal_modules_src", "~/projects/Drupal11/modules/custom/")
@@ -41,14 +38,12 @@ DRUPAL_MODULES_DEST = _p("drupal_modules_dest", "/var/www/ftk_lms/web/modules/cu
 DRUPAL_THEMES_SRC = _p("drupal_themes_src", "~/projects/Drupal11/themes/custom/")
 DRUPAL_THEMES_DEST = _p("drupal_themes_dest", "/var/www/ftk_lms/web/themes/custom/")
 
-# Skyrim/modding paths
-PAPYRUS_COMPILER = _p("papyrus_compiler", "/media/paul-kane/SteamGames/Games/mods/compile_papyrus.sh")
-
 # ── Event Bus & Task Registry (Phase 1 WS) ────────────────────────────
 from dictator.events import EventBus, TaskRegistry
 event_bus = EventBus(source="dictator")
 task_registry = TaskRegistry()
 DAEMON_START_TIME = _time.monotonic()
+DAEMON_START_WALL = _time.time()
 SESSION_ID = str(uuid.uuid4())
 
 MAX_BUF = _cfg.get("max_output_bytes", 10 * 1024 * 1024)
