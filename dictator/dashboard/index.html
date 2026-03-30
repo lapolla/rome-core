@@ -550,8 +550,13 @@
           </div>
           <div class="stat">
             <div class="stat-label">Queue</div>
-            <div class="stat-value" id="queueCounts">--</div>
+            <div class="stat-value" id="queueCounts">0 pending / 0 running</div>
           </div>
+          <div class="stat">
+            <div class="stat-label">Workers</div>
+            <div class="stat-value" id="workerCount">0 active</div>
+          </div>
+
           <div class="stat">
             <div class="stat-label">Health</div>
             <div class="stat-value" id="healthStatus">--</div>
@@ -608,6 +613,7 @@
         const sessionCostEl = document.getElementById("sessionCost");
         const throughputEl = document.getElementById("throughput");
         const queueCountsEl = document.getElementById("queueCounts");
+        const workerCountEl = document.getElementById("workerCount");
         const healthStatusEl = document.getElementById("healthStatus");
         const capabilitiesStripEl = document.getElementById("capabilitiesStrip");
 
@@ -861,7 +867,7 @@
             return;
           }
 
-          if (type === "agent_hello") {
+          if (type === "agent_hello" || type === "daemon_hello") {
             state.daemonCapabilities = payload.capabilities || [];
             state.capabilities = {}; // Reset capabilities status on new hello
             state.daemonCapabilities.forEach(cap => state.capabilities[cap] = null); // Initialize with null (grey)
@@ -1048,6 +1054,10 @@
           const pending = tasks.filter(task => canonicalStatus(task.status) === "registered").length;
           const running = tasks.filter(task => canonicalStatus(task.status) === "running").length;
           queueCountsEl.textContent = pending + " pending / " + running + " running";
+
+          // Workers
+          const workersCount = state.workers ? state.workers.length : 0;
+          workerCountEl.textContent = workersCount + " active";
           
           // Health
           let healthText = "OK";
@@ -1175,9 +1185,15 @@
                 }
                 if (data.payload.capabilities !== undefined) {
                   state.daemonCapabilities = data.payload.capabilities || [];
+                  const capsStatus = data.payload.capability_status || {};
                   state.capabilities = {};
-                  state.daemonCapabilities.forEach(cap => state.capabilities[cap] = null);
+                  state.daemonCapabilities.forEach(cap => {
+                    state.capabilities[cap] = capsStatus[cap] !== undefined ? capsStatus[cap] : null;
+                  });
                   renderCapabilities();
+                }
+                if (data.payload.workers !== undefined) {
+                  state.workers = data.payload.workers || [];
                 }
                 if (data.payload.tasks !== undefined) {
                   handleSnapshot(data.payload.tasks);

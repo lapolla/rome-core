@@ -221,7 +221,9 @@ async def _load_capabilities() -> dict[str, bool]:
         import shutil
         for capability_name, details in arsenal_config.get("capabilities", {}).items():
             exec_path = details.get("exec", "")
-            if exec_path:
+            if exec_path == "internal":
+                capabilities_status[capability_name] = True
+            elif exec_path:
                 capabilities_status[capability_name] = Path(exec_path).exists() or shutil.which(exec_path) is not None
             else:
                 capabilities_status[capability_name] = False

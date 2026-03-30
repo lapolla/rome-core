@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""Unified ASGI entrypoint for ROME."""
+"""ROME Daemon — pure WebSocket, no middlemen.
+
+Replaces Uvicorn/Starlette/ASGI with raw websockets.serve().
+HTTP routes (/health, /dashboard) served via process_request hook.
+"""
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
-import os
+import logging
+import mimetypes
+import signal
 import sys
+import time
 from pathlib import Path
 
 _PARENT = str(Path(__file__).resolve().parent.parent)
@@ -16,18 +24,18 @@ if _PARENT not in sys.path:
 import dictator.core as core
 core.IS_DAEMON = True
 
-import uvicorn
-from contextlib import asynccontextmanager
-from starlette.applications import Starlette
-from starlette.responses import FileResponse
-from starlette.routing import Mount, Route, WebSocketRoute
+from websockets.asyncio.server import serve
+from websockets.http11 import Response
+from websockets.datastructures import Headers as WSHeaders
 
-from dictator.core import task_registry
-from dictator.orchestrator import create_mcp_server
-from dictator.ws_server import rome_ws_endpoint
+from dictator.core import task_registry, DAEMON_START_TIME
+from dictator.ws_server import rome_ws_handler
 
 _CFG_PATH = Path(__file__).with_name("config.json")
-_VERSION = "2.5"
+_DASHBOARD_DIR = Path(__file__).parent / "dashboard"
+_VERSION = "3.0"
+
+logger = logging.getLogger("rome.daemon")
 
 
 def load_config() -> dict:
@@ -39,74 +47,116 @@ def load_config() -> dict:
         return {}
 
 
-async def dashboard_index(request) -> FileResponse:
-    del request
-    p = Path(__file__).parent / "dashboard" / "index.html"
-    return FileResponse(str(p), media_type="text/html; charset=utf-8",
-                        headers={"Cache-Control": "no-store"})
+# ── HTTP via process_request ──────────────────────────────────────────
+
+_MIME_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css",
+    ".js": "application/javascript",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+}
 
 
-async def health_endpoint(request):
-    """Lightweight HTTP health check — no WS needed."""
-    import time
-    from starlette.responses import JSONResponse
-    from dictator.core import DAEMON_START_TIME
-    tasks = task_registry.get_all()
-    active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
-    return JSONResponse({
-        "ok": True,
-        "version": _VERSION,
-        "uptime_s": round(time.monotonic() - DAEMON_START_TIME, 3),
-        "active_tasks": active,
-        "total_tasks": len(tasks),
-    })
+def _http_response(status: int, body: bytes, content_type: str = "application/json") -> Response:
+    headers = WSHeaders([
+        ("Content-Type", content_type),
+        ("Content-Length", str(len(body))),
+        ("Cache-Control", "no-store"),
+    ])
+    return Response(status, "OK" if status == 200 else "Not Found", headers, body)
 
 
-@asynccontextmanager
-async def lifespan(app):
-    swept = task_registry.sweep_orphans()
-    if swept:
-        import logging
-        logging.getLogger("rome.daemon").warning("Swept %d orphaned task(s) to failed on startup", swept)
-    yield
+async def process_request(connection, request):
+    """Intercept HTTP requests before WS upgrade. Serve /health and /dashboard."""
+    from urllib.parse import urlparse
+    parsed = urlparse(request.path)
+    path = parsed.path
+
+    # Health endpoint
+    if path == "/health":
+        tasks = task_registry.get_all()
+        active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
+        body = json.dumps({
+            "ok": True,
+            "version": _VERSION,
+            "uptime_s": round(time.monotonic() - DAEMON_START_TIME, 3),
+            "active_tasks": active,
+            "total_tasks": len(tasks),
+        }).encode()
+        return _http_response(200, body)
+
+    # Dashboard static files
+    if path in ("/dashboard", "/dashboard/"):
+        index = _DASHBOARD_DIR / "index.html"
+        if index.exists():
+            return _http_response(200, index.read_bytes(), "text/html; charset=utf-8")
+
+    if path.startswith("/dashboard/"):
+        rel = path[len("/dashboard/"):]
+        file_path = (_DASHBOARD_DIR / rel).resolve()
+        # Security: ensure path stays within dashboard dir
+        if str(file_path).startswith(str(_DASHBOARD_DIR)) and file_path.is_file():
+            ext = file_path.suffix
+            ctype = _MIME_TYPES.get(ext, "application/octet-stream")
+            return _http_response(200, file_path.read_bytes(), ctype)
+        return _http_response(404, b"Not Found", "text/plain")
+
+    # Everything else: proceed with WebSocket upgrade (return None)
+    if path != "/ws":
+        return _http_response(404, b"Not Found", "text/plain")
 
 
-def create_app() -> Starlette:
-    # Use the orchestrator to create the ROME MCP server instance
-    mcp = create_mcp_server("ROME")
-
-    from starlette.staticfiles import StaticFiles
-    dashboard_dir = Path(__file__).parent / "dashboard"
-    return Starlette(
-        lifespan=lifespan,
-        debug=False,
-        routes=[
-            Mount("/mcp", app=mcp.sse_app()),
-            WebSocketRoute("/ws", endpoint=rome_ws_endpoint),
-            Route("/health", endpoint=health_endpoint),
-            Route("/dashboard", endpoint=dashboard_index),
-            Route("/dashboard/", endpoint=dashboard_index),
-            Mount("/dashboard", app=StaticFiles(directory=str(dashboard_dir), html=True)),
-        ],
-    )
-
+# ── Main ──────────────────────────────────────────────────────────────
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     cfg = load_config()
-    parser = argparse.ArgumentParser(description="ROME unified daemon")
+    parser = argparse.ArgumentParser(description="ROME daemon (WS-native)")
     parser.add_argument("--host", default=str(cfg.get("daemon_host", "127.0.0.1")))
     parser.add_argument("--port", type=int, default=int(cfg.get("daemon_port", 8741)))
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+async def run(host: str, port: int) -> None:
+    # Sweep orphaned tasks from previous run
+    swept = task_registry.sweep_orphans()
+    if swept:
+        logger.warning("Swept %d orphaned task(s) to failed on startup", swept)
 
-    import socket
-    cfg = uvicorn.Config(create_app(), host=args.host, port=args.port, reload=True, reload_dirs=[str(Path(__file__).parent.parent)])
-    cfg.socket_options = [(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)]
-    server = uvicorn.Server(cfg)
-    server.run()
+    stop = asyncio.get_running_loop().create_future()
+
+    def _signal_handler():
+        if not stop.done():
+            stop.set_result(None)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        asyncio.get_running_loop().add_signal_handler(sig, _signal_handler)
+
+    async with serve(
+        rome_ws_handler,
+        host,
+        port,
+        process_request=process_request,
+        logger=logger,
+        open_timeout=30,
+    ) as server:
+        logger.info("ROME daemon v%s listening on ws://%s:%d/ws", _VERSION, host, port)
+        await stop
+
+    logger.info("ROME daemon shut down.")
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stderr,
+    )
+    args = parse_args(argv)
+    asyncio.run(run(args.host, args.port))
     return 0
 
 
