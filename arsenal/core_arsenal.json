@@ -1,13 +1,13 @@
 {
   "capabilities": {
     "GEMINI": {
-      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
+      "exec": "{ROME_ROOT}/legions/legion_wrapper.py",
       "args": [
-        "/home/paul-kane/projects/gemini-cli/bundle/gemini.js",
+        "{GEMINI_CLI}",
         "--sandbox",
         "false",
         "--include-directories",
-        "/home/paul-kane/projects/rome-core",
+        "{ROME_ROOT}",
         "--yolo",
         "--output-format",
         "json",
@@ -22,7 +22,7 @@
       "_note": "Gemini CLI — -p must be last"
     },
     "CLAUDE": {
-      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
+      "exec": "{ROME_ROOT}/legions/legion_wrapper.py",
       "args": [
         "claude",
         "--dangerously-skip-permissions",
@@ -37,7 +37,7 @@
       "_note": "Anthropic Claude Code CLI — -p must be last"
     },
     "OPENCODE": {
-      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
+      "exec": "{ROME_ROOT}/legions/legion_wrapper.py",
       "args": [
         "opencode",
         "run"
@@ -47,7 +47,7 @@
       "_note": "Opencode CLI (unreliable)"
     },
     "CODEX": {
-      "exec": "/home/paul-kane/projects/rome-core/legions/legion_wrapper.py",
+      "exec": "{ROME_ROOT}/legions/legion_wrapper.py",
       "args": [
         "codex",
         "exec",
@@ -63,7 +63,7 @@
     "MCP_TOOL_CLIENT": {
       "exec": "python3",
       "args": [
-        "/home/paul-kane/projects/rome-core/dictator/mcp_client_tool.py"
+        "{ROME_ROOT}/dictator/mcp_client_tool.py"
       ],
       "timeout": 120,
       "min_version": "0.1",
@@ -72,10 +72,16 @@
     "SAFE_SHELL": {
       "exec": "python3",
       "args": [
-        "/home/paul-kane/projects/rome-core/legions/shell_executor.py"
+        "{ROME_ROOT}/legions/shell_executor.py"
       ],
       "timeout": 600,
       "_note": "Dedicated bash executor — no LLM wrapper, no JSON parsing"
+    },
+    "NATIVE_SHELL": {
+      "exec": "internal",
+      "args": [],
+      "timeout": 600,
+      "_note": "Daemon-native shell execution (v4 WS DSA)"
     }
   },
   "protocol_version": "1.0"

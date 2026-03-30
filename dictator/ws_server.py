@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import shlex
 import shutil
@@ -12,17 +13,72 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import parse_qs, urlparse
 import yaml
 
-from starlette.routing import WebSocketRoute
-from starlette.websockets import WebSocket, WebSocketDisconnect
+from websockets.exceptions import ConnectionClosed
 
 from dictator.core import event_bus, task_registry, DAEMON_START_TIME, ROME_ROOT, ARSENAL_PATH, IS_DAEMON
 from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_dispatch_start, emit_error, emit_capability_status, emit_system_status
-from dictator.tools_legion import _execute_legion_impl
+from dictator.tools_legion import _execute_legion_impl, _resolve_arsenal_paths
+
+logger = logging.getLogger("rome.daemon")
+
+
+# ── WebSocket Adapter ─────────────────────────────────────────────────
+# Wraps websockets.ServerConnection to match the Starlette WebSocket API
+# used throughout this file (send_json, receive_json, headers, query_params, close).
+
+class WebSocketDisconnect(Exception):
+    """Raised when the WebSocket client disconnects."""
+
+class WSAdapter:
+    """Adapts websockets.ServerConnection to Starlette-like WebSocket API."""
+
+    def __init__(self, ws):
+        self._ws = ws
+        self._request = ws.request
+        # Build headers dict from request
+        self.headers = {k.lower(): v for k, v in self._request.headers.raw_items()}
+        # Parse query params from path
+        parsed = urlparse(self._request.path)
+        qs = parse_qs(parsed.query)
+        self.query_params = {k: v[0] if len(v) == 1 else v for k, v in qs.items()}
+
+    async def accept(self):
+        pass  # websockets auto-accepts after handshake
+
+    async def receive_json(self) -> dict:
+        try:
+            raw = await self._ws.recv()
+            return json.loads(raw)
+        except ConnectionClosed:
+            raise WebSocketDisconnect()
+
+    async def send_json(self, data: dict) -> None:
+        try:
+            await self._ws.send(json.dumps(data))
+        except ConnectionClosed:
+            pass
+
+    async def close(self, code: int = 1000) -> None:
+        await self._ws.close(code)
 
 CONFIG_PATH = Path(ROME_ROOT) / "dictator" / "config.json"
-GEMINI_CLI = "/home/paul-kane/.nvm/versions/node/v20.20.0/bin/gemini"
+# Resolve GEMINI_CLI from arsenal → config → PATH fallback
+def _resolve_gemini_cli() -> str:
+    try:
+        arsenal = _resolve_arsenal_paths(json.loads(ARSENAL_PATH.read_text()))
+        return arsenal.get("capabilities", {}).get("GEMINI", {}).get("args", ["gemini"])[0]
+    except Exception:
+        pass
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text())
+        return str(Path(cfg["gemini_cli"]).expanduser())
+    except Exception:
+        pass
+    return shutil.which("gemini") or "gemini"
+GEMINI_CLI = _resolve_gemini_cli()
 
 FALLBACK_CHAIN = {"GEMINI": "CODEX", "CODEX": "OPENCODE"}
 BUSY_PATTERNS = ["service temporarily unavailable", "overloaded", "rate_limit",
@@ -157,11 +213,11 @@ async def _load_capabilities() -> dict[str, bool]:
     capabilities_status = {}
     try:
         if not ARSENAL_PATH.exists():
-            logging.getLogger("uvicorn.error").warning("Arsenal file not found at %s", ARSENAL_PATH)
+            logging.getLogger("rome.daemon").warning("Arsenal file not found at %s", ARSENAL_PATH)
             return {}
 
         with open(ARSENAL_PATH, "r", encoding="utf-8") as f:
-            arsenal_config = json.load(f)
+            arsenal_config = _resolve_arsenal_paths(json.load(f))
         import shutil
         for capability_name, details in arsenal_config.get("capabilities", {}).items():
             exec_path = details.get("exec", "")
@@ -170,11 +226,11 @@ async def _load_capabilities() -> dict[str, bool]:
             else:
                 capabilities_status[capability_name] = False
     except FileNotFoundError:
-        logging.getLogger("uvicorn.error").warning("Arsenal file not found at %s", ARSENAL_PATH)
+        logging.getLogger("rome.daemon").warning("Arsenal file not found at %s", ARSENAL_PATH)
     except json.JSONDecodeError:
-        logging.getLogger("uvicorn.error").error("Error decoding JSON from %s", ARSENAL_PATH)
+        logging.getLogger("rome.daemon").error("Error decoding JSON from %s", ARSENAL_PATH)
     except Exception as e:
-        logging.getLogger("uvicorn.error").error("ERROR loading capabilities: %s", e, exc_info=True)
+        logging.getLogger("rome.daemon").error("ERROR loading capabilities: %s", e, exc_info=True)
     return capabilities_status
 
 _WEBSOCKET_TOKEN = _load_config_token()
@@ -260,6 +316,7 @@ class WorkerRegistry:
         async with self._lock:
             return [
                 {
+                    "worker_id": str(id(e.ws)),
                     "capabilities": e.capabilities,
                     "busy_tasks": list(e.busy_tasks),
                     "connected_at": e.connected_at,
@@ -268,6 +325,15 @@ class WorkerRegistry:
                 }
                 for e in self._workers.values()
             ]
+
+    async def get_ws_by_id(self, worker_id: str) -> WebSocket | None:
+        async with self._lock:
+            try:
+                wid = int(worker_id)
+                entry = self._workers.get(wid)
+                return entry.ws if entry else None
+            except ValueError:
+                return None
 
 
 worker_registry = WorkerRegistry()
@@ -352,7 +418,7 @@ async def _execute_legion_native(
         capability = _recommend_capability_impl(args[0] if args else "")["recommendation"].upper()
 
     if not ARSENAL_PATH.exists(): return {"ok": False, "error": "Arsenal missing"}
-    arsenal = json.loads(ARSENAL_PATH.read_text())
+    arsenal = _resolve_arsenal_paths(json.loads(ARSENAL_PATH.read_text()))
     cap = arsenal.get("capabilities", {}).get(capability)
     if not cap: return {"ok": False, "error": f"Cap {capability} unknown"}
 
@@ -442,7 +508,7 @@ async def _execute_legion_native(
     return res
 
 
-async def _emit_heartbeat(websocket: WebSocket) -> None:
+async def _emit_heartbeat(websocket: WSAdapter) -> None:
     while True:
         await asyncio.sleep(_HEARTBEAT_SECONDS)
         await websocket.send_json(
@@ -464,7 +530,7 @@ async def _emit_system_status_loop() -> None:
     from dictator.events import emit_system_status
     from dictator.core import event_bus, task_registry, DAEMON_START_TIME
     import time, logging
-    logger = logging.getLogger("uvicorn.error")
+    logger = logging.getLogger("rome.daemon")
     while True:
         await asyncio.sleep(30)
         now = time.time()
@@ -485,17 +551,17 @@ async def _emit_system_status_loop() -> None:
 
 class ConnectionManager:
     def __init__(self) -> None:
-        self._connections: set[WebSocket] = set()
+        self._connections: set[WSAdapter] = set()
         self._lock = asyncio.Lock()
 
-    async def connect(self, websocket: WebSocket) -> tuple[str, asyncio.Queue[RomeEvent]]:
+    async def connect(self, websocket: WSAdapter) -> tuple[str, asyncio.Queue[RomeEvent]]:
         await websocket.accept()
         subscriber_id, queue = await event_bus.subscribe()
         async with self._lock:
             self._connections.add(websocket)
         return subscriber_id, queue
 
-    async def disconnect(self, websocket: WebSocket, subscriber_id: str | None) -> None:
+    async def disconnect(self, websocket: WSAdapter, subscriber_id: str | None) -> None:
         if subscriber_id:
             await event_bus.unsubscribe(subscriber_id)
         async with self._lock:
@@ -515,7 +581,7 @@ class ConnectionManager:
                 for websocket in stale:
                     self._connections.discard(websocket)
 
-    async def relay_events(self, websocket: WebSocket, queue: asyncio.Queue[RomeEvent]) -> None:
+    async def relay_events(self, websocket: WSAdapter, queue: asyncio.Queue[RomeEvent]) -> None:
         while True:
             event = await queue.get()
             await websocket.send_json(_event_to_json(event))
@@ -533,7 +599,7 @@ async def _dispatch_runner(
     prompt_file: str,
     output_path: str | None = None,
 ) -> None:
-    import os
+    logger.info("_dispatch_runner START task=%s cap=%s", task_id, capability)
     if IS_DAEMON:
         task_registry.register(task_id, capability)
         await emit_dispatch_start(event_bus, task_id, capability)
@@ -586,7 +652,7 @@ async def _dispatch_runner(
         raise
     except Exception as exc:
         import traceback, logging
-        logging.getLogger("uvicorn.error").error("_dispatch_runner EXCEPTION task=%s: %s", task_id, traceback.format_exc())
+        logging.getLogger("rome.daemon").error("_dispatch_runner EXCEPTION task=%s: %s", task_id, traceback.format_exc())
         if IS_DAEMON:
             task_registry.complete(task_id, "failed", None)
             await emit_error(event_bus, task_id, str(exc))
@@ -600,7 +666,7 @@ async def _dispatch_runner(
 async def _dispatch_to_worker(ws: WebSocket, task_id: str, capability: str, prompt: str) -> None:
     """Forward a dispatch command to a persistent worker over WS."""
     import logging
-    logger = logging.getLogger("uvicorn.error")
+    logger = logging.getLogger("rome.daemon")
     logger.info("Routing task %s (%s) to persistent worker", task_id, capability)
     await ws.send_json({
         "type": "command",
@@ -634,7 +700,26 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     if input_files is not None and not isinstance(input_files, list):
         raise ValueError("payload.input_files must be a list when provided")
 
-
+    # --- Native DSA Routing (ROME v4) ---
+    if capability == "NATIVE_SHELL":
+        if IS_DAEMON:
+            task_registry.register(task_id, capability)
+            await emit_dispatch_start(event_bus, task_id, capability)
+        
+        # Execute immediately via native handler
+        result = await handle_native_shell({"command": prompt})
+        
+        # Log and finalize in registry
+        status = "completed" if result["ok"] else "failed"
+        task_dir = ROME_ROOT / "legions" / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+        rp = task_dir / f"report_{task_id}.txt"
+        rp.write_text(result["stdout"] + "\n" + result["stderr"], encoding="utf-8")
+        
+        task_registry.complete(task_id, status, str(rp))
+        await emit_complete(event_bus, task_id, status, str(rp), None)
+        
+        return {"task_id": task_id, "capability": capability, "accepted": True, "routed_to": "native_dsa"}
 
     # --- Persistent worker routing ---
     # Check if a persistent worker can handle this capability (skip for SAFE_SHELL
@@ -664,10 +749,18 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         return {"task_id": task_id, "capability": capability, "accepted": True, "routed_to": "persistent_worker"}
 
     # --- Fallback: spawn subprocess ---
+    logger.info("handle_dispatch SPAWNING task=%s cap=%s", task_id, capability)
     task = asyncio.create_task(
         _dispatch_runner(task_id, capability, prompt, input_files, no_cache, prompt_file, output_path),
         name=f"rome-ws-dispatch-{task_id}",
     )
+    def _task_done(t):
+        if t.cancelled():
+            logger.warning("Task %s was cancelled", task_id)
+        elif t.exception():
+            logger.error("Task %s CRASHED: %s", task_id, t.exception(), exc_info=t.exception())
+
+    task.add_done_callback(_task_done)
     async with _ACTIVE_TASKS_LOCK:
         existing = _ACTIVE_TASKS.get(task_id)
         if existing and not existing.done():
@@ -702,6 +795,56 @@ async def handle_submit_result(payload: dict[str, Any]) -> dict[str, Any]:
     await emit_complete(event_bus, task_id, status, str(report_path), None)
 
     return {"task_id": task_id, "status": status, "report_path": str(report_path)}
+
+
+async def handle_native_shell(payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute a shell command natively via daemon's core.run_cmd."""
+    command = payload.get("command")
+    if not command:
+        raise ValueError("command is required")
+
+    from dictator.core import run_cmd
+    logger.info("NATIVE_SHELL: %s", command)
+
+    # Execute natively in the daemon's environment
+    t0 = time.monotonic()
+    result = await run_cmd(command)
+    elapsed = round(time.monotonic() - t0, 3)
+
+    return {
+        "ok": result.get("ok", False),
+        "stdout": result.get("stdout", ""),
+        "stderr": result.get("stderr", ""),
+        "exit_code": result.get("exit_code", 0 if result.get("ok") else 1),
+        "elapsed": elapsed,
+    }
+
+
+async def handle_interrupt(payload: dict[str, Any]) -> dict[str, Any]:
+    """Interrupt/steer a running task or worker."""
+    task_id = payload.get("task_id")
+    worker_id = payload.get("worker_id") # Optional: steer by worker WS id
+    interrupt_type = payload.get("type", "cancel") # cancel, inject_prompt, signal
+
+    if not task_id and not worker_id:
+        raise ValueError("task_id or worker_id is required")
+
+    logger.info("INTERRUPT: %s on %s", interrupt_type, task_id or worker_id)
+
+    if interrupt_type == "cancel" and task_id:
+        return await handle_cancel({"task_id": task_id})
+
+    # Forward to specific worker if requested
+    if worker_id:
+        target_ws = await worker_registry.get_ws_by_id(worker_id)
+        if target_ws:
+            await target_ws.send_json({
+                "type": "interrupt",
+                "payload": payload
+            })
+            return {"ok": True, "message": "Interrupt forwarded to worker"}
+
+    return {"ok": False, "error": "Steering not yet implemented for this task type"}
 
 
 async def handle_status(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1117,6 +1260,8 @@ async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
         "read_file": handle_read_file,
         "write_file": handle_write_file,
         "list_dir": handle_list_dir,
+        "native_shell": handle_native_shell,
+        "interrupt": handle_interrupt,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -1132,7 +1277,7 @@ async def _handle_workers(_: dict[str, Any]) -> dict[str, Any]:
 async def _handle_worker_event(ws: WebSocket, event_data: dict[str, Any]) -> None:
     """Process an event sent by a persistent worker (progress, complete, error)."""
     import logging
-    logger = logging.getLogger("uvicorn.error")
+    logger = logging.getLogger("rome.daemon")
     ev_type = event_data.get("type", "")
     task_id = event_data.get("task_id", "")
     payload = event_data.get("payload", {})
@@ -1176,7 +1321,7 @@ async def _handle_worker_event(ws: WebSocket, event_data: dict[str, Any]) -> Non
         logger.debug("Unknown worker event type: %s", ev_type)
 
 
-async def rome_ws_endpoint(websocket: WebSocket) -> None:
+async def rome_ws_endpoint(websocket: WSAdapter) -> None:
     subscriber_id: str | None = None
     relay_task: asyncio.Task[Any] | None = None
     heartbeat_task: asyncio.Task[Any] | None = None
@@ -1203,7 +1348,7 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
 
         capabilities = await _load_capabilities()
         await websocket.send_json({
-            "type": "agent_hello",
+            "type": "daemon_hello",
             "capabilities": capabilities,
             "active_tasks": len(task_registry.get_all()),
             "uptime_s": round(time.monotonic() - DAEMON_START_TIME, 3),
@@ -1217,7 +1362,7 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
             # --- Persistent worker registration ---
             if msg_type == "agent_hello":
                 import logging
-                logger = logging.getLogger("uvicorn.error")
+                logger = logging.getLogger("rome.daemon")
                 worker_caps = message.get("capabilities", [])
                 worker_version = message.get("version", "")
                 worker_platform = message.get("platform", "")
@@ -1247,7 +1392,7 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
                 # registered in handle_dispatch. Log if not ok.
                 if not message.get("ok"):
                     import logging
-                    logging.getLogger("uvicorn.error").warning(
+                    logging.getLogger("rome.daemon").warning(
                         "Worker rejected dispatch: %s", message.get("error")
                     )
                 continue
@@ -1266,7 +1411,7 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
             orphaned = await worker_registry.unregister(websocket)
             if orphaned:
                 import logging
-                logger = logging.getLogger("uvicorn.error")
+                logger = logging.getLogger("rome.daemon")
                 logger.warning("Worker disconnected with active tasks: %s", orphaned)
                 # Mark orphaned tasks as failed
                 for tid in orphaned:
@@ -1284,6 +1429,10 @@ async def rome_ws_endpoint(websocket: WebSocket) -> None:
         await manager.disconnect(websocket, subscriber_id)
 
 
-routes = [WebSocketRoute("/ws", endpoint=rome_ws_endpoint)]
+async def rome_ws_handler(ws) -> None:
+    """Raw websockets entry point — wraps connection in WSAdapter and delegates."""
+    adapter = WSAdapter(ws)
+    await rome_ws_endpoint(adapter)
 
-__all__ = ["ConnectionManager", "WorkerRegistry", "manager", "worker_registry", "rome_ws_endpoint", "routes"]
+
+__all__ = ["ConnectionManager", "WorkerRegistry", "manager", "worker_registry", "rome_ws_endpoint", "rome_ws_handler"]
