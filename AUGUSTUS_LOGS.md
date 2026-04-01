@@ -241,6 +241,7 @@
 * ✅ **TASK_CONFIG_FIX**: SUCCESS (Provisioned missing YAML configs in lm_content_types)
 * ✅ **TASK_TEST_VERIFY**: SUCCESS (CenterDashboardTest passing on live with 5 assertions)
 * ✅ **TASK_SYNC_COMMIT**: SUCCESS (Changes pushed to Drupal11 master)
+* ✅ **TASK_NGINX_CACHE**: SUCCESS (Added expires max to Drupal static assets)
 
 ### 🏛️ LESSONS FROM THE FRONT:
 1.  **Dependency Awareness**: Drupal 11 test runners require explicit YAML config for entity types used in functional tests, even if they are "manually" created in setup.
