@@ -235,3 +235,13 @@
 2.  **Concurrency Limits**: Kernel builds cannot be decentralized without a shared lock. Single-command saturation (make -j32) wins.
 3.  **Operational Safety**: Proposing 'import all' on Live is a court-martial offense.
 4.  **Monkey vs Machine**: User intuition (the Monkey) beats LLM ego. Monkey: 1, LLM: 0.
+
+## MISSION LOG: 2026-04-02 - THE ASHBURN FRONT (TEST RECON & FIX)
+* ✅ **TASK_TEST_RECON**: SUCCESS (Identified field_classes/classroom dependency gap)
+* ✅ **TASK_CONFIG_FIX**: SUCCESS (Provisioned missing YAML configs in lm_content_types)
+* ✅ **TASK_TEST_VERIFY**: SUCCESS (CenterDashboardTest passing on live with 5 assertions)
+* ✅ **TASK_SYNC_COMMIT**: SUCCESS (Changes pushed to Drupal11 master)
+
+### 🏛️ LESSONS FROM THE FRONT:
+1.  **Dependency Awareness**: Drupal 11 test runners require explicit YAML config for entity types used in functional tests, even if they are "manually" created in setup.
+2.  **ROME v4 Sovereignty**: Exclusive use of 'ws_send' eliminates MCP latency and aligns with native WS mandates.
