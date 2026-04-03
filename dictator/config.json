@@ -2,21 +2,16 @@
   "root_dir": "/var/www/ftk_lms",
   "git_root": "~/projects/Drupal11",
   "rome_root": "~/projects/rome-core",
-  "skyrim_state_file": "/media/paul-kane/SteamGames/steamapps/compatdata/489830/pfx/drive_c/tmp/skyrim_state.json",
-  "mo2_downloads": "~/Games/MO2/downloads",
+  "gemini_cli": "~/projects/gemini-cli/bundle/gemini.js",
   "drupal_modules_src": "~/projects/Drupal11/modules/custom/",
   "drupal_modules_dest": "/var/www/ftk_lms/web/modules/custom/",
   "drupal_themes_src": "~/projects/Drupal11/themes/custom/",
   "drupal_themes_dest": "/var/www/ftk_lms/web/themes/custom/",
-  "skyrim_game_dir": "/media/paul-kane/SteamGames/Games/SkyrimSE/",
-  "mo2_mods_dir": "/media/paul-kane/SteamGames/Games/mods/",
-  "papyrus_compiler": "/media/paul-kane/SteamGames/Games/mods/compile_papyrus.sh",
-  "skyrim_crash_logs": "/media/paul-kane/SteamGames/steamapps/compatdata/489830/pfx/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition/SKSE/",
   "legion_wrapper": "legions/legion_wrapper.py",
   "gc_max_age_days": 7,
   "gc_keep_min": 50,
   "max_output_bytes": 10485760,
   "daemon_host": "127.0.0.1",
   "daemon_port": 8741,
-  "ws_token": ""
+  "ws_token": "ROME_V4_SECURE_TOKEN"
 }

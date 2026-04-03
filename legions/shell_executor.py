@@ -28,22 +28,42 @@ except ImportError:
     flush = None
 
 def shell_executor():
-    if len(sys.argv) < 4:
-        print("Usage: python3 shell_executor.py <task_id> <global_start_timestamp> <bash_command_string>")
-        sys.exit(1)
+    # Priority: Env > Command Line > Default
+    task_id = os.environ.get("ROME_TASK_ID")
+    if not task_id:
+        if len(sys.argv) > 1:
+            task_id = sys.argv[1]
+        else:
+            task_id = f"shell_{int(time.time())}"
 
-    task_id = sys.argv[1]
-
-    # NOTE: dispatch_start is already emitted by _dispatch_runner in ws_server.py.
-    # Do NOT send it again here — it calls task_registry.register() which resets
-    # the task status back to "registered", clobbering the daemon's state.
-
-    try:
-        global_start_timestamp = float(sys.argv[2])
-    except (ValueError, IndexError):
+    # Priority: Env > Command Line > Current Time
+    global_start_timestamp = None
+    if os.environ.get("ROME_START_TIME"):
+        try:
+            global_start_timestamp = float(os.environ.get("ROME_START_TIME"))
+        except: pass
+    
+    if global_start_timestamp is None:
+        if len(sys.argv) > 2:
+            try:
+                global_start_timestamp = float(sys.argv[2])
+            except: pass
+    
+    if global_start_timestamp is None:
         global_start_timestamp = time.time()
     
-    bash_command = sys.argv[3]
+    # Priority: Last Argument > Env
+    bash_command = None
+    if len(sys.argv) >= 2:
+        bash_command = sys.argv[-1]
+    
+    if not bash_command:
+        bash_command = os.environ.get("ROME_PROMPT")
+
+    if not bash_command:
+        print("Usage: python3 shell_executor.py <task_id> <global_start_timestamp> <bash_command_string>")
+        print("OR set ROME_TASK_ID and pass bash_command as last arg.")
+        sys.exit(1)
 
     shell_timeout = float(os.environ.get('SHELL_TIMEOUT', 600))
 

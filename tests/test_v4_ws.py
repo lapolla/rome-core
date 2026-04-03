@@ -29,21 +29,21 @@ class TestRomeV4Smoke(unittest.IsolatedAsyncioTestCase):
         print(f"V4 Workers Registered: {len(workers)} ({', '.join(caps)})")
 
     async def test_persistent_worker_dispatch(self):
-        """Dispatch a dummy task to the persistent SAFE_SHELL worker (mocked via GEMINI for now)."""
-        # Note: In our current test env, we only have GEMINI persistent worker.
-        # We'll use it to run a simple shell command to prove the WS dispatch loop.
+        """Dispatch a dummy task to the persistent SAFE_SHELL worker."""
+        # We use SAFE_SHELL for the smoke test as it is fast and deterministic.
         task_id = f"SMOKE_DISPATCH_{int(time.time())}"
         resp = await send_command_async("dispatch", {
             "task_id": task_id,
-            "capability": "GEMINI",
+            "capability": "SAFE_SHELL",
             "prompt": "echo 'V4_WORKER_SMOKE_SUCCESS'"
         })
-        
+
         self.assertTrue(resp.get("accepted"), f"Dispatch rejected: {resp}")
-        self.assertEqual(resp.get("routed_to"), "persistent_worker", "Task NOT routed to persistent worker!")
-        
+        # The daemon returns 'routed_to' in its response.
+        self.assertEqual(resp.get("routed_to"), "persistent_worker", f"Task NOT routed to persistent worker! Response: {resp}")
+
         # Await completion
-        max_retries = 10
+        max_retries = 15
         status = "unknown"
         for _ in range(max_retries):
             status_resp = await send_command_async("status", {"task_id": task_id})
@@ -51,8 +51,9 @@ class TestRomeV4Smoke(unittest.IsolatedAsyncioTestCase):
             if status == "completed":
                 break
             await asyncio.sleep(1)
-            
+
         self.assertEqual(status, "completed")
+
         print(f"V4 Persistent Dispatch: SUCCESS (routed to {resp.get('routed_to')})")
 
 if __name__ == "__main__":

@@ -98,6 +98,8 @@ def _is_busy(r: dict) -> bool:
         text = str(r.get("error", "") + r.get("message", "")).lower()
     return any(p in text for p in BUSY_PATTERNS)
 
+_SESSION_USAGE = {"worker_tokens": 0, "dictator_tokens": 0, "cost_usd": 0.0}
+
 
 def _cache_key(capability: str, args: list, task_dir=None) -> str:
     key_str = f"{capability}:{':'.join(str(a) for a in args)}"
@@ -274,9 +276,15 @@ async def _load_capabilities() -> dict[str, bool]:
             if exec_path == "internal":
                 capabilities_status[capability_name] = True
             
-            # 2. Persistent-only capabilities (LLMs)
+            # 2. Persistent worker capabilities (green if worker connected)
+            elif capability_name in worker_caps:
+                capabilities_status[capability_name] = True
+
+            # 3. Subprocess LLM capabilities (green if binary exists on PATH)
             elif capability_name in {"GEMINI", "CLAUDE", "CODEX", "OPENCODE"}:
-                capabilities_status[capability_name] = capability_name in worker_caps
+                cli_args = details.get("args", [])
+                cli_bin = cli_args[0] if cli_args else exec_path
+                capabilities_status[capability_name] = bool(shutil.which(cli_bin) or Path(cli_bin).exists())
             
             # 3. Local capabilities (fallback to disk check)
             elif exec_path:
@@ -472,7 +480,7 @@ async def _execute_legion_native(
                 p, msg = int(m.group(1)), m.group(3).strip()
                 task_registry.update_progress(task_id, p, msg)
                 await emit_progress(event_bus, task_id, p, msg)
-            except Exception: pass
+            except Exception as e: logger.debug("Swallowed exception: %s", e)
 
     if capability == "AUTO":
         capability = _recommend_capability_impl(args[0] if args else "")["recommendation"].upper()
@@ -522,7 +530,7 @@ async def _execute_legion_native(
             cached = json.loads(cache_f.read_text())
             if time.time() - cached.get("timestamp", 0) < CACHE_TTL:
                 return json.loads(cached["result"])
-        except Exception: pass
+        except Exception as e: logger.debug("Swallowed exception: %s", e)
 
     try:
         from dictator.core import run_cmd_stream
@@ -548,7 +556,7 @@ async def _execute_legion_native(
         try:
             m = json.loads(manifest_f.read_text())
             usage = m.get("usage")
-        except Exception: pass
+        except Exception as e: logger.debug("Swallowed exception: %s", e)
 
     res = {"ok": ok, "task_id": task_id, "capability": capability, "elapsed_s": round(time.monotonic() - t0, 2), "usage": usage}
     if not ok: res["error"] = r.get("message", r.get("stderr", "unknown"))
@@ -563,7 +571,7 @@ async def _execute_legion_native(
         try:
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
             cache_f.write_text(json.dumps({"timestamp": time.time(), "result": json.dumps(res)}))
-        except Exception: pass
+        except Exception as e: logger.debug("Swallowed exception: %s", e)
 
     return res
 
@@ -777,16 +785,17 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         rp.write_text(result["stdout"] + "\n" + result["stderr"], encoding="utf-8")
         
         task_registry.complete(task_id, status, str(rp))
-        await emit_complete(event_bus, task_id, status, str(rp), None)
+        stdout = result["stdout"].strip()
+        await emit_complete(event_bus, task_id, status, str(rp), None, report=stdout)
         
         return {"task_id": task_id, "capability": capability, "accepted": True, "routed_to": "native_dsa"}
 
     # --- Persistent worker routing ---
-    # Check if a persistent worker can handle this capability (skip for SAFE_SHELL
-    # which is always local, and skip if input_files are set since workers don't
-    # have access to those via the forwarding protocol yet).
+    # Check if a persistent worker can handle this capability (skip if
+    # input_files are set since workers don't have access to those via 
+    # the forwarding protocol yet).
     worker_ws = None
-    if capability != "SAFE_SHELL" and not input_files and prompt:
+    if not input_files and prompt:
         worker_ws = await worker_registry.find_worker(capability)
 
     if worker_ws is not None:
@@ -904,38 +913,50 @@ async def handle_interrupt(payload: dict[str, Any]) -> dict[str, Any]:
             })
             return {"ok": True, "message": "Interrupt forwarded to worker"}
 
-    return {"ok": False, "error": "Steering not yet implemented for this task type"}
+    if interrupt_type == "inject_prompt" and task_id:
+        target_ws = await worker_registry.get_ws_by_task_id(task_id)
+        if target_ws:
+            await target_ws.send_json({"type": "steer", "payload": payload})
+            return {"ok": True, "message": "Prompt injected"}
+
+    return {"ok": False, "error": "Steering failed"}
 
 
 async def handle_status(payload: dict[str, Any]) -> dict[str, Any]:
     lean_level = get_lean_level()
+    caps = await _load_capabilities()
+    workers = await worker_registry.get_info()
+
     if payload.get("summary"):
         tasks = task_registry.get_all()
         active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
-        caps = await _load_capabilities()
-        workers = await worker_registry.get_info()
         usage = await _get_session_usage()
         
+        # Merge in-memory stats (which include recent WebSocket-reported usage)
+        session_worker_tokens = usage["worker_tokens"] + _SESSION_USAGE["worker_tokens"]
+        session_dictator_tokens = usage["dictator_tokens"] + _SESSION_USAGE["dictator_tokens"]
+        session_cost_usd = round(usage["cost_usd"] + _SESSION_USAGE["cost_usd"], 6)
+
         return {"ok": True, "active_tasks": active, "total_tasks": len(tasks),
                 "uptime_s": round(time.monotonic() - DAEMON_START_TIME, 3),
                 "capabilities": list(caps.keys()),
                 "capability_status": caps,
                 "workers": workers,
-                "session_worker_tokens": usage["worker_tokens"],
-                "session_dictator_tokens": usage["dictator_tokens"],
-                "session_cost_usd": usage["cost_usd"]}
+                "session_worker_tokens": session_worker_tokens,
+                "session_dictator_tokens": session_dictator_tokens,
+                "session_cost_usd": session_cost_usd}
     task_id = str(payload.get("task_id") or "").strip()
     if task_id:
         task = task_registry.get(task_id)
-        return {"task": task, "found": task is not None}
+        return {"task": task, "found": task is not None, "workers": workers, "capability_status": caps}
     
     # Normal client request for all tasks
     all_tasks = task_registry.get_all()
     if lean_level >= 2: # Ultra-lean mode: only return active task count and IDs
         active_tasks_count = sum(1 for t in all_tasks.values() if t.get("status") in {"registered", "running"})
-        return {"active_tasks_count": active_tasks_count, "task_ids": list(all_tasks.keys())}
+        return {"active_tasks_count": active_tasks_count, "task_ids": list(all_tasks.keys()), "workers": workers, "capability_status": caps}
 
-    return {"tasks": all_tasks}
+    return {"tasks": all_tasks, "workers": workers, "capability_status": caps}
 
 
 async def handle_cancel(payload: dict[str, Any]) -> dict[str, Any]:
@@ -985,31 +1006,36 @@ async def handle_read_report(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def handle_read_file(payload: dict[str, Any]) -> dict[str, Any]:
-    path = Path(payload.get("path", "")).expanduser().resolve()
-    start_line = int(payload.get("start_line", 1))
-    end_line = payload.get("end_line")
+    path = Path(payload.get('path', '')).expanduser().resolve()
+    start_line = int(payload.get('start_line', 1))
+    end_line = payload.get('end_line')
     if end_line is not None:
         end_line = int(end_line)
 
-    if not path.exists():
-        return {"ok": False, "error": f"File not found: {path}"}
+    if not await asyncio.to_thread(path.exists):
+        return {'ok': False, 'error': f'File not found: {path}'}
 
     try:
         if start_line == 0:
             # Special overview mode
             import subprocess
-            res = subprocess.run(["grep", "-n", ".", str(path)], capture_output=True, text=True, timeout=5)
-            lines = res.stdout.splitlines()
+            def _grep():
+                return subprocess.run(['grep', '-n', '.', str(path)], capture_output=True, text=True, timeout=5)
+            res = await asyncio.to_thread(_grep)
+            lines_out = res.stdout.splitlines()
             overview = []
             # Heuristic for important lines (imports, defs, classes)
-            for l in lines:
-                if any(x in l for x in ("import ", "from ", "def ", "class ", "async def ")):
+            for l in lines_out:
+                if any(x in l for x in ('import ', 'from ', 'def ', 'class ', 'async def ')):
                     overview.append(l)
                 if len(overview) > 100: break
-            return {"ok": True, "path": str(path), "overview": "\n".join(overview), "total_lines": len(lines)}
+            return {'ok': True, 'path': str(path), 'overview': '\n'.join(overview), 'total_lines': len(lines_out)}
 
-        with open(path, "r", encoding="utf-8") as f:
-            all_lines = f.readlines()
+        def _read():
+            with open(path, 'r', encoding='utf-8') as f:
+                return f.readlines()
+        
+        all_lines = await asyncio.to_thread(_read)
 
         if end_line is None:
             selected = all_lines[start_line-1:]
@@ -1017,54 +1043,57 @@ async def handle_read_file(payload: dict[str, Any]) -> dict[str, Any]:
             selected = all_lines[start_line-1:end_line]
         
         return {
-            "ok": True,
-            "path": str(path),
-            "content": "".join(selected),
-            "start_line": start_line,
-            "end_line": start_line + len(selected) - 1,
-            "total_lines": len(all_lines)
+            'ok': True,
+            'path': str(path),
+            'content': ''.join(selected),
+            'start_line': start_line,
+            'end_line': start_line + len(selected) - 1,
+            'total_lines': len(all_lines)
         }
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {'ok': False, 'error': str(e)}
 
 
 async def handle_write_file(payload: dict[str, Any]) -> dict[str, Any]:
-    path = Path(payload.get("path", "")).expanduser().resolve()
-    content = payload.get("content", "")
+    path = Path(payload.get('path', '')).expanduser().resolve()
+    content = payload.get('content', '')
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        return {"ok": True, "path": str(path), "size": len(content)}
+        def _write():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding='utf-8')
+        await asyncio.to_thread(_write)
+        return {'ok': True, 'path': str(path), 'size': len(content)}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
-
+        return {'ok': False, 'error': str(e)}
 
 async def handle_list_dir(payload: dict[str, Any]) -> dict[str, Any]:
-    dir_path = Path(payload.get("dir_path", ".")).expanduser().resolve()
-    max_depth = int(payload.get("max_depth", 2))
-    limit = int(payload.get("limit", 100))
+    dir_path = Path(payload.get('dir_path', '.')).expanduser().resolve()
+    max_depth = int(payload.get('max_depth', 2))
+    limit = int(payload.get('limit', 100))
 
-    if not dir_path.is_dir():
-        return {"ok": False, "error": f"Not a directory: {dir_path}"}
+    if not await asyncio.to_thread(dir_path.is_dir):
+        return {'ok': False, 'error': f'Not a directory: {dir_path}'}
 
     try:
-        entries = []
-        for p in dir_path.rglob("*"):
-            rel = p.relative_to(dir_path)
-            depth = len(rel.parts)
-            if depth > max_depth: continue
-            entries.append({
-                "name": p.name,
-                "path": str(p),
-                "type": "directory" if p.is_dir() else "file",
-                "depth": depth - 1
-            })
-            if len(entries) >= limit: break
+        def _list():
+            entries = []
+            for p in dir_path.rglob('*'):
+                rel = p.relative_to(dir_path)
+                depth = len(rel.parts)
+                if depth > max_depth: continue
+                entries.append({
+                    'name': p.name,
+                    'path': str(p),
+                    'type': 'directory' if p.is_dir() else 'file',
+                    'depth': depth - 1
+                })
+                if len(entries) >= limit: break
+            return entries
         
-        return {"ok": True, "dir_path": str(dir_path), "entries": entries, "count": len(entries)}
+        entries = await asyncio.to_thread(_list)
+        return {'ok': True, 'dir_path': str(dir_path), 'entries': entries, 'count': len(entries)}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
-
+        return {'ok': False, 'error': str(e)}
 
 async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
     """Block until all specified tasks complete. Event-driven via EventBus."""
@@ -1254,9 +1283,47 @@ async def handle_event(payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True}
 
 
+async def handle_report_usage(payload: dict[str, Any]) -> dict[str, Any]:
+    """Dictator self-reporting its own usage via WS."""
+    from dictator.rome_log import log_event
+    from dictator.events import RomeEvent
+    
+    tokens = int(payload.get("tokens", 0))
+    cost = float(payload.get("cost", 0.0))
+    msg = str(payload.get("message", ""))
+    tool = str(payload.get("tool", "dictator"))
+    
+    usage = {"total_tokens": tokens, "cost_usd": cost}
+    
+    # Update in-memory session stats
+    if tool == "dictator":
+        _SESSION_USAGE["dictator_tokens"] += tokens
+    else:
+        _SESSION_USAGE["worker_tokens"] += tokens
+    _SESSION_USAGE["cost_usd"] += cost
+
+    # 1. Permanent Log
+    log_event(tool=tool, status="usage", message=msg, usage=usage)
+    
+    # 2. Real-time Mesh Broadcast
+    await event_bus.publish(
+        RomeEvent(
+            type="dictator_waste",
+            task_id="",
+            ts=time.time(),
+            sequence=0,
+            source="dictator",
+            payload={"usage": usage, "message": msg, "tool": tool}
+        )
+    )
+    return {"ok": True, "tokens_logged": tokens}
+
+
 async def handle_dashboard_stats(_: dict[str, Any]) -> dict[str, Any]:
     now = time.time()
     tasks = task_registry.get_all()
+    caps = await _load_capabilities()
+    workers = await worker_registry.get_info()
 
     total_cost_usd = 0.0
     tasks_completed_count = 0
@@ -1294,6 +1361,9 @@ async def handle_dashboard_stats(_: dict[str, Any]) -> dict[str, Any]:
         "uptime_seconds": uptime_seconds,
         "active_ws_connections": active_ws_connections,
         "throughput_per_min": throughput_per_min,
+        "capabilities": list(caps.keys()),
+        "capability_status": caps,
+        "workers": workers,
     }
 
 async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
@@ -1327,6 +1397,7 @@ async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
         "list_dir": handle_list_dir,
         "native_shell": handle_native_shell,
         "interrupt": handle_interrupt,
+        "report_usage": handle_report_usage,
     }
     handler = handlers.get(command)
     if handler is None:

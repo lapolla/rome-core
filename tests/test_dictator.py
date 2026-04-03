@@ -74,6 +74,10 @@ async def test_fs_read_write_roundtrip(tmp_path, monkeypatch, authed_mcp_fixture
     # Remove the [ROME: lines ...] prefix
     if content.startswith("[ROME: lines"):
         content = content.split('\n', 1)[1] if '\n' in content else ''
+    data = json.loads(content_obj[0][0].text if content_obj and content_obj[0] and hasattr(content_obj[0][0], "text") else str(content_obj))
+    content = data.get("data", "")
+    if content.startswith("[ROME: lines"):
+        content = content.split("\n", 1)[1] if "\n" in content else ""
     assert content == "imperial data"
 
 
@@ -88,7 +92,7 @@ async def test_fs_read_path_traversal(tmp_path, monkeypatch, authed_mcp_fixture)
     result = result_obj[0][0].text if result_obj and result_obj[0] and hasattr(result_obj[0][0], 'text') else str(result_obj)
     parsed = json.loads(result)
     assert parsed["ok"] is False
-    assert "escapes" in parsed["message"]
+    assert "escapes" in parsed.get("error", "") or "escapes" in parsed.get("message", "")
 
 
 @pytest.mark.asyncio
@@ -99,26 +103,26 @@ async def test_fs_write_path_traversal(tmp_path, monkeypatch, authed_mcp_fixture
     result = result_obj[0][0].text if result_obj and result_obj[0] and hasattr(result_obj[0][0], 'text') else str(result_obj)
     parsed = json.loads(result)
     assert parsed["ok"] is False
-    assert "escapes" in parsed["message"]
+    assert "escapes" in parsed.get("error", "") or "escapes" in parsed.get("message", "")
 
 
 # ── read_anywhere / write_anywhere round-trip ─────────────────────────
 
 @pytest.mark.asyncio
 async def test_read_write_anywhere_roundtrip(tmp_path, authed_mcp_fixture):
-    target = str(tmp_path / "anywhere.txt")
-    r_obj = await authed_mcp_fixture.call_tool("write_anywhere", {"path": target, "content": "absolute power"})
+    target = str(tmp_path / 'anywhere.txt')
+    r_obj = await authed_mcp_fixture.call_tool('write_anywhere', {'path': target, 'content': 'absolute power'})
     r = r_obj[0][0].text if r_obj and r_obj[0] and hasattr(r_obj[0][0], 'text') else str(r_obj)
-    assert r.startswith("OK:")
+    parsed = json.loads(r)
+    assert parsed['ok'] is True
 
-    content_obj = await authed_mcp_fixture.call_tool("read_anywhere", {"path": target})
-    content = content_obj[0][0].text if content_obj and content_obj[0] and hasattr(content_obj[0][0], 'text') else str(content_obj)
-    # Remove the [ROME: lines ...] prefix
-    if content.startswith("[ROME: lines"):
+    content_obj = await authed_mcp_fixture.call_tool('read_anywhere', {'path': target})
+    raw = content_obj[0][0].text if content_obj and content_obj[0] and hasattr(content_obj[0][0], 'text') else str(content_obj)
+    data = json.loads(raw)
+    content = data.get('data', '')
+    if content.startswith('[ROME: lines'):
         content = content.split('\n', 1)[1] if '\n' in content else ''
-    assert content == "absolute power"
-
-
+    assert content == 'absolute power'
 # ── list_directory ────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -126,7 +130,7 @@ async def test_list_directory(authed_mcp_fixture):
     r_obj = await authed_mcp_fixture.call_tool("list_directory", {"dir_path": "/tmp"})
     r = json.loads(r_obj[0][0].text if r_obj and r_obj[0] and hasattr(r_obj[0][0], 'text') else str(r_obj))
     assert r["ok"] is True
-    assert isinstance(r["entries"], list)
+    assert isinstance(r.get("data", r.get("entries")), list)
 
 
 # ── execute_legion error path ─────────────────────────────────────────

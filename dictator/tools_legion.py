@@ -29,6 +29,28 @@ CACHE_DIR = ROME_ROOT / "legions" / ".cache"
 CACHE_TTL = 3600  # 1 hour
 MAX_OUTPUT_CHARS = 2000
 
+# Resolve {ROME_ROOT} and {GEMINI_CLI} tokens in arsenal paths
+_CFG_PATH = Path(__file__).parent / "config.json"
+_cfg_data = json.loads(_CFG_PATH.read_text()) if _CFG_PATH.exists() else {}
+_GEMINI_CLI_PATH = str(Path(_cfg_data.get("gemini_cli", "gemini")).expanduser())
+
+def _resolve_arsenal_paths(arsenal: dict) -> dict:
+    """Replace {ROME_ROOT} and {GEMINI_CLI} tokens in capability exec/args."""
+    subs = {"{ROME_ROOT}": str(ROME_ROOT), "{GEMINI_CLI}": _GEMINI_CLI_PATH}
+    for cap in arsenal.get("capabilities", {}).values():
+        for key in ("exec",):
+            if key in cap:
+                for token, val in subs.items():
+                    cap[key] = cap[key].replace(token, val)
+        if "args" in cap:
+            cap["args"] = [_resolve_arg(a, subs) for a in cap["args"]]
+    return arsenal
+
+def _resolve_arg(arg: str, subs: dict) -> str:
+    for token, val in subs.items():
+        arg = arg.replace(token, val)
+    return arg
+
 def _extract_mcp_usage(ctx: Context | None) -> dict | None:
     """Extract usage dict from FastMCP's internal state, if available."""
     if not ctx:
@@ -394,7 +416,7 @@ def register(mcp):
         # Auto fire-and-forget for long-running capabilities (timeout > 120s)
         # Prevents MCP transport timeout from killing the connection
         if not fire_and_forget:
-            arsenal = json.loads(ARSENAL_PATH.read_text())
+            arsenal = _resolve_arsenal_paths(json.loads(ARSENAL_PATH.read_text()))
             cap = arsenal.get("capabilities", {}).get(capability, {})
             if cap.get("timeout", 300) > 120:
                 fire_and_forget = True
@@ -662,7 +684,7 @@ async def _execute_legion_impl(
     if not ARSENAL_PATH.exists():
         return {"ok": False, "message": "Arsenal file not found"}
 
-    arsenal = json.loads(ARSENAL_PATH.read_text())
+    arsenal = _resolve_arsenal_paths(json.loads(ARSENAL_PATH.read_text()))
     cap = arsenal.get("capabilities", {}).get(capability)
     if not cap:
         return {"ok": False, "message": f'Capability "{capability}" not found.'}

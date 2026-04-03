@@ -11,7 +11,7 @@ from datetime import datetime
 
 # --- CONFIGURATION & PATHS ---
 # Centurion V2: Standalone parallel orchestrator for ROME.
-ROME_ROOT = os.environ.get("ROME_ROOT", "/home/paul-kane/projects/rome-core")
+ROME_ROOT = os.environ.get("ROME_ROOT", str(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 ARSENAL_PATH = os.path.join(ROME_ROOT, "arsenal", "core_arsenal.json")
 
 def log_event(tool, message, task_id=None, **kwargs):

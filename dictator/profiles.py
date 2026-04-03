@@ -1,27 +1,27 @@
-"""ROME capability profiles \u2014 controls which tool modules load per session."""
+"""ROME capability profiles — controls which tool modules load per session."""
 
 CORE_MODULES = ["fs", "ws", "legion"]
 
 PROFILES = {
     "core": CORE_MODULES,
     "drupal": CORE_MODULES + ["git", "drupal"],
-    "skyrim": CORE_MODULES + ["skyrim", "desktop"],
+    "desktop": CORE_MODULES + ["desktop"],
     "orchestrate": CORE_MODULES + ["gc", "stats"],
-    "gemini": CORE_MODULES + ["git", "gc"],  # Gemini-as-dictator: core + git + gc
+    "gemini": CORE_MODULES + ["git", "gc"],
     "full": None,  # None = load everything
 }
 
 TOOL_EXCLUDES = {
     "core": ["execute_legion", "execute_campaign", "launch_centurion", "clear_cache", "rome_submit_result"],
     "drupal": ["execute_legion", "launch_centurion", "rome_submit_result"],
-    "skyrim": ["execute_legion", "launch_centurion", "rome_submit_result"],
+    "desktop": ["execute_legion", "launch_centurion", "rome_submit_result"],
     "orchestrate": [],
     "gemini": [
-        "execute_legion", 
-        "execute_campaign", 
-        "launch_centurion", 
+        "execute_legion",
+        "execute_campaign",
+        "launch_centurion",
         "rome_submit_result",
-        "get_state"  # Prevent raw registry dumps in main session context
+        "get_state",
     ],
     "full": [],
 }

@@ -7,7 +7,7 @@ import sys
 from typing import Any, Dict, Set
 
 
-ROME_ROOT = os.environ.get("ROME_ROOT", "/home/paul-kane/projects/rome-core")
+ROME_ROOT = os.environ.get("ROME_ROOT", str(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 CONFIG_PATH = os.path.join(ROME_ROOT, "dictator", "config.json")
 _WS_URL = os.environ.get("ROME_WS_URL", "ws://127.0.0.1:8741/ws")
 

@@ -6,7 +6,7 @@
 
 ## Core Mandates (v4)
 
-1. **WS Sovereignty:** Use the native WebSocket channel (port 8741) for all core operations. Call native_tools directly via WS commands.
+1. **WS Sovereignty:** Use the native WebSocket channel (port 8741) for all core operations. Call native_tools directly via WS commands. ALWAYS prioritize using the `ws_send` tool for native WebSocket commands (like `native_shell`) over legacy `mcp_asshole_*` wrapper tools to bypass MCP overhead and achieve sub-millisecond latency.
 2. **KISS Execution:** Bypass MCP servers whenever possible. Direct shell access (run_shell_command) is your primary weapon.
 3. **Dry, Kiss ASS:** No redundant layers. No assumptions. Verify system state via WS feedback loops.
 4. **Context Diet:** Use read_anywhere(start_line=0) for structure. Never read whole files.

@@ -12,10 +12,12 @@ rcvar="rome_dictator_enable"
 load_rc_config $name
 
 : ${rome_dictator_enable:="NO"}
+: ${rome_dictator_user:="$(whoami)"}
+: ${rome_dictator_dir:="$(eval echo ~${rome_dictator_user})/projects/rome-core"}
 
 pidfile="/var/run/${name}.pid"
 command="/usr/sbin/daemon"
-command_args="-r -P ${pidfile} -u paul-kane /usr/bin/env PYTHONPATH=/home/paul-kane/projects/rome-core python3 -m dictator.daemon --port 8741"
-rome_dictator_chdir="/home/paul-kane/projects/rome-core"
+command_args="-r -P ${pidfile} -u ${rome_dictator_user} /usr/bin/env PYTHONPATH=${rome_dictator_dir} python3 -m dictator.daemon --port 8741"
+rome_dictator_chdir="${rome_dictator_dir}"
 
 run_rc_command "$1"

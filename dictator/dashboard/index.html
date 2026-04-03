@@ -317,12 +317,48 @@
         transition: width 180ms ease;
       }
 
+      .card.expanded {
+        grid-column: 1 / -1;
+        transform: none !important;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+      }
+
+      .task-details {
+        display: grid;
+        gap: 8px;
+        animation: slideDown 200ms ease-out;
+      }
+
+      @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      .detail-row {
+        display: flex;
+        gap: 8px;
+        color: var(--text);
+      }
+
+      .detail-row strong {
+        color: var(--muted);
+        min-width: 70px;
+      }
+
+      .path-link:hover {
+        text-decoration: underline;
+      }
+
+      .detail-json pre {
+        font-size: 11px;
+        color: #a5d6ff;
+        tab-size: 2;
+      }
+
       .message {
-        min-height: 2.8em;
-        color: #c4d4e1;
-        font-size: 12px;
+        color: var(--muted);
+        font-size: 13px;
         line-height: 1.4;
-        word-break: break-word;
       }
 
       .meta-row,
@@ -529,15 +565,6 @@
               </div>
             </div>
           </div>
-          <div class="controls">
-            <div class="control-label">Connection</div>
-            <div class="control-row">
-              <input type="text" id="wsUrlInput" placeholder="ws://localhost:8741/ws" style="flex: 2;">
-              <input type="password" id="wsTokenInput" placeholder="Token (Required for Remote)" style="flex: 1;">
-              <button id="connectButton" type="button" style="min-width: 120px;">Connect</button>
-            </div>
-            <div class="hint">Target a specific ROME node. Defaults to the serving daemon.</div>
-          </div>
         </div>
         <div class="stats-grid">
           <div class="stat">
@@ -547,10 +574,6 @@
           <div class="stat">
             <div class="stat-label">Throughput</div>
             <div class="stat-value" id="throughput">--</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Queue</div>
-            <div class="stat-value" id="queueCounts">0 pending / 0 running</div>
           </div>
           <div class="stat">
             <div class="stat-label">Workers</div>
@@ -595,10 +618,6 @@
       (function () {
         const cardsEl = document.getElementById("cards");
         const eventLogEl = document.getElementById("eventLog");
-        const wsUrlInput = document.getElementById("wsUrlInput");
-        const wsTokenInput = document.getElementById("wsTokenInput");
-        const connectButton = document.getElementById("connectButton");
-
         const wsChip = document.getElementById("wsChip");
         const wsLabel = document.getElementById("wsLabel");
 
@@ -611,7 +630,6 @@
         const totalTokensEl = document.getElementById("totalTokens");
         const sessionCostEl = document.getElementById("sessionCost");
         const throughputEl = document.getElementById("throughput");
-        const queueCountsEl = document.getElementById("queueCounts");
         const workerCountEl = document.getElementById("workerCount");
         const capabilitiesStripEl = document.getElementById("capabilitiesStrip");
 
@@ -641,6 +659,7 @@
           lastLogTs: 0,
           capabilities: {},
           daemonCapabilities: [],
+          expandedTasks: {},
           tokenCostRate: 0.000015, // Example: $0.015 per 1K tokens for both input and output
           completedTasksHistory: [] // To track completed tasks for throughput
         };
@@ -816,6 +835,11 @@
           }).join("");
         }
 
+        function toggleTask(taskId) {
+          state.expandedTasks[taskId] = !state.expandedTasks[taskId];
+          renderTasks();
+        }
+
         function upsertTask(taskId, patch) {
           const existing = state.tasks.get(taskId) || {
             task_id: taskId,
@@ -838,7 +862,11 @@
           state.tasks.set(taskId, merged);
 
           // If task just completed, add to history for throughput calculation
-          if (canonicalStatus(existing.status) !== "SUCCESS" && canonicalStatus(merged.status) === "SUCCESS") {
+          const oldStatus = canonicalStatus(existing.status);
+          const newStatus = canonicalStatus(merged.status);
+          const isFinished = (s) => (s === "SUCCESS" || s === "completed" || s === "FAILED");
+          
+          if (!isFinished(oldStatus) && isFinished(newStatus)) {
             state.completedTasksHistory.push(Date.now());
           }
 
@@ -898,6 +926,7 @@
           if (type === "dictator_waste") {
             const usage = payload.usage || {};
             state.dictatorTokens += Number(usage.total_tokens || 0);
+            state.sessionCost += Number(usage.cost_usd || 0);
             renderStats();
             return;
           }
@@ -982,12 +1011,12 @@
             })
             .map(function (task) {
             const status = canonicalStatus(task.status);
+            const isExpanded = !!state.expandedTasks[task.task_id];
             const percent = Math.max(0, Math.min(100, Number(task.progress_percent) || 0));
             const usageBits = formatUsage(task.usage);
             const createdAt = Number(task.created_at) || Number(task.updated_at) || Date.now() / 1000;
             const lastUpdate = Number(task.updated_at) || createdAt;
             const elapsed = formatDuration((status === "SUCCESS" || status === "FAILED" || status === "completed" || status === "cancelled" || status === "expired" ? lastUpdate : Date.now() / 1000) - createdAt);
-            const message = task.progress_message || task.report_path || "Awaiting events";
             const cardColor = statusColor(status);
             
             var retryHtml = "";
@@ -995,8 +1024,24 @@
               retryHtml = '<button type="button" class="retry-btn" style="margin-left: 8px; font-size: 11px; padding: 4px 8px;">Retry</button>';
             }
 
+            let detailsHtml = "";
+            if (isExpanded) {
+                detailsHtml = `
+                    <div class="task-details" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 11px;">
+                        <div class="detail-row"><strong>Created:</strong> ${formatTimestamp(createdAt)}</div>
+                        <div class="detail-row"><strong>Updated:</strong> ${formatTimestamp(lastUpdate)}</div>
+                        ${task.report_path ? `
+                            <div class="detail-row"><strong>Report:</strong> <span class="path-link" onclick="openReport('${task.report_path}')" style="color: var(--accent); cursor: pointer;">${escapeHtml(task.report_path)}</span></div>
+                        ` : ''}
+                        <div class="detail-json" style="margin-top: 8px; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px; overflow-x: auto;">
+                            <pre style="margin: 0; font-family: monospace; white-space: pre-wrap;">${escapeHtml(JSON.stringify(task, null, 2))}</pre>
+                        </div>
+                    </div>
+                `;
+            }
+
             return (
-              '<article class="card" data-task-id="' + escapeHtml(task.task_id) + '" data-capability="' + escapeHtml(task.capability || "UNKNOWN") + '" style="--card-accent:' + cardColor + ';">' +
+              '<article class="card ' + (isExpanded ? 'expanded' : '') + '" data-task-id="' + escapeHtml(task.task_id) + '" onclick="toggleTask(\'' + escapeHtml(task.task_id) + '\')" style="--card-accent:' + cardColor + '; cursor: pointer;">' +
                 '<div class="card-top">' +
                   '<div>' +
                     '<div class="task-id">' + escapeHtml(task.task_id) + '</div>' +
@@ -1016,17 +1061,8 @@
                     '<div class="progress-fill" style="width:' + percent + '%; background:' + cardColor + ';"></div>' +
                   '</div>' +
                 '</div>' +
-                '<div class="message">' + escapeHtml(message) + '</div>' +
-                '<div class="meta-row">' +
-                  '<span>Created <span class="mono-strong">' + escapeHtml(formatTimestamp(createdAt)) + '</span></span>' +
-                  '<span>Updated <span class="mono-strong">' + escapeHtml(formatTimestamp(lastUpdate)) + '</span></span>' +
-                '</div>' +
-                '<div class="usage-row">' +
-                  '<span>Tokens <span class="mono-strong">' + escapeHtml(usageBits.tokenText) + '</span></span>' +
-                '</div>' +
-                (task.usage && task.usage.model ? '<div class="usage-row" style="opacity:0.55;font-size:0.78em">' +
-                  '<span>Model <span class="mono-strong">' + escapeHtml(task.usage.model) + '</span></span>' +
-                '</div>' : '') +
+                (isExpanded ? '' : '<div class="message" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(task.progress_message || task.report_path || "Awaiting events") + '</div>') +
+                detailsHtml +
               '</article>'
             );
           }).join("");
@@ -1047,11 +1083,6 @@
           state.completedTasksHistory = state.completedTasksHistory.filter(ts => now - ts < 60 * 1000); // Last 1 minute
           const throughput = state.completedTasksHistory.length;
           throughputEl.textContent = throughput + " tasks/min";
-
-          // Queue
-          const pending = tasks.filter(task => canonicalStatus(task.status) === "registered").length;
-          const running = tasks.filter(task => canonicalStatus(task.status) === "running").length;
-          queueCountsEl.textContent = pending + " pending / " + running + " running";
 
           // Workers
           const workersCount = state.workers ? state.workers.length : 0;
@@ -1094,22 +1125,16 @@
           wsChip.dataset.state = kind;
           if (kind === "connected") {
             wsLabel.textContent = "WS CONNECTED";
-            connectButton.textContent = "Disconnect";
           } else if (kind === "connecting") {
             wsLabel.textContent = "WS CONNECTING";
-            connectButton.textContent = "Cancel";
           } else if (kind === "error") {
             wsLabel.textContent = "WS ERROR";
-            connectButton.textContent = "Connect";
           } else {
             wsLabel.textContent = detail ? "WS " + detail.toUpperCase() : "WS DISCONNECTED";
-            connectButton.textContent = "Connect";
           }
         }
 
         function wsUrl() {
-          const inputVal = wsUrlInput.value.trim();
-          if (inputVal) return inputVal;
           const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
           return protocol + "//" + window.location.host + "/ws";
         }
@@ -1130,7 +1155,6 @@
         function connectSocket() {
           if (state.socket && (state.socket.readyState === WebSocket.OPEN || state.socket.readyState === WebSocket.CONNECTING)) {
             state.socket.close();
-            return; // Act as disconnect
           }
           if (state.reconnectTimer) {
             clearTimeout(state.reconnectTimer);
@@ -1138,11 +1162,7 @@
           }
 
           setWsState("connecting");
-          const targetUrl = wsUrl();
-          const token = wsTokenInput.value.trim();
-          const finalUrl = token ? targetUrl + (targetUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token) : targetUrl;
-          
-          const socket = new WebSocket(finalUrl);
+          const socket = new WebSocket(wsUrl());
           state.socket = socket;
 
           socket.addEventListener("open", function () {
@@ -1235,11 +1255,6 @@
           }
           sendCommand("status", { summary: true });
         }
-
-        connectButton.addEventListener("click", function () {
-          connectSocket();
-          refreshDaemonStatus();
-        });
 
         modalClose.addEventListener("click", function() {
           reportModal.classList.remove("active");

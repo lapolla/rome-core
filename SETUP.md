@@ -5,9 +5,8 @@
 - pip
 
 ## Dependencies
-- fastmcp
-- uvicorn
-- websockets
+- fastmcp (MCP stdio transport for Claude Code)
+- websockets (daemon + worker connections)
 
 ## Install
 ```bash
@@ -16,85 +15,90 @@ pip install -r requirements.txt
 
 ## Start Daemon
 
-You can start the daemon in one of four ways depending on your environment:
-
-### 1. Linux (systemd)
-Create a service file `/etc/systemd/system/rome-daemon.service`:
+### 1. Linux (systemd — system unit)
 ```ini
+# /etc/systemd/system/rome-dictator.service
 [Unit]
-Description=Rome Core Daemon
+Description=ROME Dictator Daemon
 After=network.target
 
 [Service]
-Type=simple
-ExecStart=/usr/bin/env python3 -m dictator.daemon --port 8741
+ExecStart=/usr/bin/python3 -m dictator.daemon --port 8741
+WorkingDirectory=/path/to/rome-core
+Environment=PYTHONPATH=/path/to/rome-core
 Restart=always
+RestartSec=5
+User=your-user
 
 [Install]
 WantedBy=multi-user.target
 ```
-Enable and start:
 ```bash
-sudo systemctl enable --now rome-daemon
+sudo systemctl enable --now rome-dictator
 ```
 
-### 2. macOS (launchd)
-Create a plist file `~/Library/LaunchAgents/com.rome.daemon.plist`:
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.rome.daemon</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/bin/env</string>
-        <string>python3</string>
-        <string>-m</string>
-        <string>dictator.daemon</string>
-        <string>--port</string>
-        <string>8741</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-</dict>
-</plist>
-```
-Load the service:
+### 2. Linux (systemd — user unit, no sudo)
 ```bash
-launchctl load ~/Library/LaunchAgents/com.rome.daemon.plist
+mkdir -p ~/.config/systemd/user
+# Create ~/.config/systemd/user/rome-dictator.service with the same content
+# but use %h for home directory paths
+systemctl --user enable --now rome-dictator
 ```
 
-### 3. FreeBSD (rc.d)
-Create an rc script `/usr/local/etc/rc.d/rome_daemon`:
-```sh
-#!/bin/sh
-# REQUIRE: DAEMON
-# PROVIDE: rome_daemon
-
-. /etc/rc.subr
-
-name="rome_daemon"
-rcvar="rome_daemon_enable"
-command="/usr/local/bin/python3"
-command_args="-m dictator.daemon --port 8741 &"
-
-load_rc_config $name
-run_rc_command "$1"
-```
-Enable and start:
+### 3. Manual (any OS)
 ```bash
-sysrc rome_daemon_enable="YES"
-service rome_daemon start
+python3 -m dictator.daemon --port 8741
 ```
 
-### 4. Any OS (tmux/screen)
-Start manually in a terminal multiplexer:
+## Start Persistent Workers
+
+Workers connect to the daemon via WebSocket and receive task dispatches.
+
+### Gemini Worker (systemd user unit)
+```ini
+# ~/.config/systemd/user/rome-gemini-worker.service
+[Unit]
+Description=ROME Gemini Persistent Worker
+After=default.target
+
+[Service]
+ExecStart=/usr/bin/python3 %h/projects/rome-core/legions/legion_wrapper.py \
+  --mode worker \
+  --capabilities GEMINI \
+  --ws-url ws://127.0.0.1:8741/ws \
+  --ws-token ROME_V4_SECURE_TOKEN \
+  -- gemini --sandbox false --yolo --output-format json -m gemini-3.1-pro-preview -p
+WorkingDirectory=%h/projects/rome-core
+Environment=PYTHONPATH=%h/projects/rome-core
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
 ```bash
-tmux new -s rome -d "python3 -m dictator.daemon --port 8741"
-# OR
-screen -dmS rome python3 -m dictator.daemon --port 8741
+systemctl --user enable --now rome-gemini-worker
+```
+
+### Manual Worker Launch
+```bash
+python3 legions/legion_wrapper.py \
+  --mode worker \
+  --capabilities GEMINI \
+  --ws-url ws://127.0.0.1:8741/ws \
+  --ws-token ROME_V4_SECURE_TOKEN \
+  -- gemini --sandbox false --yolo --output-format json -m gemini-3.1-pro-preview -p
+```
+
+## Verify
+
+```bash
+# Check daemon health
+curl http://127.0.0.1:8741/health
+
+# Check via WS
+python3 rome_native.py ping '{}'
+
+# Dashboard
+open http://127.0.0.1:8741/dashboard/
 ```

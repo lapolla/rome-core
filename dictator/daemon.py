@@ -33,7 +33,7 @@ from dictator.ws_server import rome_ws_handler
 
 _CFG_PATH = Path(__file__).with_name("config.json")
 _DASHBOARD_DIR = Path(__file__).parent / "dashboard"
-_VERSION = "3.0"
+_VERSION = "4.0"
 
 logger = logging.getLogger("rome.daemon")
 

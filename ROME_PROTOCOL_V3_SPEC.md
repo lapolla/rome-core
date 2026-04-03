@@ -1,5 +1,5 @@
 # ROME Protocol v3.0.0 Specification
-**Status:** DRAFT | **Authority:** Absolute | **Version:** 3.0.0
+**Status:** SUPERSEDED by v4.0.0 | **Authority:** Historical | **Version:** 3.0.0
 
 ## 1. Overview
 The ROME (Remote Orchestrated Model Execution) Protocol v3.0.0 transitions from unstructured text concatenation to a structured, dependency-aware artifact management system. It introduces the "ROME Signal" for model-to-orchestrator communication and a mandatory "Manifest" for all task outputs.

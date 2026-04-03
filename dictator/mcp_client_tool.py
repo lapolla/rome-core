@@ -2,6 +2,7 @@
 import sys
 import json
 import asyncio
+from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -20,7 +21,7 @@ async def main():
     
     server_params = StdioServerParameters(
         command="python3",
-        args=["/home/paul-kane/projects/rome-core/dictator/cli.py"],
+        args=[str(Path(__file__).parent / "cli.py")],
         timeout=120,
 
     )

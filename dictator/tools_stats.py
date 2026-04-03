@@ -160,11 +160,16 @@ def register(mcp):
 
         # Check Arsenal
         try:
+            from dictator.tools_legion import _resolve_arsenal_paths
             with open(ARSENAL_PATH, encoding="utf-8") as f:
-                arsenal = json.load(f)
+                arsenal = _resolve_arsenal_paths(json.load(f))
 
             for name, info in arsenal.get("capabilities", {}).items():
                 exec_bin = info.get("exec", "")
+                if exec_bin == "internal":
+                    capabilities[name] = {"available": True, "path": "internal"}
+                    continue
+                
                 cli_args = info.get("args", [])
                 r = await run_cmd(f"which {exec_bin}")
                 bin_ok = r.get("ok", False)

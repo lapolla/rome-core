@@ -1,3 +1,33 @@
+## v4.0.0 — 2026-04-03
+
+### Breaking Changes
+- **Pure WS daemon**: Replaced ASGI/Starlette/Uvicorn with raw `websockets.serve()`. No HTTP API routes — only `/health` and `/dashboard/` served via `process_request` hook.
+- **Daemon version**: `_VERSION` bumped from `"3.0"` to `"4.0"`.
+- **Manifest version**: `rome_v` in manifests now `"4.0"`.
+
+### Features
+- **Persistent workers**: `legion_wrapper.py --mode worker` connects via WS, sends `agent_hello`, receives dispatches. WorkerRegistry tracks idle/busy state. Dispatch routing: NATIVE_SHELL → persistent worker → subprocess fallback.
+- **NATIVE_SHELL DSA**: `native_shell` WS command executes shell in daemon process via `core.run_cmd()`. Sub-millisecond overhead.
+- **20 WS commands**: dispatch, status, get_state, await, cancel, native_shell, submit_result, interrupt, read_file, write_file, list_dir, read_report, event, reset, clear, ping, workers, recent_events, report_usage, dashboard_stats.
+- **Interrupt/steering**: `interrupt` command cancels tasks or injects prompts into persistent workers mid-execution.
+- **Auto-lean mode**: Tracks cumulative output chars. 100K → lean, 300K → ultra-lean.
+- **Result compression**: Reports >2KB auto-summarized via Gemini Flash on `submit_result`.
+- **Zombie reaping**: 30s status loop auto-fails tasks stuck at 0% for >180s. Daemon startup sweeps orphans.
+- **Capability detection fix**: LLM capabilities (CLAUDE, CODEX) now check binary on PATH as fallback when no persistent worker connected. Previously showed red on dashboard unless a worker was registered.
+- **Gemini worker systemd service**: `rome-gemini-worker.service` user unit auto-starts persistent Gemini worker.
+- **DictatorResponse**: Standardized response wrapper + `@dictator_tool` decorator for consistent error handling.
+- **Auto-routing**: `capability="AUTO"` runs heuristics to select best worker.
+- **Campaign dependency graph**: `execute_campaign` supports `depends_on` — fails dependents on upstream failure.
+
+### Docs
+- CLAUDE.md: Updated to v4.0.0 with full WS command table, persistent workers section, 20 commands
+- README.md: Updated architecture, tool list, WS protocol, persistent workers
+- SETUP.md: Removed uvicorn dependency, added worker setup instructions
+- ROME_PROTOCOL_V4_SPEC.md: Full v4 specification
+- ROME_PROTOCOL_V3_SPEC.md: Marked as SUPERSEDED
+
+---
+
 ## Update: 2026-03-09
 
 ### Fixes

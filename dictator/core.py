@@ -187,3 +187,48 @@ async def run_cmd_stream(
         elapsed = _time.monotonic() - t0
         log_event(tool="run_cmd_stream", status="exception", duration_s=elapsed, message=f"{type(e).__name__}: {str(e)} | cmd={str(cmd)}")
         return {"ok": False, "message": f"{type(e).__name__}: {str(e)}"}
+
+class DictatorResponse:
+    """Standardized response format for all ROME tools."""
+    def __init__(self, ok: bool = True, message: str = "", data: any = None, error: str = "", **metadata):
+        self.ok = ok
+        self.message = message
+        self.data = data
+        self.error = error
+        self.metadata = metadata
+
+    def to_dict(self) -> dict:
+        res = {"ok": self.ok}
+        if self.message: res["message"] = self.message
+        if self.error: res["error"] = self.error
+        if self.data is not None: res["data"] = self.data
+        if self.metadata: res.update(self.metadata)
+        return res
+
+    def __str__(self) -> str:
+        return json.dumps(self.to_dict())
+
+    @classmethod
+    def success(cls, message: str = "OK", data: any = None, **metadata):
+        return cls(ok=True, message=message, data=data, **metadata)
+
+    @classmethod
+    def fail(cls, error: str, message: str = "Error", **metadata):
+        return cls(ok=False, error=error, message=message, **metadata)
+
+from functools import wraps
+
+def dictator_tool(func):
+    """Decorator to standardize tool responses and handle exceptions."""
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            result = await func(*args, **kwargs)
+            if isinstance(result, DictatorResponse):
+                return str(result)
+            if isinstance(result, dict) and "ok" in result:
+                return json.dumps(result)
+            return result
+        except Exception as e:
+            return str(DictatorResponse.fail(error=str(e), message=f"Exception in {func.__name__}"))
+    return wrapper

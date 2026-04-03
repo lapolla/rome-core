@@ -10,6 +10,8 @@ from pathlib import Path
 from dataclasses import dataclass, replace
 from typing import Any
 
+from dictator.rome_log import log_event
+
 
 QUEUE_MAXSIZE = 1000
 TASK_TTL_SECONDS = 3600
@@ -49,9 +51,9 @@ class EventBus:
         log_event(
             tool=published.type,
             task_id=published.task_id,
-            status=published.status,
-            message=published.message,
-            usage=published.usage,
+            status=published.payload.get("status", ""),
+            message=published.payload.get("message", ""),
+            usage=published.payload.get("usage"),
             sequence=published.sequence
         )
         async with self._subscribers_lock:
@@ -124,6 +126,7 @@ async def emit_complete(
     status: str,
     report_path: str | None,
     usage: dict[str, Any] | None,
+    report: str | None = None,
 ) -> RomeEvent:
     return await bus.publish(
         RomeEvent(
@@ -135,6 +138,7 @@ async def emit_complete(
             payload={
                 "status": status,
                 "report_path": report_path,
+                "report": report or "",
                 "usage": dict(usage or {}),
             },
         )
@@ -401,12 +405,12 @@ class TaskRegistry:
             
             age = cutoff - float(task.get("updated_at", task.get("created_at", cutoff)))
 
-            if status == "REGISTERED" and age > 60:
+            if status == "REGISTERED" and age > 300:
                 task["status"] = "expired"
                 status = "EXPIRED"
 
             if status in ("SUCCESS", "OK"):
-                ttl = 30  # Remove successful tasks quickly (30 seconds)
+                ttl = 600  # Remove successful tasks quickly (30 seconds)
             elif status in ("FAILED", "ERROR", "TIMEOUT", "ERR"):
                 ttl = 86400  # Keep failed tasks for 24 hours
             else:
@@ -439,3 +443,4 @@ __all__ = [
     "emit_progress",
     "emit_system_status",
 ]
+

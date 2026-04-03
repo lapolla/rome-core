@@ -35,7 +35,10 @@ start_worker "GEMINI" "${GEMINI_ARGS[@]}"
 # Start SAFE_SHELL
 start_worker "SAFE_SHELL" "python3" "$ROME_ROOT/legions/shell_executor.py"
 
-# Start CLAUDE
-# start_worker "CLAUDE" "${CLAUDE_ARGS[@]}"
+# Start OPENCODE
+start_worker "OPENCODE" "opencode" "run"
 
-echo "ROME workers started (GEMINI, CLAUDE)."
+# Start CLAUDE
+start_worker "CLAUDE" "${CLAUDE_ARGS[@]}"
+
+echo "ROME workers started (GEMINI, CLAUDE, OPENCODE, SAFE_SHELL)."

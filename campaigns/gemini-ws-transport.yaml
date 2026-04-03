@@ -4,10 +4,10 @@ tasks:
     capability: CODEX
     prompt: "Review the existing `WebSocketClientTransport` in `packages/core/src/tools/websocket-client-transport.ts`. Complete any missing implementation details for a robust WebSocket client transport, ensuring it adheres to the MCP protocol and handles connection lifecycle, message sending/receiving, and error conditions. Identify if a corresponding `WebSocketServerTransport` is needed and, if so, define its interface and key responsibilities."
     input_files:
-      - /home/paul-kane/projects/gemini-cli/packages/core/src/tools/websocket-client-transport.ts
-      - /home/paul-kane/projects/gemini-cli/packages/core/src/tools/mcp-client.ts
-      - /home/paul-kane/projects/gemini-cli/packages/core/src/tools/xcode-mcp-fix-transport.ts
-      - /home/paul-kane/projects/gemini-cli/packages/vscode-ide-companion/src/ide-server.ts
+      - ~/projects/gemini-cli/packages/core/src/tools/websocket-client-transport.ts
+      - ~/projects/gemini-cli/packages/core/src/tools/mcp-client.ts
+      - ~/projects/gemini-cli/packages/core/src/tools/xcode-mcp-fix-transport.ts
+      - ~/projects/gemini-cli/packages/vscode-ide-companion/src/ide-server.ts
 
   - id: implement-ws-server-transport
     capability: CODEX
@@ -15,8 +15,8 @@ tasks:
     depends_on:
       - review-complete-ws-transport
     input_files:
-      - /home/paul-kane/projects/gemini-cli/packages/vscode-ide-companion/src/ide-server.ts
-      - /home/paul-kane/projects/gemini-cli/packages/core/src/tools/xcode-mcp-fix-transport.ts
+      - ~/projects/gemini-cli/packages/vscode-ide-companion/src/ide-server.ts
+      - ~/projects/gemini-cli/packages/core/src/tools/xcode-mcp-fix-transport.ts
 
   - id: integrate-ws-into-mcp-server
     capability: CODEX
@@ -24,7 +24,7 @@ tasks:
     depends_on:
       - implement-ws-server-transport
     input_files:
-      - /home/paul-kane/projects/gemini-cli/packages/vscode-ide-companion/src/ide-server.ts
+      - ~/projects/gemini-cli/packages/vscode-ide-companion/src/ide-server.ts
 
   - id: update-mcp-client-ws
     capability: CODEX
@@ -32,8 +32,8 @@ tasks:
     depends_on:
       - review-complete-ws-transport
     input_files:
-      - /home/paul-kane/projects/gemini-cli/packages/core/src/tools/mcp-client.ts
-      - /home/paul-kane/projects/gemini-cli/packages/core/src/tools/websocket-client-transport.ts
+      - ~/projects/gemini-cli/packages/core/src/tools/mcp-client.ts
+      - ~/projects/gemini-cli/packages/core/src/tools/websocket-client-transport.ts
 
   - id: test-ws-transport
     capability: CODEX
@@ -42,7 +42,7 @@ tasks:
       - integrate-ws-into-mcp-server
       - update-mcp-client-ws
     input_files:
-      - /home/paul-kane/projects/gemini-cli/packages/core/src/tools/mcp-client.test.ts
-      - /home/paul-kane/projects/gemini-cli/packages/cli/src/config/mcp/mcpServerEnablement.test.ts
-      - /home/paul-kane/projects/gemini-cli/packages/core/src/tools/websocket-client-transport.ts
+      - ~/projects/gemini-cli/packages/core/src/tools/mcp-client.test.ts
+      - ~/projects/gemini-cli/packages/cli/src/config/mcp/mcpServerEnablement.test.ts
+      - ~/projects/gemini-cli/packages/core/src/tools/websocket-client-transport.ts
       # Placeholder for new WebSocket server transport file, if it will be created.
