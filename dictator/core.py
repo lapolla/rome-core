@@ -1,4 +1,4 @@
-"""ROME MCP Server core — shared config, paths, run_cmd, FastMCP instance."""
+"""ROME core — shared config, paths, run_cmd, events."""
 
 from collections.abc import Callable
 import asyncio
@@ -9,7 +9,6 @@ import time as _time
 import uuid
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
 from dictator.rome_log import log_event
 
 # ── Config ─────────────────────────────────────────────────────────────

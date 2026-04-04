@@ -1,6 +1,7 @@
 """
 WebSocket tools: ws_send, rome_await, rome_events.
-Standardized interface for sending commands to the ROME Daemon.
+Native ROME interface for sending commands to the ROME Daemon.
+MCP IS DEAD. ROME IS THE MESH.
 """
 
 import asyncio
@@ -67,16 +68,16 @@ def _start_listener():
 async def _listen_forever():
     """Persistent WS connection to daemon, buffering events."""
     import websockets
-    from dictator.ws_client import _WS_URL, _ws_headers
+    from dictator.ws_client import _get_ws_url, _ws_headers
 
     delay = 1.0
     while True:
         try:
-            async with websockets.connect(_WS_URL, open_timeout=30, additional_headers=_ws_headers()) as ws:
+            async with websockets.connect(_get_ws_url(), open_timeout=30, additional_headers=_ws_headers()) as ws:
                 delay = 1.0
                 # Skip the agent_hello message
                 try:
-                    hello = await asyncio.wait_for(ws.recv(), timeout=5)
+                    await asyncio.wait_for(ws.recv(), timeout=5)
                 except asyncio.TimeoutError:
                     pass
 
@@ -100,10 +101,10 @@ async def _listen_forever():
             delay = min(delay * 2, 16.0)
 
 
-def register(mcp):
-    """Register WebSocket tools with the given FastMCP instance."""
+def register(registry):
+    """Register WebSocket tools with the given native ROME registry."""
 
-    @mcp.tool()
+    @registry.tool()
     async def ws_send(command: str, payload: dict = {}, timeout: float = 5.0) -> str:
         """
         Sends a command to the ROME Daemon via WebSocket and waits for a response.
@@ -112,7 +113,7 @@ def register(mcp):
         result = await send_command_async(command, payload, timeout)
         return json.dumps(result)
 
-    @mcp.tool()
+    @registry.tool()
     async def rome_submit_result(task_id: str, content: str, token: str | None = None) -> str:
         """
         Submits the agent's result for a given task.
@@ -120,7 +121,7 @@ def register(mcp):
         result = await submit_agent_result_async(task_id, content, token=token)
         return json.dumps(result)
 
-    @mcp.tool()
+    @registry.tool()
     async def rome_events() -> str:
         """
         Drain the event buffer — returns all daemon events since last call.

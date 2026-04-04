@@ -301,9 +301,9 @@ async def _load_capabilities() -> dict[str, bool]:
         logging.getLogger("rome.daemon").error("ERROR loading capabilities: %s", e, exc_info=True)
     return capabilities_status
 
-_WEBSOCKET_TOKEN = _load_config_token()
+_WEBSOCKET_TOKEN = ""
 
-_session_chars = 0  # cumulative chars returned to MCP client this session
+_session_chars = 0  # cumulative chars returned to native client this session
 _LEAN_THRESHOLD = 100_000  # chars before switching to lean mode
 _ULTRA_LEAN_THRESHOLD = 300_000  # chars before ultra-lean mode
 
@@ -710,7 +710,8 @@ async def _dispatch_runner(
                     shutil.copy2(str(rp), str(op))
         if IS_DAEMON and not is_fire_and_forget:
             task_registry.complete(task_id, status, report_path)
-            await emit_complete(event_bus, task_id, status, report_path, usage)
+            report_content = _read_report_content(report_path) if report_path else None
+            await emit_complete(event_bus, task_id, status, report_path, usage, report=report_content)
         if not result.get("ok"):
             await emit_error(event_bus, task_id, str(result.get("error") or result.get("message") or "dispatch_failed"))
     except asyncio.CancelledError:
@@ -773,22 +774,29 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         if IS_DAEMON:
             task_registry.register(task_id, capability)
             await emit_dispatch_start(event_bus, task_id, capability)
-        
-        # Execute immediately via native handler
-        result = await handle_native_shell({"command": prompt})
-        
-        # Log and finalize in registry
-        status = "completed" if result["ok"] else "failed"
-        task_dir = ROME_ROOT / "legions" / task_id
-        task_dir.mkdir(parents=True, exist_ok=True)
-        rp = task_dir / f"report_{task_id}.txt"
-        rp.write_text(result["stdout"] + "\n" + result["stderr"], encoding="utf-8")
-        
-        task_registry.complete(task_id, status, str(rp))
-        stdout = result["stdout"].strip()
-        await emit_complete(event_bus, task_id, status, str(rp), None, report=stdout)
-        
-        return {"task_id": task_id, "capability": capability, "accepted": True, "routed_to": "native_dsa"}
+
+        async def _run_native_background():
+            try:
+                # Execute immediately via native handler
+                result = await handle_native_shell({"command": prompt})
+                
+                # Log and finalize in registry
+                status = "completed" if result["ok"] else "failed"
+                task_dir = ROME_ROOT / "legions" / task_id
+                task_dir.mkdir(parents=True, exist_ok=True)
+                rp = task_dir / f"report_{task_id}.txt"
+                rp.write_text(result["stdout"] + "\n" + result["stderr"], encoding="utf-8")
+                
+                if IS_DAEMON:
+                    task_registry.complete(task_id, status, str(rp))
+                    await emit_complete(event_bus, task_id, status, str(rp), None, report=result["stdout"].strip())
+            except Exception as e:
+                if IS_DAEMON:
+                    await emit_error(event_bus, task_id, str(e))
+
+        # Launch in background and return immediately
+        asyncio.create_task(_run_native_background(), name=f"native-shell-{task_id}")
+        return {"task_id": task_id, "capability": capability, "accepted": True, "routed_to": "native_dsa_async"}
 
     # --- Persistent worker routing ---
     # Check if a persistent worker can handle this capability (skip if
@@ -861,7 +869,8 @@ async def handle_submit_result(payload: dict[str, Any]) -> dict[str, Any]:
 
     status = "completed"
     task_registry.complete(task_id, status, str(report_path))
-    await emit_complete(event_bus, task_id, status, str(report_path), None)
+    report_snippet = content[:4000] + "\n...[TRUNCATED]" if len(content) > 4000 else content
+    await emit_complete(event_bus, task_id, status, str(report_path), None, report=report_snippet)
 
     return {"task_id": task_id, "status": status, "report_path": str(report_path)}
 
@@ -1099,8 +1108,7 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
     """Block until all specified tasks complete. Event-driven via EventBus."""
     task_ids = payload.get("task_ids", [])
     include_reports = payload.get("include_reports", False)
-    summarize = payload.get("summarize", False) # Legacy: use this if summary is needed, but full=False
-    full = payload.get("full", False) # New: force full report even if summary exists
+    full = payload.get("full", False)
     timeout = float(payload.get("timeout", 120))
 
     if not task_ids:
@@ -1110,8 +1118,8 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
     results: dict[str, dict[str, Any]] = {}
 
     async def _collect_completed(tid: str, task: dict[str, Any]) -> None:
+        if tid not in pending: return
         status = task.get("status", "")
-        # Normalize SUCCESS/OK from shell_executor to "completed"
         normalized = "completed" if status.upper() in ("SUCCESS", "OK", "COMPLETED") else status
         
         lean_level = get_lean_level()
@@ -1120,69 +1128,50 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
             "report_path": task.get("report_path"),
             "usage": task.get("usage", {}),
         }
-        if lean_level >= 2: # Ultra-lean: no report at all
+        if lean_level >= 2:
             pending.discard(tid)
             return
 
         if include_reports and task.get("report_path"):
-            if lean_level >= 1: # Lean: always summarize
-                if task.get("summary"):
-                    results[tid]["report"] = _track_output(task["summary"])
-                else:
-                    content = _read_report_content(task["report_path"])
-                    if content:
-                        results[tid]["report"] = _track_output(await _summarize_report(content))
-            elif not full and task.get("summary"):
+            if not full and task.get("summary"):
                 results[tid]["report"] = _track_output(task["summary"])
             else:
                 content = _read_report_content(task["report_path"])
                 if content:
-                    if len(content) > 2000 and not full:
-                        summary = await _summarize_report(content)
-                        task_registry.update_task(tid, {"summary": summary})
-                        results[tid]["report"] = _track_output(summary)
-                    else:
-                        results[tid]["report"] = _track_output(content)
+                    results[tid]["report"] = _track_output(content)
         pending.discard(tid)
 
-    # Phase 1: Check already-completed tasks in registry
-    for tid in list(pending):
-        task = task_registry.get(tid)
-        if task and task.get("status", "").upper() in ("COMPLETED", "FAILED", "CANCELLED", "SUCCESS", "OK"):
-            await _collect_completed(tid, task)
-
-    if not pending:
-        all_ok = all(r.get("status") in ("completed", "SUCCESS") for r in results.values())
-        return {"ok": all_ok, "tasks": results}
-
-    # Phase 2: Subscribe to EventBus and wait for remaining tasks
+    # 1. Subscribe FIRST to avoid race condition
     sub_id, queue = await event_bus.subscribe()
     try:
+        # 2. Check already-completed tasks in registry IMMEDIATELY after subscription
+        for tid in list(pending):
+            task = task_registry.get(tid)
+            if task and task.get("status", "").upper() in ("COMPLETED", "FAILED", "CANCELLED", "SUCCESS", "OK"):
+                await _collect_completed(tid, task)
+
+        if not pending:
+            all_ok = all(r.get("status") in ("completed", "SUCCESS") for r in results.values())
+            return {"ok": all_ok, "tasks": results}
+
+        # 3. Wait for remaining tasks via queue
         deadline = asyncio.get_event_loop().time() + timeout
         while pending:
             remaining = deadline - asyncio.get_event_loop().time()
-            if remaining <= 0:
-                break
+            if remaining <= 0: break
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=remaining)
-            except asyncio.TimeoutError:
-                break
-            if event.type == "complete" and event.task_id in pending:
-                task = task_registry.get(event.task_id)
-                if task:
-                    await _collect_completed(event.task_id, task)
-                else:
-                    # Fallback: use event payload directly
-                    await _collect_completed(event.task_id, event.payload)
+                if event.type == "complete" and event.task_id in pending:
+                    task = task_registry.get(event.task_id)
+                    await _collect_completed(event.task_id, task or event.payload)
+            except asyncio.TimeoutError: break
     finally:
         await event_bus.unsubscribe(sub_id)
 
-    # Any still-pending tasks are timeouts
+    # 4. Final timeout cleanup
     for tid in list(pending):
         results[tid] = {"status": "timeout", "report_path": None, "usage": {}}
     
-
-
     all_ok = all(r.get("status") in ("completed", "SUCCESS") for r in results.values())
     return {"ok": all_ok if not pending else False, "tasks": results}
 
@@ -1229,6 +1218,18 @@ async def handle_get_state(payload: dict[str, Any]) -> dict[str, Any]:
     active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
     caps = await _load_capabilities()
     workers = await worker_registry.get_info()
+    usage = await _get_session_usage()
+    session_worker_tokens = usage["worker_tokens"] + _SESSION_USAGE["worker_tokens"]
+    session_dictator_tokens = usage["dictator_tokens"] + _SESSION_USAGE["dictator_tokens"]
+    session_cost_usd = round(usage["cost_usd"] + _SESSION_USAGE["cost_usd"], 6)
+    # Read dictator identity from config
+    dictator_name = "unknown"
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text())
+        dictator_name = cfg.get("dictator", "unknown")
+    except Exception:
+        pass
+
     return {
         "ok": True,
         "tasks": tasks,
@@ -1240,6 +1241,10 @@ async def handle_get_state(payload: dict[str, Any]) -> dict[str, Any]:
         "capabilities": list(caps.keys()),
         "capability_status": caps,
         "workers": workers,
+        "session_worker_tokens": session_worker_tokens,
+        "session_dictator_tokens": session_dictator_tokens,
+        "session_cost_usd": session_cost_usd,
+        "dictator": dictator_name,
     }
 
 

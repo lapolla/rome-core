@@ -7,10 +7,10 @@ from pathlib import Path
 from dictator.core import ROME_ROOT
 
 
-def register(mcp):
-    """Register Prefect tools with the given FastMCP instance."""
+def register(registry):
+    """Register Prefect tools with the given native ROME registry instance."""
 
-    @mcp.tool()
+    @registry.tool()
     async def execute_prefect(domain: str, task: str, timeout_s: int = 600) -> str:
         """Execute an autonomous prefect agent with domain-scoped MCP tool access."""
         from dictator.tools_legion import _execute_legion_impl
@@ -55,7 +55,7 @@ def register(mcp):
                 if report_path.exists():
                     report_text = report_path.read_text()
                     # Get all registered tool names
-                    all_tools = list(mcp._tool_manager._tools.keys())
+                    all_tools = list(registry.tools.keys())
                     allowed = set(tools)
                     violations = set()
                     for t in all_tools:

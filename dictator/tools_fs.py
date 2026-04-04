@@ -11,10 +11,10 @@ from dictator.core import ROME_ROOT, DictatorResponse, dictator_tool
 ROOT_DIR = ROME_ROOT
 
 
-def register(mcp):
-    """Register FS tools with the given FastMCP instance."""
+def register(registry):
+    """Register FS tools with the given native ROME registry instance."""
 
-    @mcp.tool()
+    @registry.tool()
     @dictator_tool
     async def fs_read(path: str) -> str:
         """Read a file relative to ROOT_DIR."""
@@ -38,7 +38,7 @@ def register(mcp):
             data=f"[ROME: lines 1-{line_count} of {p}]\n{content}"
         )
 
-    @mcp.tool()
+    @registry.tool()
     @dictator_tool
     async def fs_write(path: str, content: str) -> str:
         """Write a file relative to ROOT_DIR."""
@@ -55,7 +55,7 @@ def register(mcp):
         written = await asyncio.to_thread(_write)
         return DictatorResponse.success(message=f"Wrote {written} bytes to {p}", written=written)
 
-    @mcp.tool()
+    @registry.tool()
     @dictator_tool
     async def read_anywhere(path: str, start_line: int = 1, end_line: int | None = None) -> str:
         """Read any file on the system (absolute path)."""
@@ -80,7 +80,7 @@ def register(mcp):
             total_lines=len(all_lines)
         )
 
-    @mcp.tool()
+    @registry.tool()
     @dictator_tool
     async def write_anywhere(path: str, content: str) -> str:
         """Write content to any absolute path (overwrites)."""
@@ -94,7 +94,7 @@ def register(mcp):
         written = await asyncio.to_thread(_write)
         return DictatorResponse.success(message=f"Successfully wrote {written} bytes to {p}", written=written)
 
-    @mcp.tool()
+    @registry.tool()
     @dictator_tool
     async def list_directory(dir_path: str) -> str:
         """List contents of any directory."""

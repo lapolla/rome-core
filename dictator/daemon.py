@@ -141,6 +141,7 @@ async def run(host: str, port: int) -> None:
         process_request=process_request,
         logger=logger,
         open_timeout=30,
+        close_timeout=2,
     ) as server:
         logger.info("ROME daemon v%s listening on ws://%s:%d/ws", _VERSION, host, port)
         await stop

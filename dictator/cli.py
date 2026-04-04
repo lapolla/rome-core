@@ -1,31 +1,25 @@
 #!/usr/bin/env python3
 """
-MCP Server "asshole" — modular Python dictator.
-Thin entry point: uses the orchestrator to load tools.
+ROME Native Entry Point — modular Python dictator.
+MCP IS DEAD. EXCLUSIVELY use the native ROME registry.
 """
 
 import sys
 import os
 from pathlib import Path
 
-# When invoked as `python3 dictator/cli.py`, ensure the parent dir
-# (rome-core/) is on sys.path so `from dictator.xxx` imports work.
 _parent = str(Path(__file__).resolve().parent.parent)
 if _parent not in sys.path:
     sys.path.insert(0, _parent)
 
-# The orchestrator handles dynamic tool discovery and registration
-from dictator.orchestrator import create_mcp_server
+from dictator.orchestrator import create_registry
 
-# profile = os.environ.get("ROME_PROFILE")
-# sys.stderr.write(f"ROME: Active profile: {'full' if profile is None else profile}\n")
-mcp = create_mcp_server("asshole", profile=os.environ.get("ROME_PROFILE"))
+# The registry handles dynamic tool discovery and native registration
+# for consumption by the WebSocket daemon or direct CLI execution.
+registry = create_registry("ROME", profile=os.environ.get("ROME_PROFILE"))
 
 if __name__ == "__main__":
-    # Startup GC: clean old legion dirs before serving
-    # from dictator.tools_gc import auto_gc
-    # try:
-    #     auto_gc()
-    # except Exception:
-    #     pass
-    mcp.run(transport="stdio")
+    # If invoked directly, list registered tools to prove the mesh is active.
+    print(f"ROME Native Mesh: {len(registry.tools)} tools loaded.")
+    for tool_name in sorted(registry.tools.keys()):
+        print(f" - {tool_name}")

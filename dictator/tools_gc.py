@@ -10,10 +10,10 @@ from dictator.core import ROME_ROOT
 from dictator.rome_log import log_event
 
 
-def register(mcp):
-    """Register GC and stats tools with the given FastMCP instance."""
+def register(registry):
+    """Register GC and stats tools with the given native ROME registry instance."""
 
-    @mcp.tool()
+    @registry.tool()
     async def gc_legions(max_age_days: int = 7) -> str:
         """Garbage collect old legion task directories."""
         legions_path = ROME_ROOT / "legions"
@@ -53,7 +53,7 @@ def register(mcp):
         log_event(tool="gc_legions", message=f"deleted={deleted} kept={kept} freed={freed_bytes}")
         return json.dumps({"ok": True, "deleted": deleted, "kept": kept, "freed_bytes": freed_bytes})
 
-    @mcp.tool()
+    @registry.tool()
     async def reset_tasks() -> str:
         """Clear all tasks from registry (including REGISTERED zombies). Resets dashboard."""
         from dictator.ws_client import send_command_async
@@ -61,7 +61,7 @@ def register(mcp):
         log_event(tool="reset_tasks", message=f"cleared={result.get('cleared', '?')}")
         return json.dumps(result)
 
-    @mcp.tool()
+    @registry.tool()
     async def legion_stats(period_hours: int = 24) -> str:
         """Aggregate legion performance and cost stats from the ROME log."""
         log_file = ROME_ROOT / "logs" / "rome.jsonl"

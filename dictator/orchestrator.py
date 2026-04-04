@@ -1,6 +1,6 @@
 """
-ROME MCP Orchestrator — dynamic tool discovery and registration.
-This module provides the logic to load modular toolsets into a FastMCP instance.
+ROME Orchestrator — dynamic tool discovery and native registration.
+MCP IS DEAD. EXCLUSIVELY use the native ROME registry.
 """
 
 import importlib
@@ -8,71 +8,64 @@ import pkgutil
 import json
 import sys
 from pathlib import Path
-from mcp.server.fastmcp import FastMCP
 from dictator import core
 
+class RomeRegistry:
+    """Native replacement for FastMCP instrumentarium."""
+    def __init__(self, name: str = "ROME"):
+        self.name = name
+        self.tools = {}
 
-def get_capabilities():
-    """Read capabilities from config.json."""
-    cfg_path = Path(__file__).parent / "config.json"
-    if cfg_path.exists():
-        try:
-            cfg = json.loads(cfg_path.read_text())
-            return cfg.get("capabilities", [])
-        except Exception as e:
-            print(f"Error reading config.json: {e}", file=sys.stderr)
-    return []
+    def tool(self, name: str | None = None):
+        """Decorator to register a native ROME tool."""
+        def decorator(func):
+            tool_name = name or func.__name__
+            self.tools[tool_name] = func
+            return func
+        return decorator
 
+    def register_all(self, filter_capabilities: bool = False, profile: str | None = None):
+        """Discover and load tools_*.py modules into this registry."""
+        capabilities = self._get_capabilities()
+        package_path = str(Path(__file__).parent)
 
-def register_all_tools(mcp: FastMCP, filter_capabilities: bool = False, profile: str | None = None):
-    """
-    Dynamically discover and register all 'tools_*.py' modules.
-    If profile is provided, only load modules listed in that profile (None = all).
-    If filter_capabilities is True, only load tools mentioned in config.json.
-    Profile takes precedence over filter_capabilities.
-    """
-    capabilities = get_capabilities()
-    package_path = str(Path(__file__).parent)
+        allowed_modules = None
+        excludes = set()
+        if profile:
+            from dictator.profiles import get_profile, get_tool_excludes
+            allowed_modules = get_profile(profile)
+            excludes = get_tool_excludes(profile)
 
-    # Resolve profile to allowed module list (None = no filtering)
-    allowed_modules = None
-    excludes = set() # Initialize an empty set for excluded tools
-    if profile:
-        from dictator.profiles import get_profile, get_tool_excludes
-        allowed_modules = get_profile(profile)  # None for "full", list for others
-        # if allowed_modules is not None:
-        #     print(f"[ROME] Profile '{profile}': loading {allowed_modules}", file=sys.stderr)
-        # else:
-        #     print(f"[ROME] Profile '{profile}': loading all modules", file=sys.stderr)
-        excludes = get_tool_excludes(profile)
-
-    for loader, module_name, is_pkg in pkgutil.iter_modules([package_path]):
-        if module_name.startswith("tools_"):
-            cap_name = module_name[6:]
-
-            # Profile filtering (takes precedence)
-            if allowed_modules is not None:
-                if cap_name not in allowed_modules:
+        for loader, module_name, is_pkg in pkgutil.iter_modules([package_path]):
+            if module_name.startswith("tools_"):
+                cap_name = module_name[6:]
+                if allowed_modules is not None and cap_name not in allowed_modules:
                     continue
-            # Legacy config.json filtering
-            elif filter_capabilities and capabilities and cap_name not in capabilities:
-                continue
+                elif filter_capabilities and capabilities and cap_name not in capabilities:
+                    continue
 
+                try:
+                    module = importlib.import_module(f"dictator.{module_name}")
+                    if hasattr(module, "register"):
+                        module.register(self)
+                        # Purge excludes
+                        for tool_name in list(self.tools.keys()):
+                            if tool_name in excludes:
+                                del self.tools[tool_name]
+                except Exception as e:
+                    print(f"Failed to load ROME toolset {module_name}: {e}", file=sys.stderr)
+
+    def _get_capabilities(self):
+        cfg_path = Path(__file__).parent / "config.json"
+        if cfg_path.exists():
             try:
-                module = importlib.import_module(f"dictator.{module_name}")
-                if hasattr(module, "register"):
-                    module.register(mcp)
-                    # Remove excluded tools
-                    for tool_name in list(mcp._tool_manager._tools.keys()):
-                        if tool_name in excludes:
-                            # print(f"[ROME] Profile '{profile}': excluding tool '{tool_name}'", file=sys.stderr)
-                            del mcp._tool_manager._tools[tool_name]
-            except Exception as e:
-                print(f"Failed to load toolset {module_name}: {e}", file=sys.stderr)
+                cfg = json.loads(cfg_path.read_text())
+                return cfg.get("capabilities", [])
+            except Exception: pass
+        return []
 
-
-def create_mcp_server(name: str = "ROME", filter_capabilities: bool = False, profile: str | None = None) -> FastMCP:
-    """Create a FastMCP instance and register discovered tools."""
-    mcp = FastMCP(name)
-    register_all_tools(mcp, filter_capabilities=filter_capabilities, profile=profile)
-    return mcp
+def create_registry(name: str = "ROME", profile: str | None = None) -> RomeRegistry:
+    """Create a native ROME registry and register discovered tools."""
+    registry = RomeRegistry(name)
+    registry.register_all(profile=profile)
+    return registry

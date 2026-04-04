@@ -7,7 +7,7 @@ PROFILES = {
     "drupal": CORE_MODULES + ["git", "drupal"],
     "desktop": CORE_MODULES + ["desktop"],
     "orchestrate": CORE_MODULES + ["gc", "stats"],
-    "gemini": CORE_MODULES + ["git", "gc"],
+    "gemini": ["ws", "git", "gc"],
     "full": None,  # None = load everything
 }
 
@@ -16,13 +16,7 @@ TOOL_EXCLUDES = {
     "drupal": ["execute_legion", "launch_centurion", "rome_submit_result"],
     "desktop": ["execute_legion", "launch_centurion", "rome_submit_result"],
     "orchestrate": [],
-    "gemini": [
-        "execute_legion",
-        "execute_campaign",
-        "launch_centurion",
-        "rome_submit_result",
-        "get_state",
-    ],
+    "gemini": [],
     "full": [],
 }
 

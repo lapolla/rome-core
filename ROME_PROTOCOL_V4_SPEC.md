@@ -6,7 +6,8 @@ ROME v4.0.0 is the transition from MCP-mediated to WebSocket-native. The daemon 
 
 ## 2. The Death of the Middleman (MCP Deprecation for Runtime)
 - **The Problem:** MCP adds latency per request and bloats the LLM context window with tool descriptions and response payloads.
-- **The Solution:** Every ROME component (Dictator, Centurion, Legions) communicates via raw JSON frames over a persistent WebSocket connection on port 8741.
+- **The Solution:** Every ROME component (Dictator, Centurion, Legions) communicates via raw JSON frames over a persistent WebSocket connection.
+- **Configuration:** The native client (`ws_client.py`) dynamically resolves the connection URL (`daemon_host` and `daemon_port`) from `dictator/config.json`, defaulting to `ws://127.0.0.1:8741/ws`.
 - **MCP retained for:** Claude Code integration only (stdio transport via `dictator/cli.py`). Not used for daemon-to-worker communication.
 
 ## 3. Persistent Legions (Long-Lived Agents)
@@ -73,7 +74,13 @@ Worker results >2000 chars auto-summarized via Gemini Flash on `submit_result`. 
 ## 10. Zombie Reaping
 System status loop (30s) auto-fails tasks stuck at 0% progress for >180s. Daemon startup sweeps all registered/running tasks to failed state.
 
-## 11. Task Manifest (v4)
+## 11. Authentication (Handshake)
+- **Mandatory Security:** The ROME v4 daemon requires a secure token for all WebSocket upgrades. Failure results in a `1008 Policy Violation`.
+- **Method A (Authorization Header):** `Authorization: Bearer <token>`
+- **Method B (Query Parameter):** `ws://localhost:8741/ws?token=<token>`
+- **Configuration:** The `ROME_V4_SECURE_TOKEN` must be desynchronized across `~/.gemini/settings.json` and `rome-core/dictator/config.json`.
+
+## 12. Task Manifest (v4)
 
 ```json
 {

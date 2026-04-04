@@ -1,4 +1,4 @@
-"""Event emission helper — bridges stdio MCP tools to daemon event bus via WS."""
+"""Event emission helper — bridges native tools to daemon event bus via WS."""
 import asyncio
 import os
 from dictator.core import event_bus, task_registry
@@ -21,7 +21,7 @@ async def emit_events(ok, task_id, task_dir, result, usage):
             pass
         return
 
-    # Remote path: running as stdio MCP — relay via WS
+    # Remote path: running as native tool — relay via WS
     from dictator.ws_client import send_event
     send_event("complete", task_id, {"status": status, "report_path": rp, "usage": usage or {}})
 

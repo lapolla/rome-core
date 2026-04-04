@@ -11,10 +11,10 @@ from dictator.core import ROME_ROOT, ARSENAL_PATH, run_cmd
 from dictator.rome_log import log_event
 
 
-def register(mcp):
-    """Register stats and observability tools with the given FastMCP instance."""
+def register(registry):
+    """Register stats and observability tools with the given native ROME registry instance."""
 
-    @mcp.tool()
+    @registry.tool()
     async def rome_tail(n: int = 20, task_id: str = None) -> str:
         """Show the last N entries from the ROME log, formatted for quick reading.
         Optionally filter by task_id."""
@@ -70,7 +70,7 @@ def register(mcp):
             return "(no entries)"
         return f"Last {len(entries)} entries:\n" + "\n".join(entries)
 
-    @mcp.tool()
+    @registry.tool()
     async def rome_costs(period_hours: int = 24) -> str:
         """Aggregates token usage and cost from rome.jsonl."""
         log_path = ROME_ROOT / "logs" / "rome.jsonl"
@@ -136,7 +136,7 @@ def register(mcp):
                 lines.append(f"  {m}: {u['input_tokens']}in/{u['output_tokens']}out ${u['cost_usd']:.4f}")
         return "\n".join(lines)
 
-    @mcp.tool()
+    @registry.tool()
     async def rome_health() -> str:
         """Check availability of all worker CLIs and core files."""
         import httpx
@@ -206,7 +206,7 @@ def register(mcp):
             lines.append(f"{k}: {'OK' if v is True else v}")
         return '\n'.join(lines)
 
-    @mcp.tool()
+    @registry.tool()
     async def rome_find(query: str, max_results: int = 10) -> str:
         """Search across all legion reports and manifests."""
         matches = []
@@ -279,7 +279,7 @@ def register(mcp):
             lines.append(f"  [{m.get('task_id','')}] {m.get('file','')}: {m.get('excerpt','')[:80]}")
         return "\n".join(lines)
 
-    @mcp.tool()
+    @registry.tool()
     async def senate_query(question: str) -> str:
         """Ask the Senate which architect sector handles a concern."""
         architects_dir = ROME_ROOT / "senate" / "architects"
@@ -314,7 +314,7 @@ def register(mcp):
             lines.append(f"  {m['sector']}: {m['manifesto'][:100]}")
         return "\n".join(lines)
 
-    @mcp.tool()
+    @registry.tool()
     async def senate_brain(sector_id: int, mission: str) -> str:
         """Spawn a Senate brain — binds an LLM soul to a sector manifesto and executes a mission."""
         manifesto_path = ROME_ROOT / "senate" / "architects" / f"T{sector_id}.md"

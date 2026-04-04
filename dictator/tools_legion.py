@@ -14,8 +14,6 @@ import time as _time
 from pathlib import Path
 import yaml
 
-from mcp.server.fastmcp import Context
-
 from dictator.core import run_cmd, run_cmd_stream, ROME_ROOT, ARSENAL_PATH, event_bus, task_registry
 from dictator.rome_log import log_event
 from dictator.events import emit_dispatch_start, emit_progress
@@ -51,18 +49,6 @@ def _resolve_arg(arg: str, subs: dict) -> str:
         arg = arg.replace(token, val)
     return arg
 
-def _extract_mcp_usage(ctx: Context | None) -> dict | None:
-    """Extract usage dict from FastMCP's internal state, if available."""
-    if not ctx:
-        return None
-    
-    # Prioritize last_tool_usage if present
-    if hasattr(ctx, "last_tool_usage") and getattr(ctx, "last_tool_usage") is not None:
-        return getattr(ctx, "last_tool_usage")
-
-    # For testing outside of a request context, return None.
-    # Otherwise, FastMCP's internal Context object might raise ValueError.
-    return None
 
 class OrchestratorUI:
     def __init__(self, task_ids):
@@ -186,12 +172,11 @@ def _recommend_capability_impl(task_description: str) -> dict:
     }
 
 
-def register(mcp):
-    """Register Legion tools with the given FastMCP instance."""
+def register(registry):
+    """Register Legion tools with the given native ROME registry instance."""
 
-    @mcp.tool()
+    @registry.tool()
     async def execute_legion(
-        ctx: Context,
         task_id: str,
         capability: str,
         args: list[str],
@@ -207,7 +192,6 @@ def register(mcp):
             input_files=input_files,
             no_cache=no_cache,
             prompt_file=prompt_file,
-            ctx=ctx
         )
         
         summary = result.get("summary", "Task complete.")
@@ -216,178 +200,101 @@ def register(mcp):
         if result.get("error"):
             summary += f"\nError: {result['error']}"
 
-        actual_usage = _extract_mcp_usage(ctx)
+        actual_usage = {}
         if actual_usage:
             usage_payload = {
                 "input_tokens": actual_usage.get("input_tokens", 0),
                 "output_tokens": actual_usage.get("output_tokens", 0),
                 "total_tokens": actual_usage.get("total_tokens", 0)
             }
-            log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage=usage_payload)
+            log_event(tool='token_guard', message='native_outbound', task_id=task_id, usage=usage_payload)
         else:
             est_tokens = len(summary) // 4
             usage_payload = {"total_tokens": est_tokens, "estimated": True}
-            log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
+            log_event(tool='token_guard', message='native_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
 
         from dictator.ws_client import send_event
         send_event("dictator_waste", task_id, {"usage": usage_payload})
         return summary
 
-    @mcp.tool()
+    @registry.tool()
     async def execute_campaign(
-        ctx: Context,
         campaign_id: str,
         tasks: list[dict],
     ) -> str:
         """
-        Execute multiple ROME tasks in parallel.
+        Execute multiple ROME tasks in parallel via the WS Daemon.
         Each task dict: { 'id': str, 'capability': str, 'args': list[str], 'input_files': list[str], 'depends_on': list[str] (optional) }
         """
         t0 = _time.monotonic()
-        log_event(tool="execute_campaign", task_id=campaign_id, message=f"{len(tasks)} tasks")
+        from dictator.ws_client import send_command_async, send_event
+        log_event(tool="execute_campaign", task_id=campaign_id, message=f"Sovereign dispatch: {len(tasks)} tasks")
 
         # --- Centurion Dashboard V2: Real-time Orchestrator UI ---
         task_ids = [f"{campaign_id}_{t['id']}" for t in tasks]
         ui = OrchestratorUI(task_ids)
 
-        events = {t["id"]: asyncio.Event() for t in tasks}
-        task_result_map = {}
-
-        async def run_task(t):
+        # 1. Parallel Dispatch to the daemon
+        async def _dispatch_one(t):
             tid = f"{campaign_id}_{t['id']}"
-
-            def on_progress(line):
-                ui.update(tid, line)
-                ui.redraw()
-                if ctx:
-                    m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
-                    if m:
-                        try:
-                            p = int(m.group(1))
-                            msg = f"[{tid}] {m.group(3).strip()}"
-                            emit_progress_ws(tid, p, msg)
-                            asyncio.create_task(ctx.info(f"{p}% | {msg}"))
-                        except Exception:
-                            pass
-
-            emit_dispatch_start_ws(tid, t["capability"])
-
-            return await _execute_legion_impl(
-                task_id=tid,
-                capability=t['capability'],
-                args=t['args'],
-                input_files=t.get('input_files', []),
-                on_progress=on_progress,
-                ctx=ctx,
-                parent_task_id=campaign_id
-            )
-
-        async def run_task_with_deps(t):
-            tid_short = t["id"]
-            tid = f"{campaign_id}_{tid_short}"
-            # Wait for dependencies
-            for dep in t.get("depends_on", []):
-                if dep in events:
-                    await events[dep].wait()
-                    if task_result_map.get(dep) != "SUCCESS":
-                        # Mark as failed due to dep failure
-                        task_result_map[tid_short] = "FAILED"
-                        ui.update(tid, f"ERR: Dependency {dep} failed")
-                        emit_dispatch_start_ws(tid, t["capability"])  # register it
-                        emit_progress_ws(tid, 0, f"Dependency {dep} failed")
-                        from dictator.ws_client import send_event
-                        send_event("complete", tid, {"status": "FAILED", "report_path": None, "usage": {}})
-                        events[tid_short].set()
-                        return {"ok": False, "error": f"Dependency {dep} failed", "task_id": tid}
-            result = await run_task(t)
-            # Record outcome for dependents
-            try:
-                r = result if isinstance(result, dict) else json.loads(result)
-                task_result_map[tid_short] = "SUCCESS" if r.get("ok") else "FAILED"
-            except Exception:
-                task_result_map[tid_short] = "FAILED"
-            events[tid_short].set()
-            return result
-
-        # Campaign Error Isolation (Phase 8)
-        results = await asyncio.gather(*(run_task_with_deps(t) for t in tasks), return_exceptions=True)
-
-        total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
-        has_usage = False
-        for t in tasks:
-            manifest_path = ROME_ROOT / "legions" / f"{campaign_id}_{t['id']}" / "manifest.json"
-            try:
-                if manifest_path.exists():
-                    m = json.loads(manifest_path.read_text())
-                    u = m.get("usage")
-                    if u:
-                        has_usage = True
-                        total_usage["input_tokens"] += u.get("input_tokens", 0)
-                        total_usage["output_tokens"] += u.get("output_tokens", 0)
-                        total_usage["total_tokens"] += u.get("total_tokens", 0)
-                        if u.get("cost_usd") is not None:
-                            total_usage["cost_usd"] += u["cost_usd"]
-            except Exception:
-                pass
-
-        elapsed = _time.monotonic() - t0
-        log_event(tool="execute_campaign", task_id=campaign_id, status="ok", duration_s=elapsed,
-                  message=f"Completed {len(tasks)} tasks",
-                  usage=total_usage if has_usage else None)
-
-        task_results = {}
-        ok_count = 0
-        artifact_paths = []
-        for t, result in zip(tasks, results):
-            tid = f"{campaign_id}_{t['id']}"
-            if isinstance(result, Exception):
-                task_results[t['id']] = json.dumps({"ok": False, "error": str(result), "task_id": tid}, indent=2)
+            payload = {
+                "task_id": tid,
+                "capability": t['capability'],
+                "prompt": t['args'][0] if t['args'] else "",
+                "input_files": t.get('input_files', []),
+                "parent_task_id": campaign_id
+            }
+            resp = await send_command_async("dispatch", payload)
+            if resp.get("accepted"):
+                return tid
             else:
-                task_results[t['id']] = json.dumps(result, indent=2) if isinstance(result, dict) else result
-                try:
-                    r = result if isinstance(result, dict) else json.loads(result)
-                    if r.get("ok"):
-                        ok_count += 1
-                    # Collect artifact paths from manifest
-                    manifest_path = ROME_ROOT / "legions" / tid / "manifest.json"
-                    if manifest_path.exists():
-                        m = json.loads(manifest_path.read_text())
-                        for a in m.get("artifacts", []):
-                            artifact_paths.append(a.get("path", ""))
-                except Exception:
-                    pass
+                ui.update(tid, f"ERR: Dispatch failed: {resp.get('error')}")
+                ui.redraw()
+                return None
 
-        # Finalize UI
-        tok = total_usage.get("total_tokens", 0) if has_usage else 0
-        cost = total_usage.get("cost_usd", 0.0) if has_usage else 0.0
-        cost_str = f" ${cost:.4f}" if cost else ""
-        summary = f"Campaign: {campaign_id} | {ok_count}/{len(tasks)} succeeded | {round(elapsed, 1)}s | {tok}tok{cost_str}"
-        if artifact_paths:
-            summary += f"\nArtifacts: {', '.join(artifact_paths[:5])}"
+        dispatched_results = await asyncio.gather(*(_dispatch_one(t) for t in tasks))
+        dispatched = [tid for tid in dispatched_results if tid]
+
+        # 2. Sovereign Await (Parallel monitor)
+        # This blocks until all task_ids in the list are SUCCESS or FAILED.
+        # The daemon handles the multithreaded monitoring and event relay.
+        result_payload = await send_command_async("await", {
+            "task_ids": dispatched,
+            "include_reports": False,
+            "timeout": 600
+        }, timeout=610)
+
+        # 3. Finalize UI and Usage
+        elapsed = _time.monotonic() - t0
+        tasks_results = result_payload.get("tasks", {})
+        ok_count = sum(1 for r in tasks_results.values() if r.get("status") in ("completed", "SUCCESS"))
         
+        summary = f"Sovereign Campaign: {campaign_id} | {ok_count}/{len(tasks)} succeeded | {round(elapsed, 1)}s"
         ui.finalize(summary)
 
-        final_output = summary
-        actual_usage = _extract_mcp_usage(ctx)
+        log_event(tool="execute_campaign", task_id=campaign_id, status="ok", duration_s=elapsed,
+                  message=f"Campaign complete: {ok_count}/{len(tasks)} tasks")
+
+        return summary
+        actual_usage = {}
         if actual_usage:
             usage_payload = {
                 "input_tokens": actual_usage.get("input_tokens", 0),
                 "output_tokens": actual_usage.get("output_tokens", 0),
                 "total_tokens": actual_usage.get("total_tokens", 0)
             }
-            log_event(tool='token_guard', message='mcp_outbound', task_id=campaign_id, usage=usage_payload)
+            log_event(tool='token_guard', message='native_outbound', task_id=campaign_id, usage=usage_payload)
         else:
             est_tokens = len(final_output) // 4
             usage_payload = {"total_tokens": est_tokens, "estimated": True}
-            log_event(tool='token_guard', message='mcp_outbound', task_id=campaign_id, usage={'estimated_output_tokens': est_tokens})
+            log_event(tool='token_guard', message='native_outbound', task_id=campaign_id, usage={'estimated_output_tokens': est_tokens})
 
         from dictator.ws_client import send_event
         send_event("dictator_waste", campaign_id, {"usage": usage_payload})
         return final_output
 
-    @mcp.tool()
+    @registry.tool()
     async def rome_dispatch(
-        ctx: Context,
         task_id: str,
         capability: str,
         prompt: str = "",
@@ -403,7 +310,7 @@ def register(mcp):
         """Quick dispatch. output_path: agent writes directly. fire_and_forget: returns immediately, task runs in background."""
         task_dir = ROME_ROOT / "legions" / task_id
         if task_dir.exists():
-            # Clear stale state from previous dispatch (e.g. interrupted MCP call)
+            # Clear stale state from previous dispatch (e.g. interrupted call)
             stale_task = task_dir / "task.md"
             if stale_task.exists():
                 stale_task.unlink()
@@ -414,7 +321,7 @@ def register(mcp):
         (task_dir / "task.md").write_text(full_prompt)
 
         # Auto fire-and-forget for long-running capabilities (timeout > 120s)
-        # Prevents MCP transport timeout from killing the connection
+        # Prevents transport timeout from killing the connection
         if not fire_and_forget:
             arsenal = _resolve_arsenal_paths(json.loads(ARSENAL_PATH.read_text()))
             cap = arsenal.get("capabilities", {}).get(capability, {})
@@ -422,7 +329,7 @@ def register(mcp):
                 fire_and_forget = True
 
         if fire_and_forget:
-            # Delegate to daemon process — MCP stays lightweight
+            # Delegate to daemon process — client stays lightweight
             from dictator.ws_client import send_command_async
             payload = {"task_id": task_id, "capability": capability,
                     "prompt": prompt,
@@ -440,7 +347,6 @@ def register(mcp):
             args=[prompt if capability == "SAFE_SHELL" else "Read and execute the task in task.md in your current working directory. Output results with [ROME_STATUS: SUCCESS] or [ROME_STATUS: FAILED]."],
             input_files=input_files,
             no_cache=no_cache,
-            ctx=ctx
         )
         
         # Change 3: rome_dispatch returns path only
@@ -466,24 +372,24 @@ def register(mcp):
         summary = result.get("summary", "")
         rp = f"\nReport: {report_path}" if report_path else ""
         final = f"{status}:{task_id}{rp}\n{summary}"
-        actual_usage = _extract_mcp_usage(ctx)
+        actual_usage = {}
         if actual_usage:
             usage_payload = {
                 "input_tokens": actual_usage.get("input_tokens", 0),
                 "output_tokens": actual_usage.get("output_tokens", 0),
                 "total_tokens": actual_usage.get("total_tokens", 0)
             }
-            log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage=usage_payload)
+            log_event(tool='token_guard', message='native_outbound', task_id=task_id, usage=usage_payload)
         else:
             est_tokens = len(final) // 4
             usage_payload = {"total_tokens": est_tokens, "estimated": True}
-            log_event(tool='token_guard', message='mcp_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
+            log_event(tool='token_guard', message='native_outbound', task_id=task_id, usage={'estimated_output_tokens': est_tokens})
 
         from dictator.ws_client import send_event
         send_event("dictator_waste", task_id, {"usage": usage_payload})
         return final
 
-    @mcp.tool()
+    @registry.tool()
     async def clear_cache() -> str:
         """Clear the legion result cache."""
         count = 0
@@ -494,14 +400,14 @@ def register(mcp):
         log_event(tool='clear_cache', message=f'Cleared {count} cached entries')
         return f'Cleared {count} cached entries from {CACHE_DIR}'
 
-    @mcp.tool()
+    @registry.tool()
     async def recommend_capability(task_description: str) -> str:
         """Recommend the best Legion capability based on task heuristics."""
         res = _recommend_capability_impl(task_description)
         return json.dumps(res, indent=2)
 
 
-    @mcp.tool()
+    @registry.tool()
     async def consult_architect(question: str, context_files: list[str] | None = None, timeout: float = 120) -> str:
         """Escalate to Claude for architectural decisions. Returns Claude's analysis.
         Use for: design decisions, trade-offs, code review, complex debugging.
@@ -562,7 +468,7 @@ def register(mcp):
             return report or "Claude completed but no report. Check: legions/" + task_id + "/"
         return "ERR (" + status + "): " + (report or "No response. Check daemon logs.")
 
-    @mcp.tool()
+    @registry.tool()
     async def launch_centurion(campaign_id: str, tasks: list[dict]) -> str:
         """Launch a campaign with the Centurion CLI dashboard (blocks until complete, renders bars in terminal)."""
         import tempfile
@@ -579,7 +485,7 @@ def register(mcp):
         exit_code = r.get("exit_code", "?")
         return f"Campaign {campaign_id} complete | {len(tasks)} tasks | exit={exit_code}"
 
-    @mcp.tool()
+    @registry.tool()
     async def campaign_run(template: str, overrides: dict | None = None) -> str:
         """Load a campaign YAML template and dispatch all tasks. Returns task IDs."""
         campaign_file = ROME_ROOT / "campaigns" / f"{template}.yaml"
@@ -639,7 +545,6 @@ async def _execute_legion_impl(
     prompt_file: str = "",
     on_progress: Callable | None = None,
     _is_retry: bool = False,
-    ctx: Context | None = None,
     parent_task_id: str | None = None,
 ) -> dict:
     """Core legion logic. Returns a result dict (not JSON string)."""
@@ -664,8 +569,6 @@ async def _execute_legion_impl(
                 task_registry.update_progress(task_id, p, msg)
                 asyncio.ensure_future(emit_progress(event_bus, task_id, p, msg))
                 emit_progress_ws(task_id, p, msg)
-                if ctx:
-                    asyncio.create_task(ctx.info(f"{p}% | {msg}"))
             except Exception:
                 pass
 
@@ -877,7 +780,7 @@ async def _execute_legion_impl(
             manifest = json.loads(manifest_path.read_text())
             usage = manifest.get("usage")
             progress = manifest.get("progress", [])
-            # Trim progress to reduce MCP response bloat
+            # Trim progress to reduce response bloat
             if len(progress) > 6:
                 progress = progress[:3] + [f'... [{len(progress) - 6} lines trimmed] ...'] + progress[-3:]
     except Exception:

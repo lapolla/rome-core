@@ -1,4 +1,4 @@
-"""Thread-safe WebSocket client for MCP tools → daemon communication.
+"""Thread-safe WebSocket client for Native tools → daemon communication.
 
 Two modes:
 - send_event()        — fire-and-forget via persistent background connection
@@ -21,17 +21,27 @@ try:
 except ImportError:
     def log_event(**kwargs): pass
 
-_WS_URL = "ws://127.0.0.1:8741/ws"
-
-def _ws_headers() -> dict:
+def _ws_config() -> dict:
     try:
         import json as _json
         from pathlib import Path as _Path
-        cfg = _json.loads((_Path(__file__).parent / "config.json").read_text())
-        token = str(cfg.get("ws_token") or "").strip()
-        return {"Authorization": f"Bearer {token}"} if token else {}
+        cfg_path = _Path(__file__).parent / "config.json"
+        if cfg_path.exists():
+            return _json.loads(cfg_path.read_text())
     except Exception:
-        return {}
+        pass
+    return {}
+
+def _get_ws_url() -> str:
+    cfg = _ws_config()
+    host = cfg.get("daemon_host", "127.0.0.1")
+    port = cfg.get("daemon_port", 8741)
+    return f"ws://{host}:{port}/ws"
+
+def _ws_headers() -> dict:
+    cfg = _ws_config()
+    token = str(cfg.get("ws_token") or "").strip()
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 _HEARTBEAT_TIMEOUT = 120 # If no message for this long, consider connection dead
@@ -69,7 +79,7 @@ class _EventSender:
         delay = 1.0
         while True:
             try:
-                async with websockets.connect(_WS_URL, open_timeout=30, additional_headers=_ws_headers()) as ws:
+                async with websockets.connect(_get_ws_url(), open_timeout=30, additional_headers=_ws_headers()) as ws:
                     delay = 1.0
                     while True:
                         try:
@@ -141,7 +151,7 @@ def send_command_sync(command: str, payload: dict[str, Any], timeout: float = 5.
     import websockets
 
     async def _run() -> dict[str, Any]:
-        async with websockets.connect(_WS_URL, open_timeout=30, additional_headers=_ws_headers()) as ws:
+        async with websockets.connect(_get_ws_url(), open_timeout=30, additional_headers=_ws_headers()) as ws:
             req_id = uuid.uuid4().hex[:8]
             await ws.send(json.dumps({
                 "type": "command",
@@ -170,7 +180,7 @@ async def send_command_async(command: str, payload: dict[str, Any], timeout: flo
     """Async version of send_command_sync — awaitable, safe inside a running event loop."""
     import websockets
     try:
-        async with websockets.connect(_WS_URL, open_timeout=30, additional_headers=_ws_headers()) as ws:
+        async with websockets.connect(_get_ws_url(), open_timeout=30, additional_headers=_ws_headers()) as ws:
             req_id = uuid.uuid4().hex[:8]
             await ws.send(json.dumps({
                 "type": "command",

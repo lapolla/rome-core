@@ -10,6 +10,8 @@ async def send_command(command, payload):
     uri = f"ws://127.0.0.1:8741/ws?token={TOKEN}"
     try:
         async with websockets.connect(uri) as websocket:
+            # Skip daemon_hello
+            hello = await websocket.recv()
             await websocket.send(json.dumps({
                 "type": "command",
                 "command": command,

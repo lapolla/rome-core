@@ -7,17 +7,17 @@ from pathlib import Path
 from dictator.core import run_cmd, GIT_ROOT
 
 
-def register(mcp):
-    """Register Git tools with the given FastMCP instance."""
+def register(registry):
+    """Register Git tools with the given native ROME registry instance."""
 
-    @mcp.tool()
+    @registry.tool()
     async def git_status(repo_path: str = "") -> str:
         """Show git status (branch + short) for a repo."""
         cwd = Path(repo_path) if repo_path else GIT_ROOT
         r = await run_cmd("git status --short --branch", cwd=cwd)
         return r.get("stdout", "") if r.get("ok") else f"ERR: {r.get('stderr', '')}"
 
-    @mcp.tool()
+    @registry.tool()
     async def git_diff(path: str = "", repo_path: str = "") -> str:
         """Show git diff (optionally for a specific path) in a repo."""
         cwd = Path(repo_path) if repo_path else GIT_ROOT
@@ -25,7 +25,7 @@ def register(mcp):
         r = await run_cmd(cmd, cwd=cwd)
         return r.get("stdout", "") if r.get("ok") else f"ERR: {r.get('stderr', '')}"
 
-    @mcp.tool()
+    @registry.tool()
     async def git_commit(message: str, files: list[str] | None = None, repo_path: str = "") -> str:
         """Commit staged or specific files with a commit message in a repo."""
         cwd = Path(repo_path) if repo_path else GIT_ROOT
@@ -41,7 +41,7 @@ def register(mcp):
         r = await run_cmd(commit_cmd, cwd=cwd)
         return r.get("stdout", "OK") if r.get("ok") else f"ERR: {r.get('stderr', '')}"
 
-    @mcp.tool()
+    @registry.tool()
     async def git_push(branch: str = "master", repo_path: str = "") -> str:
         """Push current branch to origin for a repo."""
         cwd = Path(repo_path) if repo_path else GIT_ROOT

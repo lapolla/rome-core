@@ -4,10 +4,10 @@ from pathlib import Path
 from datetime import datetime
 from dictator.core import ROME_ROOT
 
-def register(mcp):
-    """Register Docs tools with the given FastMCP instance."""
+def register(registry):
+    """Register Docs tools with the given native ROME registry instance."""
 
-    @mcp.tool()
+    @registry.tool()
     def update_project_docs(project_path: str, features: list[dict], verification: list[str]) -> str:
         """
         Updates project documentation (CHANGELOG.md and STATUS.md).

@@ -12,10 +12,10 @@ from dictator.core import (
 )
 
 
-def register(mcp):
-    """Register Drupal tools with the given FastMCP instance."""
+def register(registry):
+    """Register Drupal tools with the given native ROME registry instance."""
 
-    @mcp.tool()
+    @registry.tool()
     async def rsync_ftk_modules(include_themes: bool = False) -> str:
         """Rsync custom Drupal modules (and optionally themes) from dev to /var/www."""
         result: dict = {"ok": True, "modules": None, "themes": None}
@@ -33,7 +33,7 @@ def register(mcp):
             result["ok"] = False
         return json.dumps(result, indent=2)
 
-    @mcp.tool()
+    @registry.tool()
     async def drush_run(args: str) -> str:
         """Run a Drush command (e.g. 'status', 'cr', 'updb -y')."""
         cmd = f"composer exec drush {args}"
@@ -41,7 +41,7 @@ def register(mcp):
         r["command"] = cmd
         return json.dumps(r, indent=2)
 
-    @mcp.tool()
+    @registry.tool()
     async def drupal_fj_run(
         base_url: str = "",
         db_dsn: str = "",

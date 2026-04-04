@@ -13,5 +13,6 @@
   "max_output_bytes": 10485760,
   "daemon_host": "127.0.0.1",
   "daemon_port": 8741,
-  "ws_token": "ROME_V4_SECURE_TOKEN"
+  "ws_token": "ROME_V4_SECURE_TOKEN",
+  "dictator": "claude"
 }

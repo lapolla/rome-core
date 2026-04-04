@@ -132,7 +132,7 @@ The daemon accepts JSON frames of shape `{"type": "command", "command": "<name>"
 - **Zombie reaping**: System status loop (30s) auto-fails tasks stuck at 0% for >180s.
 - **Auth**: Token via `Authorization: Bearer <token>` header or `?token=` query param. Dashboard connections (same-origin) bypass auth.
 - **Heartbeat**: Every 15s per connection.
-- **Daemon managed by systemd**: `rome-dictator.service` (system unit). Restart via `sudo systemctl restart rome-dictator`. MCP server entry point: `dictator/cli.py` (stdio) — needs `/mcp` reconnect after code changes.
+- **Daemon managed by systemd**: `rome-daemon.service` (user unit). Restart via `systemctl --user restart rome-daemon`. Has `ExecStartPre=fuser -k 8741/tcp` guard. MCP server entry point: `dictator/cli.py` (stdio) — needs `/mcp` reconnect after code changes.
 
 ## Profiles (ROME_PROFILE)
 
@@ -141,7 +141,7 @@ Set `ROME_PROFILE` env var to load only needed tools per session:
 - **`drupal`** (21 tools) — core + git, drupal tools.
 - **`desktop`** — core + desktop tools.
 - **`orchestrate`** (26 tools) — core + gc, stats tools.
-- **`gemini`** (21 tools) — core + git, gc. Gemini-as-dictator mode with `consult_architect`.
+- **`gemini`** (ws + git + gc, ~8 tools) — WS-only, no fs/legion MCP tools. Gemini-as-dictator mode uses `ws_send` for all daemon communication.
 - **`full`** (55 tools) — all modules. Default when unset.
 
 Profiles defined in `dictator/profiles.py`. Per-profile tool excludes strip rarely-needed tools from loaded modules.

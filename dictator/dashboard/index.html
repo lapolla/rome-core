@@ -544,7 +544,7 @@
       <section class="panel">
         <div class="topbar">
           <div class="title-wrap">
-            <h1>ROME Dashboard</h1>
+            <h1 id="dashTitle">ROME Dashboard</h1>
             <div class="subtitle">Operational task view for the Dictator daemon. Snapshot loads via `status`, then cards update from the live event stream.</div>
             <div class="status-strip">
               <div class="chip" id="wsChip" data-state="connecting">
@@ -1222,6 +1222,10 @@
                 }
                 if (data.payload.session_waste_tokens !== undefined) {
                   state.wasteTokens = data.payload.session_waste_tokens;
+                }
+                if (data.payload.dictator) {
+                  document.getElementById("dashTitle").textContent = "ROME Dashboard — " + data.payload.dictator.toUpperCase();
+                  document.title = "ROME — " + data.payload.dictator;
                 }
 
                 renderStats(); // Ensure stats are updated after processing initial state
