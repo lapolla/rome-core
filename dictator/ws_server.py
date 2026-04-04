@@ -477,13 +477,13 @@ async def _execute_legion_native(
         task_registry.register(task_id, capability, parent_task_id=parent_task_id)
         await emit_dispatch_start(event_bus, task_id, capability)
 
-    async def on_progress(line):
+    def on_progress(line):
         m = re.search(r"(\d+)%\s+.\s+\[([\d.]+)s\]\s+(.*)", line)
         if m:
             try:
                 p, msg = int(m.group(1)), m.group(3).strip()
                 task_registry.update_progress(task_id, p, msg)
-                await emit_progress(event_bus, task_id, p, msg)
+                asyncio.create_task(emit_progress(event_bus, task_id, p, msg))
             except Exception as e: logger.debug("Swallowed exception: %s", e)
 
     if capability == "AUTO":
