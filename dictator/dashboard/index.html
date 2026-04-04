@@ -1224,8 +1224,22 @@
                   state.wasteTokens = data.payload.session_waste_tokens;
                 }
                 if (data.payload.dictator) {
-                  document.getElementById("dashTitle").textContent = "ROME Dashboard — " + data.payload.dictator.toUpperCase();
-                  document.title = "ROME — " + data.payload.dictator;
+                  const dictatorName = data.payload.dictator.toUpperCase();
+                  const modelId = data.payload.dictator_model || "";
+                  let modelDisplay = "";
+                  if (modelId) {
+                    const m = modelId.replace(/^claude-/, "").replace(/-\d{8}$/, "");
+                    const parts = m.split("-");
+                    if (parts.length >= 3) {
+                      const name = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+                      const ver = parts.slice(1).join(".");
+                      modelDisplay = " (" + name + " " + ver + ")";
+                    } else if (parts.length > 0) {
+                      modelDisplay = " (" + m.charAt(0).toUpperCase() + m.slice(1) + ")";
+                    }
+                  }
+                  document.getElementById("dashTitle").textContent = "ROME Dashboard — " + dictatorName + modelDisplay;
+                  document.title = "ROME — " + dictatorName + modelDisplay;
                 }
 
                 renderStats(); // Ensure stats are updated after processing initial state

@@ -90,7 +90,7 @@ class _EventSender:
                         try:
                             await ws.send(json.dumps(msg))
                         except Exception:
-                            self._queue.put_nowait(msg)
+                            self._queue.queue.appendleft(msg)
                             raise
             except Exception:
                 sys.stderr.write(f"WS send error. Reconnecting in {delay:.1f}s...\n")

@@ -235,22 +235,24 @@ def register(registry):
         ui = OrchestratorUI(task_ids)
 
         # 1. Parallel Dispatch to the daemon
+        sem = asyncio.Semaphore(20)
         async def _dispatch_one(t):
-            tid = f"{campaign_id}_{t['id']}"
-            payload = {
-                "task_id": tid,
-                "capability": t['capability'],
-                "prompt": t['args'][0] if t['args'] else "",
-                "input_files": t.get('input_files', []),
-                "parent_task_id": campaign_id
-            }
-            resp = await send_command_async("dispatch", payload)
-            if resp.get("accepted"):
-                return tid
-            else:
-                ui.update(tid, f"ERR: Dispatch failed: {resp.get('error')}")
-                ui.redraw()
-                return None
+            async with sem:
+                tid = f"{campaign_id}_{t['id']}"
+                payload = {
+                    "task_id": tid,
+                    "capability": t['capability'],
+                    "prompt": t['args'][0] if t['args'] else "",
+                    "input_files": t.get('input_files', []),
+                    "parent_task_id": campaign_id
+                }
+                resp = await send_command_async("dispatch", payload)
+                if resp.get("accepted"):
+                    return tid
+                else:
+                    ui.update(tid, f"ERR: Dispatch failed: {resp.get('error')}")
+                    ui.redraw()
+                    return None
 
         dispatched_results = await asyncio.gather(*(_dispatch_one(t) for t in tasks))
         dispatched = [tid for tid in dispatched_results if tid]

@@ -99,6 +99,7 @@ The daemon accepts JSON frames of shape `{"type": "command", "command": "<name>"
 - **Token Discipline**: MAX_OUTPUT_CHARS=2000 truncation in `_execute_legion_impl`; full output in report file.
 - **Progress Trimming**: Progress arrays trimmed to first 3 + last 3 entries in MCP responses.
 - **Campaign Error Isolation**: `execute_campaign` uses `return_exceptions=True`.
+- **Campaign Concurrency Cap**: `execute_campaign` uses `asyncio.Semaphore(20)` — max 20 parallel dispatches per campaign.
 - **Usage Aggregation**: Claude/Gemini JSON usage extracted by `legion_wrapper`, written to manifest. Gemini pricing table covers models from 1.5 through 3.1.
 - **Fire-and-Forget**: `rome_dispatch(fire_and_forget=True)` → delegates to daemon via WS, returns `DISPATCHED:{task_id}` immediately. Auto-triggers for capabilities with timeout > 120s.
 - **Output Path Fallback**: `rome_dispatch(output_path=...)` copies report to output_path after completion.

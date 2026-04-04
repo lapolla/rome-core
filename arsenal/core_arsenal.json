@@ -39,12 +39,12 @@
     "OPENCODE": {
       "exec": "{ROME_ROOT}/legions/legion_wrapper.py",
       "args": [
-        "opencode",
+        "/home/paul-kane/.nvm/versions/node/v20.20.0/bin/opencode",
         "run"
       ],
       "timeout": 120,
       "min_version": "0.1",
-      "_note": "Opencode CLI (unreliable)"
+      "_note": "Opencode CLI — prompt passed as positional arg by legion_wrapper"
     },
     "CODEX": {
       "exec": "{ROME_ROOT}/legions/legion_wrapper.py",

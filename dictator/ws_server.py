@@ -98,7 +98,7 @@ def _is_busy(r: dict) -> bool:
         text = str(r.get("error", "") + r.get("message", "")).lower()
     return any(p in text for p in BUSY_PATTERNS)
 
-_SESSION_USAGE = {"worker_tokens": 0, "dictator_tokens": 0, "cost_usd": 0.0}
+_SESSION_USAGE = {"worker_tokens": 0, "dictator_tokens": 0, "cost_usd": 0.0, "dictator_model": ""}
 
 
 def _cache_key(capability: str, args: list, task_dir=None) -> str:
@@ -205,41 +205,45 @@ def _load_config_token() -> str:
         return ""
 
 
-async def _get_session_usage() -> dict[str, Any]:
-    """Scan rome.jsonl for all usage events since DAEMON_START_WALL."""
+async def _get_session_usage(dictator_model: str = "") -> dict[str, Any]:
+    """Scan rome.jsonl for all usage events (all-time, survives restarts).
+    If dictator_model is set, only counts dictator entries matching that model."""
     log_path = ROME_ROOT / "logs" / "rome.jsonl"
     if not log_path.exists():
         return {"worker_tokens": 0, "dictator_tokens": 0, "cost_usd": 0.0}
-    
+
     worker_tokens = 0
     dictator_tokens = 0
     cost_usd = 0.0
-    
+
     try:
         with open(log_path, "r", encoding="utf-8") as f:
             for line in f:
                 try:
                     entry = json.loads(line)
-                    if entry.get("ts", 0) < DAEMON_START_WALL:
-                        continue
-                    
                     usage = entry.get("usage", {})
                     if not usage: continue
-                    
+
                     tokens = int(usage.get("total_tokens", 0))
                     cost = float(usage.get("cost_usd", 0.0) or 0.0)
-                    
-                    if entry.get("tool") == "legion_wrapper":
+                    is_worker = entry.get("tool") == "legion_wrapper"
+
+                    if not is_worker and dictator_model:
+                        entry_model = usage.get("model", "")
+                        if entry_model and entry_model != dictator_model:
+                            continue
+
+                    if is_worker:
                         worker_tokens += tokens
                     else:
                         dictator_tokens += tokens
-                    
+
                     cost_usd += cost
                 except (json.JSONDecodeError, ValueError):
                     continue
     except Exception as e:
         logger.error("Error reading session usage from log: %s", e)
-        
+
     return {
         "worker_tokens": worker_tokens,
         "dictator_tokens": dictator_tokens,
@@ -939,12 +943,10 @@ async def handle_status(payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("summary"):
         tasks = task_registry.get_all()
         active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
-        usage = await _get_session_usage()
-        
-        # Merge in-memory stats (which include recent WebSocket-reported usage)
-        session_worker_tokens = usage["worker_tokens"] + _SESSION_USAGE["worker_tokens"]
-        session_dictator_tokens = usage["dictator_tokens"] + _SESSION_USAGE["dictator_tokens"]
-        session_cost_usd = round(usage["cost_usd"] + _SESSION_USAGE["cost_usd"], 6)
+        usage = await _get_session_usage(_SESSION_USAGE["dictator_model"])
+        session_worker_tokens = usage["worker_tokens"]
+        session_dictator_tokens = usage["dictator_tokens"]
+        session_cost_usd = usage["cost_usd"]
 
         return {"ok": True, "active_tasks": active, "total_tasks": len(tasks),
                 "uptime_s": round(time.monotonic() - DAEMON_START_TIME, 3),
@@ -1218,10 +1220,10 @@ async def handle_get_state(payload: dict[str, Any]) -> dict[str, Any]:
     active = sum(1 for t in tasks.values() if t.get("status") in {"registered", "running"})
     caps = await _load_capabilities()
     workers = await worker_registry.get_info()
-    usage = await _get_session_usage()
-    session_worker_tokens = usage["worker_tokens"] + _SESSION_USAGE["worker_tokens"]
-    session_dictator_tokens = usage["dictator_tokens"] + _SESSION_USAGE["dictator_tokens"]
-    session_cost_usd = round(usage["cost_usd"] + _SESSION_USAGE["cost_usd"], 6)
+    usage = await _get_session_usage(_SESSION_USAGE["dictator_model"])
+    session_worker_tokens = usage["worker_tokens"]
+    session_dictator_tokens = usage["dictator_tokens"]
+    session_cost_usd = usage["cost_usd"]
     # Read dictator identity from config
     dictator_name = "unknown"
     try:
@@ -1245,6 +1247,7 @@ async def handle_get_state(payload: dict[str, Any]) -> dict[str, Any]:
         "session_dictator_tokens": session_dictator_tokens,
         "session_cost_usd": session_cost_usd,
         "dictator": dictator_name,
+        "dictator_model": _SESSION_USAGE["dictator_model"],
     }
 
 
@@ -1298,14 +1301,19 @@ async def handle_report_usage(payload: dict[str, Any]) -> dict[str, Any]:
     msg = str(payload.get("message", ""))
     tool = str(payload.get("tool", "dictator"))
     
+    model_id = str(payload.get("model", ""))
     usage = {"total_tokens": tokens, "cost_usd": cost}
-    
+    if model_id and tool == "dictator":
+        usage["model"] = model_id
+
     # Update in-memory session stats
     if tool == "dictator":
         _SESSION_USAGE["dictator_tokens"] += tokens
     else:
         _SESSION_USAGE["worker_tokens"] += tokens
     _SESSION_USAGE["cost_usd"] += cost
+    if model_id and tool == "dictator":
+        _SESSION_USAGE["dictator_model"] = model_id
 
     # 1. Permanent Log
     log_event(tool=tool, status="usage", message=msg, usage=usage)
