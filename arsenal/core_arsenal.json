@@ -80,6 +80,22 @@
       "args": [],
       "timeout": 600,
       "_note": "Daemon-native shell execution (v4 WS DSA)"
+    },
+    "MISTRAL": {
+      "exec": "{ROME_ROOT}/legions/legion_wrapper.py",
+      "args": [
+        "python3",
+        "-m",
+        "vibe.cli.entrypoint",
+        "--agent",
+        "auto-approve",
+        "--output",
+        "streaming",
+        "-p"
+      ],
+      "timeout": 300,
+      "min_version": "2.0",
+      "_note": "Mistral Vibe CLI — -p must be last, requires PYTHONPATH=/home/paul-kane/projects/mistral-cli"
     }
   },
   "protocol_version": "1.0"
