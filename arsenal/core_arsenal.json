@@ -13,8 +13,6 @@
         "json",
         "-m",
         "gemini-3.1-pro-preview",
-        "--allowed-mcp-server-names",
-        "rome-results",
         "-p"
       ],
       "timeout": 300,

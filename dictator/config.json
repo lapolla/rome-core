@@ -1,5 +1,5 @@
 {
-  "root_dir": "/var/www/ftk_lms",
+  "root_dir": "/home/paul-kane/projects/rome-core",
   "git_root": "~/projects/Drupal11",
   "rome_root": "~/projects/rome-core",
   "gemini_cli": "~/projects/gemini-cli/bundle/gemini.js",
@@ -14,5 +14,5 @@
   "daemon_host": "127.0.0.1",
   "daemon_port": 8741,
   "ws_token": "ROME_V4_SECURE_TOKEN",
-  "dictator": "claude"
+  "dictator": "Dictator"
 }

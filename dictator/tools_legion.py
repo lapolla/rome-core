@@ -781,10 +781,15 @@ async def _execute_legion_impl(
         if manifest_path.exists():
             manifest = json.loads(manifest_path.read_text())
             usage = manifest.get("usage")
-            progress = manifest.get("progress", [])
-            # Trim progress to reduce response bloat
-            if len(progress) > 6:
-                progress = progress[:3] + [f'... [{len(progress) - 6} lines trimmed] ...'] + progress[-3:]
+            raw_progress = manifest.get("progress", [])
+            # New format: dict with summary (count/final/log_path). Old format: full list.
+            if isinstance(raw_progress, dict):
+                final = raw_progress.get("final")
+                progress = [final] if final else []
+            else:
+                progress = raw_progress
+                if len(progress) > 6:
+                    progress = progress[:3] + [f'... [{len(progress) - 6} lines trimmed] ...'] + progress[-3:]
     except Exception:
         pass
 

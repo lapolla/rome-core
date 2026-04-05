@@ -28,7 +28,7 @@ MAX_ARTIFACT_SIZE = 5 * 1024 * 1024  # 5 MB cap
 # --- UI & PROGRESS ---
 
 class LegionaryUI:
-    def __init__(self, task_id, global_start, ws_sender=None):
+    def __init__(self, task_id, global_start, ws_sender=None, task_dir=None):
         self.task_id = task_id
         self.bar_width = 30
         self.global_start = global_start
@@ -37,9 +37,10 @@ class LegionaryUI:
         self.hb_idx = 0
         self.progress_lines = []
         self.ws_sender = ws_sender
-        
+
         # Write progress to file in task_dir for real-time tailing
-        task_dir = os.environ.get("ROME_TASK_DIR", ".")
+        if task_dir is None:
+            task_dir = os.environ.get("ROME_TASK_DIR", ".")
         self._progress_path = os.path.join(task_dir, "progress.log")
         try:
             self._progress_f = open(self._progress_path, "w")
@@ -255,7 +256,7 @@ async def execute_task(task_id, capability_name, cmd_args, ui_sender=None):
             with open(task_md_path, "r") as f: initial_task_content = f.read()
         except: pass
 
-    ui = LegionaryUI(task_id, t0, ws_sender=ui_sender)
+    ui = LegionaryUI(task_id, t0, ws_sender=ui_sender, task_dir=task_dir)
     ui.log(0, "Engaged (4.0.0).")
     
     process = await asyncio.create_subprocess_exec(
@@ -312,9 +313,16 @@ async def execute_task(task_id, capability_name, cmd_args, ui_sender=None):
         status = "FAILED"
         signals["metadata"]["failure_reason"] = "empty_report"
 
+    progress_log_path = os.path.join(task_dir, "progress.log")
     manifest = {
         "rome_v": "4.0", "task_id": task_id, "status": status, "metadata": signals["metadata"],
-        "usage": usage, "progress": ui.progress_lines, "runtime": {"elapsed_s": time.time() - t0, "exit_code": exit_code},
+        "usage": usage,
+        "progress": {
+            "count": len(ui.progress_lines),
+            "final": ui.progress_lines[-1] if ui.progress_lines else None,
+            "log_path": progress_log_path,
+        },
+        "runtime": {"elapsed_s": time.time() - t0, "exit_code": exit_code},
         "artifacts": [{"path": artifact_path, "type": "extracted" if signals["primary_artifact"] else "raw"}]
     }
     with open(os.path.join(task_dir, "manifest.json"), "w") as f: json.dump(manifest, f, indent=2)
@@ -324,12 +332,79 @@ async def execute_task(task_id, capability_name, cmd_args, ui_sender=None):
 
 # --- WORKER LOOP ---
 
+async def _start_peer_server(capabilities, capability_cmd_base):
+    """Start a local A2A peer WS server on a random port. Returns (server, port)."""
+    import websockets
+    import socket
+
+    async def peer_handler(websocket):
+        try:
+            async for raw in websocket:
+                try:
+                    msg = json.loads(raw)
+                    if msg.get("type") != "command":
+                        continue
+                    command = msg.get("command", "")
+                    payload = msg.get("payload", {})
+                    request_id = msg.get("request_id", "")
+                    if command == "dispatch":
+                        task_id = payload.get("task_id", "")
+                        prompt = payload.get("prompt", "")
+                        cap = payload.get("capability", capabilities[0] if capabilities else "")
+                        await websocket.send(json.dumps({
+                            "type": "response", "request_id": request_id,
+                            "ok": True, "payload": {"task_id": task_id, "accepted": True}
+                        }))
+                        cmd = list(capability_cmd_base)
+                        if prompt:
+                            cmd.append(prompt)
+                        async def run_and_report():
+                            async def noop_sender(ev): pass
+                            manifest = await execute_task(task_id, cap, cmd, ui_sender=noop_sender)
+                            report_content = ""
+                            try:
+                                with open(manifest["artifacts"][0]["path"]) as fp:
+                                    report_content = fp.read()
+                            except Exception:
+                                pass
+                            await websocket.send(json.dumps({
+                                "type": "event",
+                                "event": {
+                                    "type": "complete", "task_id": task_id,
+                                    "payload": {
+                                        "status": manifest["status"],
+                                        "usage": manifest["usage"],
+                                        "report": report_content
+                                    }
+                                }
+                            }))
+                        asyncio.create_task(run_and_report())
+                    elif command == "ping":
+                        await websocket.send(json.dumps({"type": "response", "request_id": request_id, "ok": True}))
+                except Exception as e:
+                    print(f"ROME A2A: peer handler error: {e}")
+        except Exception:
+            pass
+
+    # Bind on random available port
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    server = await websockets.serve(peer_handler, "127.0.0.1", port)
+    print(f"ROME A2A: Peer server listening on ws://127.0.0.1:{port}")
+    return server, port
+
+
 async def run_worker(ws_url, capabilities, capability_cmd_base, token=None):
     """Persistent worker loop."""
     import websockets
     print(f"ROME V4: Connecting as persistent worker to {ws_url}")
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    
+
+    # Start A2A peer server
+    peer_server, peer_port = await _start_peer_server(capabilities, capability_cmd_base)
+    peer_url = f"ws://127.0.0.1:{peer_port}"
+
     backoff = 1.0
     while True:
         try:
@@ -340,7 +415,8 @@ async def run_worker(ws_url, capabilities, capability_cmd_base, token=None):
                     "type": "agent_hello",
                     "capabilities": capabilities,
                     "version": "4.0.0",
-                    "platform": platform.platform()
+                    "platform": platform.platform(),
+                    "peer_url": peer_url
                 }))
                 
                 while True:
@@ -416,7 +492,9 @@ async def main_async():
             print("Worker mode requires --capabilities")
             sys.exit(1)
         token = args.ws_token or os.environ.get("ROME_WEBSOCKET_TOKEN")
-        await run_worker(args.ws_url, args.capabilities, unknown, token=token)
+        # Strip argparse separator "--" from unknown args before using as cmd base
+        capability_cmd = [a for a in unknown if a != "--"]
+        await run_worker(args.ws_url, args.capabilities, capability_cmd, token=token)
     else:
         # Legacy once-off mode
         # Usage: legion_wrapper.py <task_id> <start_time> <cmd...>

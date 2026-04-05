@@ -526,6 +526,76 @@
       .status-cancelled { color: var(--failed); }
       .status-expired { color: var(--registered); opacity: 0.5; }
 
+      .peers-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 14px 18px 18px;
+      }
+
+      .peer-card {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: rgba(4, 10, 17, 0.78);
+        font-size: 12px;
+        min-width: 200px;
+        flex: 1 1 200px;
+        max-width: 320px;
+        transition: border-color 0.2s;
+      }
+
+      .peer-card.a2a {
+        border-color: var(--accent);
+        box-shadow: 0 0 12px rgba(77, 193, 255, 0.15);
+      }
+
+      .peer-card.busy {
+        border-color: var(--running);
+      }
+
+      .peer-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .peer-cap {
+        font-weight: 600;
+        font-size: 13px;
+        color: var(--text);
+        letter-spacing: 0.05em;
+      }
+
+      .peer-badge {
+        font-size: 10px;
+        padding: 2px 7px;
+        border-radius: 6px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .peer-badge.a2a { background: rgba(77,193,255,0.18); color: var(--accent); }
+      .peer-badge.busy { background: rgba(61,164,255,0.18); color: var(--running); }
+      .peer-badge.idle { background: rgba(61,220,151,0.12); color: var(--success); }
+
+      .peer-meta {
+        color: var(--muted);
+        font-size: 11px;
+        word-break: break-all;
+      }
+
+      .peers-empty {
+        color: var(--muted);
+        font-size: 13px;
+        padding: 14px 18px 18px;
+      }
+
       @media (max-width: 980px) {
         .topbar,
         .stats-grid {
@@ -559,10 +629,6 @@
                 <span>HOST</span>
                 <span id="hostLabel">--</span>
               </div>
-              <div class="chip" id="capabilitiesStrip">
-                <span class="dot" style="background: var(--muted);"></span>
-                <span style="color: var(--muted);">CAPABILITIES</span>
-              </div>
             </div>
           </div>
         </div>
@@ -586,6 +652,11 @@
             <div style="font-size:0.7rem;color:var(--text-dim);margin-top:2px"><span id="workerTokensLabel">0</span> workers / <span id="dictatorTokensLabel">0</span> dictator</div>
           </div>
         </div>
+      </section>
+
+      <section class="panel" id="peersPanel">
+        <h2 class="section-title" style="padding: 14px 18px 0; margin: 0;">A2A Peers</h2>
+        <div id="peersGrid" class="peers-grid"></div>
       </section>
 
       <section class="panel cards-panel">
@@ -660,8 +731,9 @@
           capabilities: {},
           daemonCapabilities: [],
           expandedTasks: {},
-          tokenCostRate: 0.000015, // Example: $0.015 per 1K tokens for both input and output
-          completedTasksHistory: [] // To track completed tasks for throughput
+          tokenCostRate: 0.000015, // fallback only — real cost comes from session_cost_usd
+          completedTasksHistory: [], // To track completed tasks for throughput
+          workers: []
         };
 
         hostLabel.textContent = window.location.host || "localhost";
@@ -951,12 +1023,17 @@
               addLog(type, taskId, "capability=" + (payload.capability || "UNKNOWN"), ts);
             }
           } else if (type === "progress") {
-            upsertTask(taskId, {
-              status: "running",
-              progress_percent: payload.percent,
-              progress_message: payload.message || "",
-              updated_at: ts
-            });
+            const existing = state.tasks.get(taskId);
+            const existingStatus = existing ? canonicalStatus(existing.status) : "";
+            const isTerminal = ["SUCCESS", "completed", "FAILED", "cancelled", "expired"].includes(existingStatus);
+            if (!isTerminal) {
+              upsertTask(taskId, {
+                status: "running",
+                progress_percent: payload.percent,
+                progress_message: payload.message || "",
+                updated_at: ts
+              });
+            }
           } else if (type === "cost_update") {
             upsertTask(taskId, {
               usage: payload.usage || {},
@@ -1024,6 +1101,16 @@
               retryHtml = '<button type="button" class="retry-btn" style="margin-left: 8px; font-size: 11px; padding: 4px 8px;">Retry</button>';
             }
 
+            var dispatchBadge = "";
+            var dm = task.dispatch_mode || "";
+            if (dm === "a2a") {
+              dispatchBadge = '<span class="peer-badge a2a" style="font-size:10px;padding:2px 6px;border-radius:5px;margin-left:4px;">A2A</span>';
+            } else if (dm === "native") {
+              dispatchBadge = '<span class="peer-badge" style="font-size:10px;padding:2px 6px;border-radius:5px;margin-left:4px;background:rgba(61,220,151,0.12);color:var(--success);">NATIVE</span>';
+            } else if (dm === "persistent_worker") {
+              dispatchBadge = '<span class="peer-badge" style="font-size:10px;padding:2px 6px;border-radius:5px;margin-left:4px;background:rgba(255,179,71,0.12);color:var(--warn);">WORKER</span>';
+            }
+
             let detailsHtml = "";
             if (isExpanded) {
                 detailsHtml = `
@@ -1045,7 +1132,7 @@
                 '<div class="card-top">' +
                   '<div>' +
                     '<div class="task-id">' + escapeHtml(task.task_id) + '</div>' +
-                    '<div class="capability">' + escapeHtml(task.capability || "UNKNOWN") + '</div>' +
+                    '<div class="capability" style="display:flex;align-items:center;gap:4px;">' + escapeHtml(task.capability || "UNKNOWN") + dispatchBadge + '</div>' +
                   '</div>' +
                   '<div style="display:flex; align-items:center;">' +
                     '<div class="badge ' + statusClass(status) + '">' + escapeHtml(status) + '</div>' +
@@ -1119,6 +1206,42 @@
                    '<span style="font-size: 11px; color: var(--muted);">' + escapeHtml(cap) + '</span>' +
                    '</div>';
           }).join('');
+          }
+
+          function renderWorkers() {
+            const peersGrid = document.getElementById("peersGrid");
+            if (!peersGrid) return;
+            const workers = state.workers || [];
+            if (!workers.length) {
+              peersGrid.innerHTML = '<div class="peers-empty">No workers connected.</div>';
+              return;
+            }
+            peersGrid.innerHTML = workers.map(function(w) {
+              const caps = (w.capabilities || []).join(", ");
+              const isA2A = !!w.peer_url;
+              const isBusy = (w.busy_tasks || []).length > 0;
+              const connectedAgo = formatDuration((Date.now() / 1000) - Number(w.connected_at || 0));
+              const busyIds = w.busy_tasks || [];
+              const busyLabel = isBusy ? busyIds.map(function(id) {
+                return '<span style="color:var(--accent);cursor:pointer;" onclick="toggleTask(\'' + escapeHtml(id) + '\')">' + escapeHtml(id) + '</span>';
+              }).join(", ") : "idle";
+              const cardClass = "peer-card" + (isA2A ? " a2a" : "") + (isBusy ? " busy" : "");
+              const badgeClass = isBusy ? "busy" : "idle";
+              const badgeText = isBusy ? "BUSY" : "IDLE";
+              return (
+                '<div class="' + cardClass + '">' +
+                  '<div class="peer-top">' +
+                    '<span class="peer-cap">' + escapeHtml(caps || "UNKNOWN") + '</span>' +
+                    '<div style="display:flex;gap:4px;">' +
+                      (isA2A ? '<span class="peer-badge a2a">A2A</span>' : '') +
+                      '<span class="peer-badge ' + badgeClass + '">' + badgeText + '</span>' +
+                    '</div>' +
+                  '</div>' +
+                  (isA2A ? '<div class="peer-meta">' + escapeHtml(w.peer_url) + '</div>' : '') +
+                  '<div class="peer-meta">up ' + escapeHtml(connectedAgo) + (isBusy ? ' · ' + busyLabel : '') + '</div>' +
+                '</div>'
+              );
+            }).join("");
           }
 
           function setWsState(kind, detail) {
@@ -1206,6 +1329,7 @@
                 }
                 if (data.payload.workers !== undefined) {
                   state.workers = data.payload.workers || [];
+                  renderWorkers();
                 }
                 if (data.payload.tasks !== undefined) {
                   handleSnapshot(data.payload.tasks);
@@ -1324,11 +1448,12 @@
 
         renderLogs();
         renderTasks();
-        renderCapabilities(); // Initial render for capabilities
+        renderWorkers();
+        renderCapabilities();
         refreshDaemonStatus();
         connectSocket();
         state.statusTimer = window.setInterval(refreshDaemonStatus, 5000);
-        state.clockTimer = window.setInterval(renderTasks, 1000);
+        state.clockTimer = window.setInterval(function() { renderTasks(); renderWorkers(); }, 1000);
       }());
     </script>
   </body>

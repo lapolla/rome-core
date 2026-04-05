@@ -97,13 +97,13 @@ The daemon accepts JSON frames of shape `{"type": "command", "command": "<name>"
 - **Result Caching**: 1-hour TTL in `legions/.cache`. `rome_dispatch(no_cache=True)` bypasses.
 - **Prompt Patches**: Capability-specific rules injected from `dictator/legion_patches.json`.
 - **Token Discipline**: MAX_OUTPUT_CHARS=2000 truncation in `_execute_legion_impl`; full output in report file.
-- **Progress Trimming**: Progress arrays trimmed to first 3 + last 3 entries in MCP responses.
+- **Progress Trimming**: `manifest.json` progress field is a compact dict `{count, final, log_path}` — full log in `progress.log` in task dir. MCP responses get only the final entry.
 - **Campaign Error Isolation**: `execute_campaign` uses `return_exceptions=True`.
 - **Campaign Concurrency Cap**: `execute_campaign` uses `asyncio.Semaphore(20)` — max 20 parallel dispatches per campaign.
 - **Usage Aggregation**: Claude/Gemini JSON usage extracted by `legion_wrapper`, written to manifest. Gemini pricing table covers models from 1.5 through 3.1.
 - **Fire-and-Forget**: `rome_dispatch(fire_and_forget=True)` → delegates to daemon via WS, returns `DISPATCHED:{task_id}` immediately. Auto-triggers for capabilities with timeout > 120s.
 - **Output Path Fallback**: `rome_dispatch(output_path=...)` copies report to output_path after completion.
-- **SAFE_SHELL Routing**: Bypasses legion_wrapper entirely; spawns `shell_executor.py` as detached subprocess. Completion lifecycle owned by shell_executor (sends WS `complete` event).
+- **SAFE_SHELL Routing**: Routes via persistent legion_wrapper worker (spawns `shell_executor.py` per task). `handle_event` complete path reads report file and passes inline — output is no longer silently dropped.
 - **Auto GC**: `auto_gc()` available on startup — runs `gc_legions` (keep newest 50 + <24h).
 - **Centurion Hierarchy**: CENTURION capability dispatches CODEX/OPENCODE as sub-legionnaires.
 - **Auto-Retry**: Empty report on success triggers one retry with `no_cache=True`.

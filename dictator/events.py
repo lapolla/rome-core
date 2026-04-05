@@ -242,12 +242,16 @@ class TaskRegistry:
             self._tasks[task_id] = task
             return self._snapshot(task)
 
+    _TERMINAL_STATUSES = {"completed", "SUCCESS", "FAILED", "failed", "cancelled", "error"}
+
     def update_progress(self, task_id: str, percent: float, message: str) -> dict[str, Any] | None:
         with self._lock:
             self._cleanup_locked()
             task = self._tasks.get(task_id)
             if task is None:
                 return None
+            if task.get("status") in self._TERMINAL_STATUSES:
+                return None  # signal caller: progress dropped, task already terminal
             task["progress_percent"] = percent
             task["progress_message"] = message
             task["status"] = "running"
@@ -283,8 +287,7 @@ class TaskRegistry:
             task["progress_percent"] = 100.0
             task["report_path"] = report_path
             task["updated_at"] = time.time()
-            if status == "completed":
-                task["completed_at"] = time.time()
+            task["completed_at"] = time.time()
             return self._snapshot(task)
 
     def get(self, task_id: str) -> dict[str, Any] | None:

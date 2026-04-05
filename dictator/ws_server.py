@@ -228,6 +228,11 @@ async def _get_session_usage(dictator_model: str = "") -> dict[str, Any]:
                     cost = float(usage.get("cost_usd", 0.0) or 0.0)
                     is_worker = entry.get("tool") == "legion_wrapper"
 
+                    # Always filter by session start time
+                    if entry.get("ts", 0) < DAEMON_START_WALL:
+                        continue
+
+                    # For non-worker (dictator) entries, optionally filter by model
                     if not is_worker and dictator_model:
                         entry_model = usage.get("model", "")
                         if entry_model and entry_model != dictator_model:
@@ -335,15 +340,16 @@ _ACTIVE_TASKS_LOCK = asyncio.Lock()
 # ---------------------------------------------------------------------------
 
 class _WorkerEntry:
-    __slots__ = ("ws", "capabilities", "busy_tasks", "connected_at", "version", "platform")
+    __slots__ = ("ws", "capabilities", "busy_tasks", "connected_at", "version", "platform", "peer_url")
 
-    def __init__(self, ws: WebSocket, capabilities: list[str], version: str = "", platform: str = "") -> None:
+    def __init__(self, ws: WebSocket, capabilities: list[str], version: str = "", platform: str = "", peer_url: str = "") -> None:
         self.ws = ws
         self.capabilities = [c.upper() for c in capabilities]
         self.busy_tasks: set[str] = set()
         self.connected_at = time.time()
         self.version = version
         self.platform = platform
+        self.peer_url = peer_url
 
 
 class WorkerRegistry:
@@ -353,9 +359,9 @@ class WorkerRegistry:
         self._workers: dict[int, _WorkerEntry] = {}  # keyed by id(ws)
         self._lock = asyncio.Lock()
 
-    async def register(self, ws: WebSocket, capabilities: list[str], version: str = "", platform: str = "") -> None:
+    async def register(self, ws: WebSocket, capabilities: list[str], version: str = "", platform: str = "", peer_url: str = "") -> None:
         async with self._lock:
-            self._workers[id(ws)] = _WorkerEntry(ws, capabilities, version, platform)
+            self._workers[id(ws)] = _WorkerEntry(ws, capabilities, version, platform, peer_url)
 
     async def unregister(self, ws: WebSocket) -> list[str]:
         """Remove worker. Returns list of task_ids that were still busy (need cleanup)."""
@@ -370,6 +376,15 @@ class WorkerRegistry:
             for entry in self._workers.values():
                 if cap in entry.capabilities and len(entry.busy_tasks) == 0:
                     return entry.ws
+        return None
+
+    async def find_worker_peer_url(self, capability: str) -> str | None:
+        """Return peer_url of an idle worker for direct A2A dispatch."""
+        cap = capability.upper()
+        async with self._lock:
+            for entry in self._workers.values():
+                if cap in entry.capabilities and len(entry.busy_tasks) == 0 and entry.peer_url:
+                    return entry.peer_url
         return None
 
     async def mark_busy(self, ws: WebSocket, task_id: str) -> None:
@@ -394,9 +409,16 @@ class WorkerRegistry:
                     "connected_at": e.connected_at,
                     "version": e.version,
                     "platform": e.platform,
+                    "peer_url": e.peer_url,
                 }
                 for e in self._workers.values()
             ]
+
+    async def get_peer_url(self, ws: WebSocket) -> str:
+        """Return peer_url for a given worker ws, or empty string."""
+        async with self._lock:
+            entry = self._workers.get(id(ws))
+            return entry.peer_url if entry else ""
 
     async def get_ws_by_id(self, worker_id: str) -> WebSocket | None:
         async with self._lock:
@@ -675,6 +697,7 @@ async def _dispatch_runner(
     if IS_DAEMON:
         task_registry.register(task_id, capability)
         await emit_dispatch_start(event_bus, task_id, capability)
+        task_registry.update_task(task_id, {"dispatch_mode": "subprocess"})
         # Immediately mark as running so dashboard doesn't sit at REGISTERED
         task_registry.update_progress(task_id, 0, "Starting...")
     try:
@@ -778,6 +801,7 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         if IS_DAEMON:
             task_registry.register(task_id, capability)
             await emit_dispatch_start(event_bus, task_id, capability)
+            task_registry.update_task(task_id, {"dispatch_mode": "native"})
 
         async def _run_native_background():
             try:
@@ -813,9 +837,12 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     if worker_ws is not None:
         # Register task in daemon's registry so await/status/dashboard work
         import os
+        peer_url = await worker_registry.get_peer_url(worker_ws)
         if IS_DAEMON:
             task_registry.register(task_id, capability)
             await emit_dispatch_start(event_bus, task_id, capability)
+            dispatch_mode = "a2a" if peer_url else "persistent_worker"
+            task_registry.update_task(task_id, {"dispatch_mode": dispatch_mode, "peer_url": peer_url})
             task_registry.update_progress(task_id, 0, "Routing to persistent worker...")
 
         await worker_registry.mark_busy(worker_ws, task_id)
@@ -882,15 +909,16 @@ async def handle_submit_result(payload: dict[str, Any]) -> dict[str, Any]:
 async def handle_native_shell(payload: dict[str, Any]) -> dict[str, Any]:
     """Execute a shell command natively via daemon's core.run_cmd."""
     command = payload.get("command")
+    cwd = payload.get("cwd")
     if not command:
         raise ValueError("command is required")
 
     from dictator.core import run_cmd
-    logger.info("NATIVE_SHELL: %s", command)
+    logger.info("NATIVE_SHELL: %s (cwd=%s)", command, cwd)
 
     # Execute natively in the daemon's environment
     t0 = time.monotonic()
-    result = await run_cmd(command)
+    result = await run_cmd(command, cwd=cwd or "/var/www/ftk_lms")
     elapsed = round(time.monotonic() - t0, 3)
 
     return {
@@ -1267,8 +1295,10 @@ async def handle_event(payload: dict[str, Any]) -> dict[str, Any]:
             total_tokens = usage.get("total_tokens")
             if total_tokens is not None:
                 task_registry.add_waste(total_tokens)
-        task_registry.complete(tid, p.get("status", "SUCCESS"), p.get("report_path"))
-        await emit_complete(event_bus, tid, p.get("status"), p.get("report_path"), usage)
+        report_path = p.get("report_path")
+        task_registry.complete(tid, p.get("status", "SUCCESS"), report_path)
+        report_content = _read_report_content(report_path) if report_path else None
+        await emit_complete(event_bus, tid, p.get("status"), report_path, usage, report=report_content)
     elif t == "progress":
         task_registry.update_progress(tid, p.get("percent", 0), p.get("message", ""))
         await emit_progress(event_bus, tid, p.get("percent", 0), p.get("message", ""))
@@ -1347,7 +1377,7 @@ async def handle_dashboard_stats(_: dict[str, Any]) -> dict[str, Any]:
 
     for task in tasks.values():
         usage = task.get("usage", {})
-        total_cost_usd += float(usage.get("total_cost_usd", 0.0))
+        total_cost_usd += float(usage.get("cost_usd", 0.0) or 0.0)
 
         status = task.get("status")
         if status == "completed":
@@ -1435,9 +1465,11 @@ async def _handle_worker_event(ws: WebSocket, event_data: dict[str, Any]) -> Non
         # Worker accepted — task already registered by handle_dispatch
         pass
     elif ev_type == "progress":
-        task_registry.update_progress(task_id, payload.get("percent", 0), payload.get("message", ""))
-        from dictator.events import emit_progress
-        await emit_progress(event_bus, task_id, payload.get("percent", 0), payload.get("message", ""))
+        updated = task_registry.update_progress(task_id, payload.get("percent", 0), payload.get("message", ""))
+        # Only relay to EventBus if task is still active (update_progress returns None if terminal)
+        if updated is not None:
+            from dictator.events import emit_progress
+            await emit_progress(event_bus, task_id, payload.get("percent", 0), payload.get("message", ""))
     elif ev_type == "complete":
         status_raw = str(payload.get("status", "completed")).upper()
         status = "completed" if status_raw in ("SUCCESS", "OK", "COMPLETED") else "failed"
@@ -1515,7 +1547,8 @@ async def rome_ws_endpoint(websocket: WSAdapter) -> None:
                 worker_caps = message.get("capabilities", [])
                 worker_version = message.get("version", "")
                 worker_platform = message.get("platform", "")
-                await worker_registry.register(websocket, worker_caps, worker_version, worker_platform)
+                worker_peer_url = message.get("peer_url", "")
+                await worker_registry.register(websocket, worker_caps, worker_version, worker_platform, worker_peer_url)
                 is_worker = True
                 logger.info(
                     "Persistent worker registered: caps=%s version=%s platform=%s",

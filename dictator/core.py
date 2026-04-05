@@ -22,12 +22,13 @@ if _CFG_PATH.exists():
         pass
 
 # ── Paths (all from config.json, with ~ expansion) ────────────────────
+ROME_ROOT = Path(__file__).resolve().parent.parent
+
 def _p(key: str, fallback: str) -> Path:
     return Path(_cfg.get(key, fallback)).expanduser()
 
-ROOT_DIR = _p("root_dir", "/var/www/ftk_lms")
+ROOT_DIR = _p("root_dir", str(ROME_ROOT))
 GIT_ROOT = _p("git_root", "~/projects/Drupal11")
-ROME_ROOT = Path(__file__).resolve().parent.parent
 IS_DAEMON = False
 ARSENAL_PATH = ROME_ROOT / "arsenal" / "core_arsenal.json"
 
