@@ -25,6 +25,15 @@ except Exception:
 
 MAX_ARTIFACT_SIZE = 5 * 1024 * 1024  # 5 MB cap
 
+# AAAK — Adaptive Agent Attention Kernel (safety net for oversized prompts)
+try:
+    from aaak import get_aaak, AAAK_ENABLED
+    from aaak.distill import needs_distill
+except ImportError:
+    AAAK_ENABLED = False
+    def get_aaak(prefix="default"): return None
+    def needs_distill(prompt, threshold=800): return False
+
 # --- UI & PROGRESS ---
 
 class LegionaryUI:
@@ -242,10 +251,12 @@ def is_empty_content(content):
 
 # --- TASK EXECUTION CORE ---
 
+_ROME_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 async def execute_task(task_id, capability_name, cmd_args, ui_sender=None):
     """Asynchronous core of task execution."""
     t0 = time.time()
-    task_dir = os.path.join(os.getcwd(), "legions", task_id)
+    task_dir = os.path.join(_ROME_ROOT, "legions", task_id)
     os.makedirs(task_dir, exist_ok=True)
     
     # Capture task.md for recovery
@@ -256,16 +267,30 @@ async def execute_task(task_id, capability_name, cmd_args, ui_sender=None):
             with open(task_md_path, "r") as f: initial_task_content = f.read()
         except: pass
 
+    # AAAK Hook 2: Safety net — distill oversized prompts before sending to model
+    if AAAK_ENABLED and initial_task_content and needs_distill(initial_task_content):
+        try:
+            _aaak = get_aaak(prefix=task_id)
+            if _aaak:
+                distilled = _aaak.guard_prompt(initial_task_content)
+                if distilled != initial_task_content:
+                    with open(task_md_path, "w") as f:
+                        f.write(distilled)
+                    _log_event(tool="aaak", task_id=task_id, message=f"Guard distilled: {len(initial_task_content)}→{len(distilled)} chars")
+        except Exception:
+            pass
+
     ui = LegionaryUI(task_id, t0, ws_sender=ui_sender, task_dir=task_dir)
     ui.log(0, "Engaged (4.0.0).")
     
     process = await asyncio.create_subprocess_exec(
-        *cmd_args,
+        *[a for a in cmd_args if not a.startswith("env:")],
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         start_new_session=True,
         cwd=task_dir,
         env={
+            **{a[4:].split("=")[0]: a[4:].split("=")[1] for a in cmd_args if a.startswith("env:")},
             **os.environ,
             "PYTHONUNBUFFERED": "1",
             "ROME_TASK_ID": task_id,

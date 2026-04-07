@@ -7,6 +7,14 @@ import sys
 import re
 from dashboard import Dashboard
 
+# AAAK — Adaptive Agent Attention Kernel
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from aaak import AAAK, AAAK_ENABLED
+except ImportError:
+    AAAK_ENABLED = False
+    AAAK = None
+
 # Constants
 ROME_ROOT = os.environ.get("ROME_ROOT", str(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 ARSENAL_PATH = os.path.join(ROME_ROOT, "arsenal", "core_arsenal.json")
@@ -140,7 +148,17 @@ TASK: {user_prompt}"""
             sub_dir = os.path.join(legions_dir, sub_id)
             os.makedirs(sub_dir, exist_ok=True)
 
-            cmd = [cap["exec"], sub_id, str(time.time())] + cap.get("args", []) + sub.get("args", [])
+            # AAAK Hook 4: Recall facts for this subtask's prompt
+            sub_args = sub.get("args", [])
+            if AAAK_ENABLED and AAAK is not None and sub_args and cap_name not in ("SAFE_SHELL", "NATIVE_SHELL"):
+                try:
+                    _aaak = AAAK(prefix=task_id)
+                    sub_args = list(sub_args)
+                    sub_args[0] = _aaak.pre_dispatch(sub_args[0], goal=sub.get("description", ""), capability=cap_name)
+                except Exception:
+                    pass
+
+            cmd = [cap["exec"], sub_id, str(time.time())] + cap.get("args", []) + sub_args
             timeout = cap.get("timeout", 120)
 
             sr = run_cmd(cmd, sub_id, cwd=sub_dir, timeout=timeout)
@@ -177,6 +195,15 @@ TASK: {user_prompt}"""
             "exit_code": last_sr.get("exit_code", 1) if last_sr else 1,
             "manifest": last_manifest
         })
+
+        # AAAK Hook 4: Compress subtask result for next subtask's context
+        if AAAK_ENABLED and AAAK is not None and last_manifest:
+            try:
+                _aaak = AAAK(prefix=task_id)
+                task_desc = sub.get("description", sub_id)
+                _aaak.post_result(last_manifest, task_description=task_desc)
+            except Exception:
+                pass
 
     # Prepare results for dashboard.finish
     finish_results = {}

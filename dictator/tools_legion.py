@@ -19,6 +19,13 @@ from dictator.rome_log import log_event
 from dictator.events import emit_dispatch_start, emit_progress
 from dictator.emit_helpers import emit_events as _emit_events, emit_dispatch_start_ws, emit_progress_ws
 
+# AAAK — Adaptive Agent Attention Kernel
+try:
+    from aaak import get_aaak, AAAK_ENABLED
+except ImportError:
+    AAAK_ENABLED = False
+    def get_aaak(prefix="default"): return None
+
 FALLBACK_CHAIN = {"GEMINI": "CODEX", "CODEX": "OPENCODE"}
 BUSY_PATTERNS = ["service temporarily unavailable", "overloaded", "rate_limit",
                  "rate limit", "quota", "503", "429", "capacity"]
@@ -625,6 +632,20 @@ async def _execute_legion_impl(
             else:
                 args = ["Read and execute the task in task.md in your current working directory. Output results with [ROME_STATUS: SUCCESS] or [ROME_STATUS: FAILED]."]
 
+    # AAAK Hook 1: Pre-dispatch — recall facts and distill prompt
+    if AAAK_ENABLED and capability not in ("SAFE_SHELL", "NATIVE_SHELL"):
+        try:
+            _aaak = get_aaak(prefix=parent_task_id or task_id)
+            if _aaak and _aaak.should_process(capability) and args:
+                original_prompt = args[0]
+                distilled = _aaak.pre_dispatch(original_prompt, goal=original_prompt[:200], capability=capability)
+                if distilled != original_prompt:
+                    args = list(args)
+                    args[0] = distilled
+                    log_event(tool="aaak", task_id=task_id, message=f"Distilled prompt: {len(original_prompt)}→{len(distilled)} chars")
+        except Exception as _aaak_err:
+            log_event(tool="aaak", task_id=task_id, status="error", message=f"pre_dispatch: {_aaak_err}")
+
     # Prompt Patches (Phase 10)
     patches_path = Path(__file__).parent / "legion_patches.json"
     if patches_path.exists():
@@ -833,6 +854,18 @@ async def _execute_legion_impl(
             cost = f" {usage['total_tokens']}tok"
     model = usage.get("model", "") if usage and isinstance(usage, dict) else ""
     result["summary"] = f"[{status_icon}] {task_id} | {capability}{fb} | {model} | {round(elapsed, 1)}s{cost}"
+
+    # AAAK Hook 3: Post-result — compress manifest into facts
+    if AAAK_ENABLED and capability not in ("SAFE_SHELL", "NATIVE_SHELL"):
+        try:
+            _aaak = get_aaak(prefix=parent_task_id or task_id)
+            if _aaak and _aaak.should_process(capability) and manifest_path.exists():
+                manifest_data = json.loads(manifest_path.read_text())
+                task_desc = args[0][:200] if args else task_id
+                _aaak.post_result(manifest_data, task_description=task_desc)
+                log_event(tool="aaak", task_id=task_id, message="Compressed result to fact store")
+        except Exception as _aaak_err:
+            log_event(tool="aaak", task_id=task_id, status="error", message=f"post_result: {_aaak_err}")
 
     # Event bus
     await _emit_events(ok, task_id, task_dir, result, usage)

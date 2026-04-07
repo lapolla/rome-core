@@ -22,6 +22,13 @@ from dictator.core import event_bus, task_registry, DAEMON_START_TIME, DAEMON_ST
 from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_dispatch_start, emit_error, emit_capability_status, emit_system_status
 from dictator.tools_legion import _execute_legion_impl, _resolve_arsenal_paths
 
+# AAAK — Adaptive Agent Attention Kernel
+try:
+    from aaak import get_aaak, AAAK_ENABLED
+except ImportError:
+    AAAK_ENABLED = False
+    def get_aaak(prefix="default"): return None
+
 logger = logging.getLogger("rome.daemon")
 
 
@@ -545,6 +552,20 @@ async def _execute_legion_native(
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    # AAAK Hook 1 (daemon path): Pre-dispatch — recall facts and distill prompt
+    if AAAK_ENABLED and capability not in ("SAFE_SHELL", "NATIVE_SHELL") and args:
+        try:
+            _aaak = get_aaak(prefix=parent_task_id or task_id)
+            if _aaak and _aaak.should_process(capability):
+                original = args[0]
+                distilled = _aaak.pre_dispatch(original, goal=original[:200], capability=capability)
+                if distilled != original:
+                    args = list(args)
+                    args[0] = distilled
+                    logger.debug("aaak distill %s: %d→%d chars", task_id, len(original), len(distilled))
+        except Exception as _e:
+            logger.debug("aaak pre_dispatch error: %s", _e)
+
     cap_args = " ".join(cap.get("args", []))
     quoted_args = shlex.quote(" ".join(args)) if cap_args.rstrip().endswith("-p") else " ".join(shlex.quote(a) for a in args)
     command = f"{cap['exec']} {task_id} {time.time()} {cap_args} {quoted_args}"
@@ -576,17 +597,36 @@ async def _execute_legion_native(
     if ok and not output.strip() and (not report_f.exists() or report_f.stat().st_size == 0) and not _is_retry:
         return await _execute_legion_native(task_id, capability, args, input_files, True, prompt_file, True, parent_task_id)
 
-    # Usage parsing
     usage, manifest_f = None, task_dir / "manifest.json"
+    manifest_data = None
     if manifest_f.exists():
         try:
-            m = json.loads(manifest_f.read_text())
-            usage = m.get("usage")
+            manifest_data = json.loads(manifest_f.read_text())
+            usage = manifest_data.get("usage")
         except Exception as e: logger.debug("Swallowed exception: %s", e)
+
+    # AAAK Hook 3 (daemon path): Post-result — compress manifest into facts
+    if AAAK_ENABLED and capability not in ("SAFE_SHELL", "NATIVE_SHELL") and manifest_data:
+        try:
+            _aaak = get_aaak(prefix=parent_task_id or task_id)
+            if _aaak and _aaak.should_process(capability):
+                task_desc = args[0][:200] if args else task_id
+                _aaak.post_result(manifest_data, task_description=task_desc)
+                logger.debug("aaak compressed result for %s", task_id)
+        except Exception as _e:
+            logger.debug("aaak post_result error: %s", _e)
 
     res = {"ok": ok, "task_id": task_id, "capability": capability, "elapsed_s": round(time.monotonic() - t0, 2), "usage": usage}
     if not ok: res["error"] = r.get("message", r.get("stderr", "unknown"))
     else: res["stdout"] = output
+
+    # Populate report_path from manifest artifacts if not set by output truncation
+    if ok and manifest_data and not res.get("report_path"):
+        _art = manifest_data.get("artifacts", [])
+        if _art:
+            _ap = Path(_art[0].get("path", ""))
+            if _ap.exists() and _ap.stat().st_size > 0:
+                res["report_path"] = str(_ap)
 
     if ok and len(output) > MAX_OUTPUT_CHARS:
         if not report_f.exists(): report_f.write_text(output)
