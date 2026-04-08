@@ -217,11 +217,4 @@ def distill(raw_state: dict[str, Any], goal: str = "") -> str:
 
 
 def needs_distill(prompt: str, threshold: int = DEFAULT_THRESHOLD) -> bool:
-    """Check if a prompt exceeds the token threshold or lacks causal structure."""
-    if token_estimate(prompt) > threshold:
-        return True
-    
-    # Check if it has causal chain markers
-    has_structure = all(marker in prompt for marker in ["GOAL:", "INTENT:", "CAUSE:"])
-    # If it lacks structure, we should force it through the compiler, even if short
-    return not has_structure
+    return token_estimate(prompt) > threshold

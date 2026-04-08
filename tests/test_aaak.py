@@ -112,26 +112,25 @@ def test_distill_budget_truncation():
     assert "TASK:" in res
 
 def test_needs_distill():
-    """Estimate tokens and check for causal structure."""
-    assert needs_distill("short prompt", threshold=800)  # Lacks structure
+    """Estimate tokens to determine if distillation is needed."""
+    assert not needs_distill("short prompt", threshold=800)  # Below threshold
     assert needs_distill("x" * 4000, threshold=800)  # Exceeds threshold
-    assert not needs_distill("GOAL: a\nINTENT: b\nCAUSE: c", threshold=800)  # Structured and short
+    assert not needs_distill("GOAL: a\nINTENT: b\nCAUSE: c", threshold=800)  # Below threshold
 
 
 # ── aaak/__init__.py ──────────────────────────────────────────────────
 
 def test_aaak_post_result_poison_prevention(tmp_path):
-    """Failed tasks ARE stored in V5 so they can act as causal constraints."""
+    """Failed tasks must NOT be stored — failures poison recall context."""
     a = AAAK(store_dir=tmp_path, prefix="test")
-    
+
     res = a.post_result({"status": "FAILED", "task_id": "bad"})
-    assert res["status"] == "FAILED"
-    assert res["cause"] == "Execution failed"
-    assert len(a.store.load_active()) == 1
-    
+    assert res == {}
+    assert len(a.store.load_active()) == 0
+
     res2 = a.post_result({"status": "SUCCESS", "task_id": "good"})
     assert res2["status"] == "SUCCESS"
-    assert len(a.store.load_active()) == 2
+    assert len(a.store.load_active()) == 1
 
 def test_aaak_factory_isolation():
     """Fix 9: get_aaak() should yield isolated instances per prefix."""

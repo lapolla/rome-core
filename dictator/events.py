@@ -428,9 +428,9 @@ class TaskRegistry:
                 status = "EXPIRED"
 
             if status in ("SUCCESS", "OK", "COMPLETED"):
-                ttl = 60  # High-speed success rotation (1 minute)
+                ttl = 600  # Keep successful tasks 10 minutes
             elif status in ("FAILED", "ERROR", "TIMEOUT", "ERR", "CANCELLED"):
-                ttl = 300  # Prune failures quickly (5 minutes)
+                ttl = 86400  # Keep failed tasks 24h for post-mortem debugging
             else:
                 ttl = self._ttl_seconds  # Default for active tasks
                 

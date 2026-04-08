@@ -100,7 +100,7 @@ async def test_fact_broadcast_integration(tmp_path):
     sub_id, q = await bus.subscribe()
     
     # Mock the broadcast_fn that the daemon would provide
-    async def mock_daemon_broadcast(event_dict):
+    def mock_daemon_broadcast(event_dict):
         # Convert dict back to RomeEvent for the bus
         ev = RomeEvent(
             type=event_dict["type"],
@@ -110,7 +110,8 @@ async def test_fact_broadcast_integration(tmp_path):
             source="aaak",
             payload=event_dict["payload"]
         )
-        await bus.publish(ev)
+        import asyncio
+        asyncio.create_task(bus.publish(ev))
 
     # Simulate a successful task result
     manifest = {
@@ -140,10 +141,10 @@ async def test_fact_broadcast_integration(tmp_path):
 def test_task_registry_hydration(tmp_path):
     """Verify that the registry can rebuild state from a JSONL log."""
     log_file = tmp_path / "rome.jsonl"
-    
+
+    import json
     # Create fake log entries
-    events = [
-        {"type": "dispatch_start", "task_id": "t1", "ts": time.time(), "payload": {"capability": "GEMINI"}},
+    events = [        {"type": "dispatch_start", "task_id": "t1", "ts": time.time(), "payload": {"capability": "GEMINI"}},
         {"type": "progress", "task_id": "t1", "ts": time.time(), "payload": {"percent": 50, "message": "working"}},
         {"type": "complete", "task_id": "t1", "ts": time.time(), "payload": {"status": "SUCCESS", "report_path": "/tmp/r.txt"}}
     ]

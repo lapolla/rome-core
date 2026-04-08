@@ -28,12 +28,19 @@ class PeerServer:
 
     async def handle_connection(self, websocket):
         """Handle incoming ROME protocol messages."""
+        try:
+            if f"token={self.token}" not in websocket.request.path and websocket.request.headers.get("Authorization") != f"Bearer {self.token}":
+                await websocket.close(1008, "Unauthorized")
+                return
+        except AttributeError:
+            pass
+
         # 1. Handshake
         await websocket.send(json.dumps({
             "type": "daemon_hello",
             "version": "5.0.0",
             "platform": sys.platform,
-            "capabilities": ["GEMINI", "NATIVE_SHELL"]
+            "capabilities": ["GEMINI"]
         }))
 
         try:
@@ -62,8 +69,8 @@ class PeerServer:
                         await websocket.send(json.dumps({
                             "type": "response",
                             "request_id": request_id,
-                            "ok": True,
-                            "payload": {"accepted": True, "routed_to": "peer_native"}
+                            "ok": False,
+                            "payload": {"error": "PeerServer dispatch not yet implemented", "task_id": payload.get("task_id")}
                         }))
                     
                     elif cmd == "ping":
@@ -91,9 +98,6 @@ async def send_command(command: str, payload: dict, uri: str):
         uri = f"{uri}?token={TOKEN}"
     try:
         async with websockets.connect(uri) as websocket:
-            # Wait for handshake (daemon_hello)
-            await websocket.recv()
-            
             request_id = str(uuid.uuid4())[:8]
             await websocket.send(json.dumps({
                 "type": "command",
@@ -101,8 +105,12 @@ async def send_command(command: str, payload: dict, uri: str):
                 "command": command,
                 "payload": payload
             }))
-            response = await websocket.recv()
-            return json.loads(response)
+            # Read until we get our response — daemon sends daemon_hello first
+            async for raw in websocket:
+                msg = json.loads(raw)
+                if msg.get("request_id") == request_id:
+                    return msg
+            return {"ok": False, "error": "connection closed before response"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

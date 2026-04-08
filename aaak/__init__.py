@@ -86,8 +86,8 @@ class AAAK:
         Returns the compressed fact dict, or an empty dict if the task failed.
         """
         fact = compress(manifest, task_description)
-        
-        # FIX 3: Do not store failures in the fact store
+
+        # Do not store failures — only successful outcomes belong in recall context
         if fact.get("status") != "SUCCESS":
             return {}
 
@@ -114,6 +114,8 @@ class AAAK:
         return distill(raw_state, goal or prompt[:100])
 
 
-def get_aaak(prefix: str = "default") -> AAAK:
-    """Create a fresh AAAK instance for the given prefix."""
-    return AAAK(prefix=prefix)
+_instances: dict[str, "AAAK"] = {}
+def get_aaak(prefix: str = "default") -> "AAAK":
+    if prefix not in _instances:
+        _instances[prefix] = AAAK(prefix=prefix)
+    return _instances[prefix]

@@ -1,48 +1,32 @@
-# ROME Core — Imperial Directives (v4.0.0)
+# ROME Core — Imperial Directives (v5.0.0)
 
 > **I am not here to do work. I am here to decompose it and get out of the way.**
 
 ## Project
 
-Model-agnostic Python orchestration framework. Persistent WebSocket-native daemon on port 8741 dispatches AI workers (Legions) in parallel. MCP-over-stdio retained for Claude Code integration; all runtime communication is pure WebSocket.
+Model-agnostic Python orchestration framework. Persistent WebSocket-native daemon on port 8741 dispatches AI workers (Legions) in parallel. Claude Code integrates via native WS tools (RomeDispatch, TaskCreate, etc.) — no bridge needed.
 
 ## Architecture
 
 - **`dictator/daemon.py`** — Pure WS daemon (`websockets.serve()`). HTTP via `process_request` hook: `/health`, `/dashboard/`. No ASGI/Starlette/Uvicorn.
-- **`dictator/cli.py`** — MCP stdio entry point. Loads tools via orchestrator, serves as `asshole` MCP server for Claude Code.
 - **`dictator/core.py`** — Central registry: config, `run_cmd`, `run_cmd_stream`, EventBus, TaskRegistry, DictatorResponse, `dictator_tool` decorator. All subprocesses use `start_new_session=True`.
 - **`dictator/config.json`** — Externalized path constants (17 keys: root_dir, git_root, rome_root, ws_token, daemon_port, etc.).
 - **`dictator/ws_server.py`** — WS connection manager, WorkerRegistry (persistent workers), WSAdapter (wraps raw websockets to Starlette-like API), 20 WS commands, heartbeat, zombie reaping, auto-lean mode.
 - **`dictator/ws_client.py`** — Thread-safe WS client. Two modes: fire-and-forget sender (persistent background connection) + sync/async command client (short-lived connections). All `websockets.connect()` use `open_timeout=30`.
 - **`dictator/rome_log.py`** — JSON-line logger with 50MB auto-rotation (`logs/rome.jsonl`).
-- **`dictator/events.py`** — `RomeEvent` dataclass + `EventBus` pub/sub (bounded asyncio queues per subscriber) + `TaskRegistry` in-memory task state store (status, capability, progress, usage, report path, summary, token). 7 event emitters.
-- **`dictator/emit_helpers.py`** — Bridges stdio MCP tools to daemon EventBus via WS. Detects IS_DAEMON for in-process vs remote path.
-- **`dictator/orchestrator.py`** — Dynamic tool discovery: scans `tools_*.py`, registers with FastMCP, applies profile-based module filtering and tool excludes.
-- **`dictator/profiles.py`** — 6 profiles with per-profile tool excludes.
+- **`dictator/events.py`** — `RomeEvent` dataclass + `EventBus` pub/sub (bounded asyncio queues per subscriber) + `TaskRegistry` in-memory task state store (status, capability, progress, usage, report path, summary, token). 8 event emitters (includes `emit_facts_broadcast`).
 - **`legions/legion_wrapper.py`** — V4 persistent worker engine. Two modes: `--mode once` (legacy subprocess) and `--mode worker` (persistent WS connection with `agent_hello` handshake). LegionaryUI with WS progress streaming, usage parsing (Claude + Gemini JSON), ROME signal extraction.
 - **`legions/shell_executor.py`** — Dedicated bash executor for SAFE_SHELL. WS progress reporting, timeout/SIGKILL, manifest.json output.
 - **`legions/centurion_wrapper.py`** — Campaign orchestrator: inline ANSI dashboard + retry loop (max 3 per task through fallback chain).
 - **`legions/dashboard.py`** — Inline ANSI TUI. Cursor-control row rewrites.
-- **`arsenal/core_arsenal.json`** — 7 capabilities: GEMINI, CLAUDE, CODEX, OPENCODE, MCP_TOOL_CLIENT, SAFE_SHELL, NATIVE_SHELL.
+- **`arsenal/core_arsenal.json`** — 7 capabilities: GEMINI, CLAUDE, CODEX, MISTRAL, MCP_TOOL_CLIENT, SAFE_SHELL, NATIVE_SHELL. (OPENCODE replaced by MISTRAL — Mistral Vibe CLI.)
+- **`aaak/`** — Adaptive Agent Attention Kernel. Purely programmatic (no LLM) context compression middleware. 3 hooks: `pre_dispatch` (recall facts + distill prompt), `post_result` (compress output → fact, store, broadcast), `guard_prompt` (subprocess safety net). Fact store: thread-safe JSONL with TTL=2h, Jaccard recall, auto-compaction every 50 saves. Only SUCCESS facts stored — failures never enter recall context.
 - **`senate/brain.py`** — Soul spawner: loads sector manifesto + dispatches GEMINI legion.
 - **`senate/architects/`** — 64 sector manifestos (T0.md–T63.md).
 - **`client/orchestrator.py`** — Headless CLI: Haiku/Flash → subtask JSON → WS dispatch → JSONL stdout.
 - **`campaigns/`** — YAML-defined task pipelines with `loader.py`.
-- **`rome_native.py`** — Minimal WS CLI client for direct daemon commands.
-- **`tests/`** — pytest suite: tools, signals, usage parsing, WS protocol, EventBus, v4 WS.
-
-## MCP Server (56 tools, 12 modules)
-
-- **`tools_fs`**: fs_read, fs_write, read_anywhere, write_anywhere, list_directory
-- **`tools_git`**: git_status, git_diff, git_commit, git_push *(all accept `repo_path` param)*
-- **`tools_drupal`**: rsync_ftk_modules, drush_run, drupal_fj_run
-- **`tools_legion`**: execute_legion, execute_campaign, rome_dispatch, recommend_capability, consult_architect, launch_centurion, clear_cache, campaign_run
-- **`tools_desktop`**: desktop_screenshot, desktop_click, desktop_type_text, desktop_press_key, desktop_find_window, desktop_focus_window, desktop_get_mouse_location, desktop_notify
-- **`tools_gc`**: gc_legions, reset_tasks, legion_stats
-- **`tools_stats`**: rome_tail, rome_costs, rome_health, rome_find, senate_query, senate_brain
-- **`tools_prefect`**: execute_prefect
-- **`tools_docs`**: update_project_docs
-- **`tools_ws`**: ws_send, rome_submit_result, rome_events
+- **`rome_native.py`** — WS CLI client for direct daemon commands + `PeerServer` stub (V5 mesh, port 8742). PeerServer dispatch not yet implemented — returns `ok: False` until wired to legion_wrapper.
+- **`tests/`** — pytest suite: tools, signals, usage parsing, WS protocol, EventBus, v4 WS, AAAK pipeline, V5 mesh events.
 
 ## WS Command Protocol (20 commands)
 
@@ -61,7 +45,7 @@ The daemon accepts JSON frames of shape `{"type": "command", "command": "<name>"
 | `write_file` | Write content to any path |
 | `list_dir` | List directory with depth/limit |
 | `native_shell` | Execute shell command in daemon process (NATIVE_SHELL DSA, sub-ms overhead) |
-| `event` | Relay task events from MCP stdio tools to daemon EventBus |
+| `event` | Relay task events to daemon EventBus |
 | `submit_result` | Worker submits task result (auto-summarized if >2KB) |
 | `reset` | Clear all tasks from registry |
 | `clear` | Clear only finished tasks |
@@ -71,7 +55,7 @@ The daemon accepts JSON frames of shape `{"type": "command", "command": "<name>"
 | `report_usage` | Dictator self-reports token usage |
 | `dashboard_stats` | Aggregated stats for web dashboard |
 
-## ROME Protocol Rules (v4.0.0)
+## ROME Protocol Rules (v5.0.0)
 
 1. **Atomic Changes**: Surgical commits, one concern per commit.
 2. **Sub-division**: Tasks exceeding 45s should be split into smaller units.
@@ -81,6 +65,24 @@ The daemon accepts JSON frames of shape `{"type": "command", "command": "<name>"
 6. **Architect First**: When given a goal, decompose it into parallel subtasks and fire `execute_campaign` immediately. Never relay a goal directly to one GEMINI task — that is forwarding, not orchestration. Ask: what are all the independent workstreams? Assign the right capability to each. Only use `rome_dispatch` for single atomic tasks.
 7. **Capability Routing**: SAFE_SHELL for bash/git/build ops (free). NATIVE_SHELL for sub-ms daemon-native execution. GEMINI for analysis/design/code when it needs file access. Never use GEMINI as a glorified cat/grep — SAFE_SHELL gathers execution output, GEMINI reasons about code it reads directly.
 8. **Await, Don't Poll**: Fire tasks with `rome_dispatch(fire_and_forget=True)`, then collect results with `rome_await(task_ids, include_reports=True)`. One call in, all results back — no sleep loops, no rome_tail polling. The daemon uses EventBus internally (zero CPU spin).
+
+## V5 Distributed Mesh (in progress)
+
+- **Status**: Phase 1 complete. Phases 2-3 partial.
+- **Phase 1** ✅ — `facts_broadcast` event wired: `emit_facts_broadcast` in `events.py`, `post_result(broadcast_fn=...)` in AAAK, `asyncio.create_task(emit_facts_broadcast(...))` in `ws_server._execute_legion_native`.
+- **Phase 2** 🚧 — `PeerServer` stub in `rome_native.py` (port 8742). Auth check implemented. Dispatch handler returns `ok: False` — not yet connected to `legion_wrapper`.
+- **Phase 3** ⬜ — Direct agent-to-agent dispatch (`peer_url` field in WorkerRegistry exists, routing logic present in `handle_dispatch`, but peer must implement dispatch to be usable).
+- **Next**: Wire `PeerServer.handle_connection` dispatch to actually spawn a legion_wrapper subprocess.
+
+## AAAK — Adaptive Agent Attention Kernel
+
+- **Location**: `aaak/` module, wired in `dictator/ws_server.py` and `legions/legion_wrapper.py`.
+- **Config**: `aaak_enabled` (bool), `aaak_distill_threshold` (tokens, default 800), `aaak_fact_ttl_seconds` (default 7200), `aaak_max_recall` (default 7) — all in `dictator/config.json`.
+- **`get_aaak(prefix)`**: Returns cached AAAK instance per prefix (one per campaign/task chain). Store file: `aaak/{prefix}.jsonl`.
+- **Dispatch flow**: `pre_dispatch` → recalls facts from store → distills prompt if >800 tokens → returns compressed prompt. SAFE_SHELL and NATIVE_SHELL bypass AAAK entirely.
+- **Post-result flow**: `post_result` → compress manifest → if status != SUCCESS, return `{}` (failures not stored) → save fact → call `broadcast_fn` if provided.
+- **Guard**: `guard_prompt` in `legion_wrapper` — only fires in subprocess mode (`ROME_WORKER_MODE != worker`), no store access.
+- **Distill**: Only fires when `token_estimate(prompt) > threshold`. Does NOT force distillation on short natural-language prompts.
 
 ## Persistent Workers (v4)
 
@@ -93,11 +95,11 @@ The daemon accepts JSON frames of shape `{"type": "command", "command": "<name>"
 
 ## Legion & Campaign Features
 
-- **Failover Chain**: GEMINI → CODEX → OPENCODE on rate limits / failures. SAFE_SHELL retries once.
+- **Failover Chain**: GEMINI → CODEX → MISTRAL on rate limits / failures. SAFE_SHELL retries once.
 - **Result Caching**: 1-hour TTL in `legions/.cache`. `rome_dispatch(no_cache=True)` bypasses.
 - **Prompt Patches**: Capability-specific rules injected from `dictator/legion_patches.json`.
 - **Token Discipline**: MAX_OUTPUT_CHARS=2000 truncation in `_execute_legion_impl`; full output in report file.
-- **Progress Trimming**: `manifest.json` progress field is a compact dict `{count, final, log_path}` — full log in `progress.log` in task dir. MCP responses get only the final entry.
+- **Progress Trimming**: `manifest.json` progress field is a compact dict `{count, final, log_path}` — full log in `progress.log` in task dir.
 - **Campaign Error Isolation**: `execute_campaign` uses `return_exceptions=True`.
 - **Campaign Concurrency Cap**: `execute_campaign` uses `asyncio.Semaphore(20)` — max 20 parallel dispatches per campaign.
 - **Usage Aggregation**: Claude/Gemini JSON usage extracted by `legion_wrapper`, written to manifest. Gemini pricing table covers models from 1.5 through 3.1.
@@ -105,7 +107,7 @@ The daemon accepts JSON frames of shape `{"type": "command", "command": "<name>"
 - **Output Path Fallback**: `rome_dispatch(output_path=...)` copies report to output_path after completion.
 - **SAFE_SHELL Routing**: Routes via persistent legion_wrapper worker (spawns `shell_executor.py` per task). `handle_event` complete path reads report file and passes inline — output is no longer silently dropped.
 - **Auto GC**: `auto_gc()` available on startup — runs `gc_legions` (keep newest 50 + <24h).
-- **Centurion Hierarchy**: CENTURION capability dispatches CODEX/OPENCODE as sub-legionnaires.
+- **Centurion Hierarchy**: CENTURION capability dispatches CODEX/MISTRAL as sub-legionnaires.
 - **Auto-Retry**: Empty report on success triggers one retry with `no_cache=True`.
 - **Auto-Routing**: `capability="AUTO"` runs `_recommend_capability_impl` heuristics to select best worker.
 
@@ -114,15 +116,13 @@ The daemon accepts JSON frames of shape `{"type": "command", "command": "<name>"
 - **Result compression**: Worker results >2000 chars auto-summarized via Gemini Flash (`gemini-3.1-pro-preview`) on submit. Summary stored in task registry; `rome_await` returns summary by default (`full=True` for raw).
 - **Auto-lean mode**: Daemon tracks cumulative output chars per session. At 100K chars → lean (1 event max, prefer summaries). At 300K chars → ultra-lean (no events, status-only responses).
 - **`prompt_file`**: `rome_dispatch` and daemon `dispatch` command accept `prompt_file` param — prompt stays on disk, never enters context.
-- **Campaign templates**: `campaign_run(template="edit-function", overrides={...})` loads YAML from `campaigns/`, substitutes params, dispatches. Keeps MCP tool calls terse.
+- **Campaign templates**: `campaign_run(template="edit-function", overrides={...})` loads YAML from `campaigns/`, substitutes params, dispatches.
 
-## Context Diet (MCP Tool Output Compaction)
+## Context Diet
 
-- **`read_anywhere`**: Returns `[ROME: lines X-Y of N]` header + requested range only. Supports `start_line`/`end_line` params (1-indexed, inclusive).
-- **`DictatorResponse`**: Standardized response wrapper for all tools. `dictator_tool` decorator handles exceptions uniformly.
-- **Claude Code hook**: PreToolUse hook (`~/.claude/hooks/block_builtin_io.sh`) blocks built-in Read/Bash/Grep/Glob — forces all I/O through MCP compact tools.
-- **`rome_events`**: Drains buffered daemon events as compact one-liners (`HH:MM:SS [STATUS] task_id`). Background WS listener starts on first call.
 - **Principle**: Full data stays on disk. Only summaries and targeted excerpts enter the context window.
+- **`prompt_file`**: Long prompts stay on disk, passed by path to daemon dispatch.
+- **Auto-lean**: Daemon tracks session output volume and progressively reduces response verbosity.
 
 ## WS Protocol Notes
 
@@ -133,24 +133,11 @@ The daemon accepts JSON frames of shape `{"type": "command", "command": "<name>"
 - **Zombie reaping**: System status loop (30s) auto-fails tasks stuck at 0% for >180s.
 - **Auth**: Token via `Authorization: Bearer <token>` header or `?token=` query param. Dashboard connections (same-origin) bypass auth.
 - **Heartbeat**: Every 15s per connection.
-- **Daemon managed by systemd**: `rome-daemon.service` (user unit). Restart via `systemctl --user restart rome-daemon`. Has `ExecStartPre=fuser -k 8741/tcp` guard. MCP server entry point: `dictator/cli.py` (stdio) — needs `/mcp` reconnect after code changes.
-
-## Profiles (ROME_PROFILE)
-
-Set `ROME_PROFILE` env var to load only needed tools per session:
-- **`core`** (12 tools) — fs, ws, legion basics. Minimal context footprint.
-- **`drupal`** (21 tools) — core + git, drupal tools.
-- **`desktop`** — core + desktop tools.
-- **`orchestrate`** (26 tools) — core + gc, stats tools.
-- **`gemini`** (ws + git + gc, ~8 tools) — WS-only, no fs/legion MCP tools. Gemini-as-dictator mode uses `ws_send` for all daemon communication.
-- **`full`** (55 tools) — all modules. Default when unset.
-
-Profiles defined in `dictator/profiles.py`. Per-profile tool excludes strip rarely-needed tools from loaded modules.
+- **Daemon managed by systemd**: `rome-daemon.service` (user unit). Restart via `systemctl --user restart rome-daemon`. Has `ExecStartPre=fuser -k 8741/tcp` guard.
 
 ## Gemini Dictator Mode
 
 Gemini CLI can run as the primary interactive agent ("Dictator") with Claude as "Architect":
-- **`ROME_PROFILE=gemini`** in `~/.gemini/settings.json` MCP env
 - **`consult_architect`** tool — dispatches CLAUDE capability via WS, awaits with polling fallback
 - **`GEMINI.md`** at project root — dictator-mode instructions for Gemini
 - **`legion_patches.json`** — CLAUDE capability includes architect role guidance
@@ -160,7 +147,7 @@ Gemini CLI can run as the primary interactive agent ("Dictator") with Claude as 
 
 - **`campaigns/`** — YAML-defined task pipelines. `loader.py` reads any YAML, dispatches via WS, awaits results.
 - **Format**: `name`, `tasks[]` with `id`, `capability`, `prompt`, `input_files`, `depends_on`.
-- **Usage**: `campaign_run(template="name", overrides={...})` from MCP, or `python3 campaigns/loader.py campaigns/example.yaml` from CLI.
+- **Usage**: `python3 campaigns/loader.py campaigns/example.yaml` from CLI.
 - **Dependency graph**: `execute_campaign` supports `depends_on` — waits for upstream tasks, fails dependents on upstream failure.
 
 ## Prefect Agents
@@ -172,7 +159,5 @@ Gemini CLI can run as the primary interactive agent ("Dictator") with Claude as 
 ## Coding Conventions
 
 - **Type hints**: Use `Callable` from `collections.abc`. Never use lowercase `callable` with `|` union syntax — it's a builtin function, causes `TypeError` at import time.
-- **Subprocess safety**: Always `start_new_session=True`. Never let child processes propagate signals to the MCP server.
+- **Subprocess safety**: Always `start_new_session=True`. Never let child processes propagate signals to the daemon.
 - **WS dispatch**: Long-running tasks must use `asyncio.to_thread()` or `asyncio.create_task()` — never block the event loop inline.
-- **Stderr**: Do not write to `sys.stderr.buffer` in `run_cmd_stream` — blocks the MCP stdio pipe.
-- **DictatorResponse**: All new tools should use `@dictator_tool` decorator and return `DictatorResponse` for consistent error handling.

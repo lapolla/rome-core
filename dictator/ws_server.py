@@ -838,7 +838,7 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         await emit_dispatch_start(event_bus, task_id, capability)
 
     # --- AAAK Signal Gate (V5 Causal Check) ---
-    if capability not in ("SAFE_SHELL", "NATIVE_SHELL") and prompt:
+    if capability not in ("SAFE_SHELL",) and prompt:
         try:
             from aaak import get_aaak, AAAK_ENABLED
             from aaak.distill import needs_distill
@@ -863,36 +863,8 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
                                 "cause": structured.get("cause")
                             })
                     
-                    if "GOAL:" not in prompt or "CAUSE:" not in prompt:
-                        return {"task_id": task_id, "capability": capability, "accepted": False, "error": "Causal chain missing. Message must be structured or distillable."}
         except Exception as _e:
             logger.debug("aaak pre_dispatch error (Gate): %s", _e)
-
-    # --- Native DSA Routing (ROME v4) ---
-    if capability == "NATIVE_SHELL":
-        task_registry.update_task(task_id, {"dispatch_mode": "native"})
-        async def _run_native_background():
-            try:
-                # Execute immediately via native handler
-                result = await handle_native_shell({"command": prompt})
-                
-                # Log and finalize in registry
-                status = "completed" if result["ok"] else "failed"
-                task_dir = ROME_ROOT / "legions" / task_id
-                task_dir.mkdir(parents=True, exist_ok=True)
-                rp = task_dir / f"report_{task_id}.txt"
-                rp.write_text(result["stdout"] + "\n" + result["stderr"], encoding="utf-8")
-                
-                if IS_DAEMON:
-                    task_registry.complete(task_id, status, str(rp))
-                    await emit_complete(event_bus, task_id, status, str(rp), None, report=result["stdout"].strip())
-            except Exception as e:
-                if IS_DAEMON:
-                    await emit_error(event_bus, task_id, str(e))
-
-        # Launch in background and return immediately
-        asyncio.create_task(_run_native_background(), name=f"native-shell-{task_id}")
-        return {"task_id": task_id, "capability": capability, "accepted": True, "routed_to": "native_dsa_async"}
 
     # --- Persistent worker routing ---
     # Check if a persistent worker can handle this capability (skip if
@@ -906,8 +878,7 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         # Task is already pre-registered at top of handle_dispatch
         peer_url = await worker_registry.get_peer_url(worker_ws)
         if IS_DAEMON:
-            dispatch_mode = "a2a" if peer_url else "persistent_worker"
-            task_registry.update_task(task_id, {"dispatch_mode": dispatch_mode, "peer_url": peer_url})
+            task_registry.update_task(task_id, {"dispatch_mode": "persistent_worker", "peer_url": peer_url})
             task_registry.update_progress(task_id, 0, "Routing to persistent worker...")
 
         await worker_registry.mark_busy(worker_ws, task_id)
@@ -971,30 +942,6 @@ async def handle_submit_result(payload: dict[str, Any]) -> dict[str, Any]:
     await emit_complete(event_bus, task_id, status, str(report_path), None, report=report_snippet)
 
     return {"task_id": task_id, "status": status, "report_path": str(report_path)}
-
-
-async def handle_native_shell(payload: dict[str, Any]) -> dict[str, Any]:
-    """Execute a shell command natively via daemon's core.run_cmd."""
-    command = payload.get("command")
-    cwd = payload.get("cwd")
-    if not command:
-        raise ValueError("command is required")
-
-    from dictator.core import run_cmd
-    logger.info("NATIVE_SHELL: %s (cwd=%s)", command, cwd)
-
-    # Execute natively in the daemon's environment
-    t0 = time.monotonic()
-    result = await run_cmd(command, cwd=cwd or "/var/www/ftk_lms")
-    elapsed = round(time.monotonic() - t0, 3)
-
-    return {
-        "ok": result.get("ok", False),
-        "stdout": result.get("stdout", ""),
-        "stderr": result.get("stderr", ""),
-        "exit_code": result.get("exit_code", 0 if result.get("ok") else 1),
-        "elapsed": elapsed,
-    }
 
 
 async def handle_interrupt(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1511,7 +1458,6 @@ async def _handle_command(message: dict[str, Any]) -> dict[str, Any]:
         "read_file": handle_read_file,
         "write_file": handle_write_file,
         "list_dir": handle_list_dir,
-        "native_shell": handle_native_shell,
         "interrupt": handle_interrupt,
         "report_usage": handle_report_usage,
     }

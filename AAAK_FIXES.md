@@ -1,5 +1,8 @@
 # AAAK + ROME v4 — Fixes for Gemini
 
+> **Status: All 11 fixes implemented.** Committed in 63911e7 + post-audit corrections.
+> Fix 9 uses per-prefix cache (not pure factory) — correct for ws_server shared-campaign usage.
+
 Audit findings translated to concrete tasks. Each fix is self-contained.
 Scope: `aaak/` + targeted hooks in `legions/`. Do NOT refactor outside these files.
 

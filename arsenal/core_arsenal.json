@@ -42,16 +42,6 @@
       "min_version": "1.0",
       "_note": "Anthropic Claude Opus 4.6 \u2014 -p must be last"
     },
-    "OPENCODE": {
-      "exec": "{ROME_ROOT}/legions/legion_wrapper.py",
-      "args": [
-        "/home/paul-kane/.nvm/versions/node/v20.20.0/bin/opencode",
-        "run"
-      ],
-      "timeout": 120,
-      "min_version": "0.1",
-      "_note": "Opencode CLI \u2014 prompt passed as positional arg by legion_wrapper"
-    },
     "CODEX": {
       "exec": "{ROME_ROOT}/legions/legion_wrapper.py",
       "args": [
@@ -65,15 +55,6 @@
       "timeout": 300,
       "min_version": "0.1",
       "_note": "OpenAI Codex CLI \u2014 requires OPENAI_API_KEY, not ChatGPT account. Currently disabled."
-    },
-    "MCP_TOOL_CLIENT": {
-      "exec": "python3",
-      "args": [
-        "{ROME_ROOT}/dictator/mcp_client_tool.py"
-      ],
-      "timeout": 120,
-      "min_version": "0.1",
-      "_note": "Internal MCP tool client"
     },
     "SAFE_SHELL": {
       "exec": "python3",
@@ -96,12 +77,6 @@
       "args": [],
       "timeout": 300,
       "_note": "Native WS browser worker"
-    },
-    "NATIVE_SHELL": {
-      "exec": "internal",
-      "args": [],
-      "timeout": 600,
-      "_note": "Daemon-native shell execution (v4 WS DSA)"
     },
     "MISTRAL": {
       "exec": "{ROME_ROOT}/legions/legion_wrapper.py",

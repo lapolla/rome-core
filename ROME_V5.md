@@ -164,6 +164,7 @@ Don't add it until keyword search demonstrably misses relevant facts in a real c
 
 Priority order:
 
-1. `facts_broadcast` event in daemon + peer handler in ws_server (Phase 1) — highest leverage, least work
-2. Peer server stub in `rome_native.py` — enables direct agent comms without daemon
-3. ChromaDB backend (optional, behind flag) — add when you actually need it
+1. ✅ `facts_broadcast` event in daemon + peer handler in ws_server (Phase 1) — done in commit 63911e7
+2. ✅ Peer server stub in `rome_native.py` — done (auth, ping, dispatch skeleton). **Dispatch returns `ok: False` — not yet wired to legion_wrapper.**
+3. ⬜ Wire `PeerServer.handle_connection` dispatch to spawn a legion_wrapper subprocess — this makes Phase 3 (A2A dispatch) actually functional
+4. ⬜ ChromaDB backend (optional, behind flag) — skip until keyword search demonstrably misses facts

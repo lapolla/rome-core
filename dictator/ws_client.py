@@ -189,7 +189,6 @@ async def send_command_async(command: str, payload: dict[str, Any], timeout: flo
                 "payload": payload,
             }))
 
-            import sys; print(f"[AWAIT_DEBUG] send_command_async command={command}", file=sys.stderr, flush=True)
             if command == "await":
                 # Initial response from server for await command
                 initial_response: dict[str, Any] = {}

@@ -1,0 +1,32 @@
+{
+  "campaign_id": "V5_STABILITY_VALIDATION",
+  "success": 0,
+  "failed": 5,
+  "elapsed_s": 0.15,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "tasks": {
+    "aaak_unit": {
+      "status": "FAILED",
+      "exit_code": 2
+    },
+    "causal_v5": {
+      "status": "FAILED",
+      "exit_code": 2
+    },
+    "dictator_core": {
+      "status": "FAILED",
+      "exit_code": 2
+    },
+    "ws_commands": {
+      "status": "FAILED",
+      "exit_code": 2
+    },
+    "event_bus": {
+      "status": "FAILED",
+      "exit_code": 2
+    }
+  }
+}

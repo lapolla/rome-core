@@ -386,11 +386,22 @@ async def _start_peer_server(capabilities, capability_cmd_base):
                         if prompt:
                             cmd.append(prompt)
                         async def run_and_report():
+                            from dictator.ws_client import send_command_async
+                            # Register with daemon for observability (recent_events, dashboard)
+                            try:
+                                await send_command_async("event", {
+                                    "type": "dispatch_start", "task_id": task_id,
+                                    "payload": {"capability": cap}
+                                }, timeout=2)
+                            except Exception:
+                                pass
                             async def noop_sender(ev): pass
                             manifest = await execute_task(task_id, cap, cmd, ui_sender=noop_sender)
                             report_content = ""
+                            report_path = None
                             try:
-                                with open(manifest["artifacts"][0]["path"]) as fp:
+                                report_path = manifest["artifacts"][0]["path"]
+                                with open(report_path) as fp:
                                     report_content = fp.read()
                             except Exception:
                                 pass
@@ -405,6 +416,18 @@ async def _start_peer_server(capabilities, capability_cmd_base):
                                     }
                                 }
                             }))
+                            # Relay complete to daemon for observability
+                            try:
+                                await send_command_async("event", {
+                                    "type": "complete", "task_id": task_id,
+                                    "payload": {
+                                        "status": manifest["status"],
+                                        "usage": manifest.get("usage"),
+                                        "report_path": report_path,
+                                    }
+                                }, timeout=2)
+                            except Exception:
+                                pass
                         asyncio.create_task(run_and_report())
                     elif command == "ping":
                         await websocket.send(json.dumps({"type": "response", "request_id": request_id, "ok": True}))
