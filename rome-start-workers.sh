@@ -35,10 +35,10 @@ start_worker "GEMINI" "${GEMINI_ARGS[@]}"
 # Start SAFE_SHELL
 start_worker "SAFE_SHELL" "python3" "$ROME_ROOT/legions/shell_executor.py"
 
-# Start OPENCODE
-start_worker "OPENCODE" "opencode" "run"
+# Start MISTRAL
+start_worker "MISTRAL" "python3" "-m" "vibe.cli.entrypoint" "env:PYTHONPATH=/home/paul-kane/projects/mistral-cli" "--agent" "auto-approve" "--output" "streaming" "--ws-url" "$WS_URL" "--ws-token" "$WS_TOKEN" "-p"
 
 # Start CLAUDE
 start_worker "CLAUDE" "${CLAUDE_ARGS[@]}"
 
-echo "ROME workers started (GEMINI, CLAUDE, OPENCODE, SAFE_SHELL)."
+echo "ROME workers started (GEMINI, CLAUDE, MISTRAL, SAFE_SHELL)."

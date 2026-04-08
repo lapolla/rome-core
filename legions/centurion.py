@@ -11,7 +11,10 @@ from datetime import datetime
 
 # --- CONFIGURATION & PATHS ---
 # Centurion V2: Standalone parallel orchestrator for ROME.
-ROME_ROOT = os.environ.get("ROME_ROOT", str(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ROME_ROOT = os.environ.get("ROME_ROOT")
+if not ROME_ROOT:
+    ROME_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROME_ROOT = os.path.abspath(ROME_ROOT)
 ARSENAL_PATH = os.path.join(ROME_ROOT, "arsenal", "core_arsenal.json")
 
 def log_event(tool, message, task_id=None, **kwargs):
@@ -130,7 +133,13 @@ async def run_task(task, arsenal, ui, global_start, results):
     os.makedirs(task_dir, exist_ok=True)
 
     exec_path = cap_data.get("exec", "python3")
+    exec_path = exec_path.replace("{ROME_ROOT}", ROME_ROOT)
     script_and_args = cap_data.get("args", [])
+    
+    # Resolve placeholders in args
+    gemini_cli = os.path.join(ROME_ROOT, "..", "gemini-cli", "bundle", "gemini.js")
+    script_and_args = [a.replace("{ROME_ROOT}", ROME_ROOT).replace("{GEMINI_CLI}", gemini_cli) for a in script_and_args]
+    
     prompt = task.get("prompt", "")
 
     if capability.upper() == "SAFE_SHELL":
@@ -307,11 +316,25 @@ async def main_async(campaign):
         "tasks": {tid: {"status": r["status"], "exit_code": r["exit_code"]} for tid, r in results.items()}
     }
 
-    # Write report to file instead of dumping JSON to terminal
+    # Write report to file (legacy)
     campaign_id = campaign.get("campaign_id", "unknown")
     report_path = os.path.join(ROME_ROOT, "legions", f"centurion_{campaign_id}.json")
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
+
+    # Submit result via ROME WS (Sovereign)
+    try:
+        from dictator.ws_client import send_command_async
+        
+        async def _submit():
+            await send_command_async("submit_result", {
+                "task_id": campaign.get("task_id") or campaign_id,
+                "content": json.dumps(report, indent=2)
+            })
+        
+        await _submit()
+    except Exception:
+        pass
 
     print(f"Report: {report_path}")
 

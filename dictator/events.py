@@ -197,6 +197,19 @@ async def emit_system_status(bus: EventBus, active_tasks: int, uptime_s: float) 
     )
 
 
+async def emit_facts_broadcast(bus: EventBus, task_id: str | None, fact: dict[str, Any]) -> RomeEvent:
+    return await bus.publish(
+        RomeEvent(
+            type="facts_broadcast",
+            task_id=task_id,
+            ts=time.time(),
+            sequence=0,
+            source=bus._source,
+            payload={"fact": fact},
+        )
+    )
+
+
 class TaskRegistry:
     def __init__(self, ttl_seconds: int = TASK_TTL_SECONDS) -> None:
         self._ttl_seconds = ttl_seconds
@@ -277,7 +290,7 @@ class TaskRegistry:
             task["updated_at"] = time.time()
             return self._snapshot(task)
 
-    def complete(self, task_id: str, status: str, report_path: str | None) -> dict[str, Any] | None:
+    def complete(self, task_id: str, status: str, report_path: str | None, report: str | None = None) -> dict[str, Any] | None:
         with self._lock:
             self._cleanup_locked()
             task = self._tasks.get(task_id)
@@ -286,6 +299,8 @@ class TaskRegistry:
             task["status"] = status
             task["progress_percent"] = 100.0
             task["report_path"] = report_path
+            if report is not None:
+                task["report"] = report
             task["updated_at"] = time.time()
             task["completed_at"] = time.time()
             return self._snapshot(task)
@@ -412,12 +427,12 @@ class TaskRegistry:
                 task["status"] = "expired"
                 status = "EXPIRED"
 
-            if status in ("SUCCESS", "OK"):
-                ttl = 600  # Remove successful tasks quickly (30 seconds)
-            elif status in ("FAILED", "ERROR", "TIMEOUT", "ERR"):
-                ttl = 86400  # Keep failed tasks for 24 hours
+            if status in ("SUCCESS", "OK", "COMPLETED"):
+                ttl = 60  # High-speed success rotation (1 minute)
+            elif status in ("FAILED", "ERROR", "TIMEOUT", "ERR", "CANCELLED"):
+                ttl = 300  # Prune failures quickly (5 minutes)
             else:
-                ttl = self._ttl_seconds  # Default 1 hour for active/pending tasks
+                ttl = self._ttl_seconds  # Default for active tasks
                 
             if age > ttl:
                 expired.append(task_id)
@@ -443,6 +458,7 @@ __all__ = [
     "emit_cost_update",
     "emit_dispatch_start",
     "emit_error",
+    "emit_facts_broadcast",
     "emit_progress",
     "emit_system_status",
 ]

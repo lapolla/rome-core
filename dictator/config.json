@@ -14,7 +14,7 @@
   "daemon_host": "127.0.0.1",
   "daemon_port": 8741,
   "ws_token": "ROME_V4_SECURE_TOKEN",
-  "dictator": "Dictator",
+  "dictator": "Gemini CLI",
   "aaak_enabled": true,
   "aaak_distill_threshold": 800,
   "aaak_fact_ttl_seconds": 7200,

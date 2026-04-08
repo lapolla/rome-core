@@ -35,7 +35,9 @@ _CFG_PATH = Path(__file__).with_name("config.json")
 _DASHBOARD_DIR = Path(__file__).parent / "dashboard"
 _VERSION = "4.0"
 
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("rome.daemon")
+logger.setLevel(logging.DEBUG)
 
 
 def load_config() -> dict:

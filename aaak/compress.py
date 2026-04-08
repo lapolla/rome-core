@@ -14,9 +14,9 @@ def compress(manifest: dict[str, Any], task_description: str = "") -> dict[str, 
     and strips logs/raw output/progress.
     """
     status = manifest.get("status", "UNKNOWN")
-    usage = manifest.get("usage", {})
-    runtime = manifest.get("runtime", {})
-    metadata = manifest.get("metadata", {})
+    usage = manifest.get("usage") or {}
+    runtime = manifest.get("runtime") or {}
+    metadata = manifest.get("metadata") or {}
 
     # Extract report content (first artifact)
     report_text = ""
@@ -33,10 +33,14 @@ def compress(manifest: dict[str, Any], task_description: str = "") -> dict[str, 
     # Extract key changes from report
     key_changes = _extract_changes(report_text)
 
-    # Extract error if failed
+    # Extract error and cause
     error = None
+    cause = "Unknown cause"
     if status in ("FAILED", "failed", "error"):
         error = metadata.get("failure_reason") or _extract_error(report_text)
+        cause = error or "Execution failed"
+    else:
+        cause = _extract_cause(report_text)
 
     # Build result summary — first meaningful line of report
     result_summary = _extract_summary(report_text, status)
@@ -50,6 +54,7 @@ def compress(manifest: dict[str, Any], task_description: str = "") -> dict[str, 
         "type": "fact",
         "task": task_description or manifest.get("task_id", "unknown"),
         "result": result_summary,
+        "cause": cause,
         "status": status,
         "key_changes": key_changes,
         "confidence": confidence,
@@ -62,6 +67,17 @@ def compress(manifest: dict[str, Any], task_description: str = "") -> dict[str, 
 
     return fact
 
+def _extract_cause(report: str) -> str:
+    """Extract why the task succeeded or what was the root cause."""
+    # Look for explicit cause markers
+    for match in re.finditer(r"(?i)(?:cause|reason|because|due to)[\s:]+(.{10,150})(?:\n|$)", report):
+        return match.group(1).strip()
+    
+    # Look for "fixed by" or "resolved by"
+    for match in re.finditer(r"(?i)(?:fixed by|resolved by)[\s:]+(.{10,150})(?:\n|$)", report):
+        return match.group(1).strip()
+        
+    return "Task completed successfully"
 
 def _extract_changes(report: str) -> list[str]:
     """Pull out key changes from report text."""
@@ -89,8 +105,8 @@ def _extract_changes(report: str) -> list[str]:
 def _extract_error(report: str) -> str | None:
     """Pull the first error-like line from a report."""
     for pattern in [
-        r"(?:error|exception|traceback|failed)[:]\s*(.{10,200})",
-        r"^(.{10,200}error.{0,100})$",
+        r"(?:error|exception|traceback|failed)[:]\s*(.{3,200})",
+        r"^(.{3,200}error.{0,100})$",
     ]:
         m = re.search(pattern, report, re.IGNORECASE | re.MULTILINE)
         if m:

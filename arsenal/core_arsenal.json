@@ -13,6 +13,10 @@
         "json",
         "-m",
         "gemini-3.1-pro-preview",
+        "--ws-url",
+        "ws://127.0.0.1:8741/ws",
+        "--ws-token",
+        "ROME_V4_SECURE_TOKEN",
         "-p"
       ],
       "timeout": 300,
@@ -28,6 +32,10 @@
         "json",
         "--model",
         "claude-opus-4-6",
+        "--ws-url",
+        "ws://127.0.0.1:8741/ws",
+        "--ws-token",
+        "ROME_V4_SECURE_TOKEN",
         "-p"
       ],
       "timeout": 300,
@@ -75,6 +83,20 @@
       "timeout": 600,
       "_note": "Dedicated bash executor \u2014 no LLM wrapper, no JSON parsing"
     },
+    "CENTURION": {
+      "exec": "python3",
+      "args": [
+        "{ROME_ROOT}/legions/centurion.py"
+      ],
+      "timeout": 600,
+      "_note": "Parallel campaign orchestrator"
+    },
+    "BROWSER": {
+      "exec": "{ROME_ROOT}/legions/browser_worker.py",
+      "args": [],
+      "timeout": 300,
+      "_note": "Native WS browser worker"
+    },
     "NATIVE_SHELL": {
       "exec": "internal",
       "args": [],
@@ -87,15 +109,20 @@
         "python3",
         "-m",
         "vibe.cli.entrypoint",
+        "env:PYTHONPATH=/home/paul-kane/projects/mistral-cli",
         "--agent",
         "auto-approve",
         "--output",
         "streaming",
+        "--ws-url",
+        "ws://127.0.0.1:8741/ws",
+        "--ws-token",
+        "ROME_V4_SECURE_TOKEN",
         "-p"
       ],
       "timeout": 300,
       "min_version": "2.0",
-      "_note": "Mistral Vibe CLI — -p must be last, requires PYTHONPATH=/home/paul-kane/projects/mistral-cli"
+      "_note": "Mistral Vibe CLI \u2014 -p must be last, requires PYTHONPATH=/home/paul-kane/projects/mistral-cli"
     }
   },
   "protocol_version": "1.0"

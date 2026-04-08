@@ -141,7 +141,6 @@ async def test_execute_legion_invalid_capability():
         task_id="TEST_INVALID",
         capability="NONEXISTENT",
         args=["echo", "hi"],
-        ctx=None,
     )
     assert r["ok"] is False
     assert "not found" in r["message"]

@@ -19,7 +19,7 @@ from aaak.recall import recall, recall_raw
 
 
 # Load config from dictator/config.json
-_CFG_PATH = Path(__file__).parent.parent / "dictator" / "config.json"
+_CFG_PATH = Path(__file__).resolve().parent.parent / "dictator" / "config.json"
 _cfg: dict[str, Any] = {}
 if _CFG_PATH.exists():
     try:
@@ -75,13 +75,29 @@ class AAAK:
         raw_state = {"prompt": prompt, "facts": facts}
         return distill(raw_state, goal or prompt[:100])
 
-    def post_result(self, manifest: dict[str, Any], task_description: str = "") -> dict[str, Any]:
+    def post_result(
+        self,
+        manifest: dict[str, Any],
+        task_description: str = "",
+        broadcast_fn=None,
+    ) -> dict[str, Any]:
         """Hook 3: After worker returns — compress and store fact.
 
-        Returns the compressed fact dict.
+        Returns the compressed fact dict, or an empty dict if the task failed.
         """
         fact = compress(manifest, task_description)
+        
+        # FIX 3: Do not store failures in the fact store
+        if fact.get("status") != "SUCCESS":
+            return {}
+
         self.store.save(fact)
+
+        if broadcast_fn is not None:
+            try:
+                broadcast_fn({"type": "facts_broadcast", "payload": {"fact": fact}})
+            except Exception:
+                pass
         return fact
 
     def guard_prompt(self, prompt: str, goal: str = "") -> str:
@@ -98,13 +114,6 @@ class AAAK:
         return distill(raw_state, goal or prompt[:100])
 
 
-# Module-level singleton for simple usage
-_default: AAAK | None = None
-
-
 def get_aaak(prefix: str = "default") -> AAAK:
-    """Get or create the default AAAK instance."""
-    global _default
-    if _default is None or _default.store._path.stem != prefix:
-        _default = AAAK(prefix=prefix)
-    return _default
+    """Create a fresh AAAK instance for the given prefix."""
+    return AAAK(prefix=prefix)

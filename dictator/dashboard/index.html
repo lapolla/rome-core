@@ -3,1458 +3,378 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>ROME Dashboard</title>
+    <title>ROME — Mesh Intelligence</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@500;700&display=swap" rel="stylesheet">
     <style>
       :root {
-        --bg: #08111b;
-        --bg-alt: #0e1a27;
-        --panel: rgba(14, 26, 39, 0.92);
-        --panel-strong: rgba(20, 34, 49, 0.98);
-        --border: #223243;
-        --border-strong: #33506a;
-        --text: #d7e3ee;
-        --muted: #8da2b6;
-        --accent: #4dc1ff;
-        --registered: #687585;
-        --running: #3da4ff;
-        --success: #3ddc97;
-        --failed: #ff5f56;
-        --warn: #ffb347;
-        --shadow: 0 22px 60px rgba(0, 0, 0, 0.35);
-        --radius: 16px;
-        --radius-sm: 10px;
-        --grid-gap: 14px;
-        --font: "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        --bg: #05070a;
+        --grid-line: rgba(255, 255, 255, 0.03);
+        --panel: rgba(13, 17, 23, 0.8);
+        --border: rgba(255, 255, 255, 0.08);
+        --accent: #38bdf8;
+        --text: #f1f5f9;
+        --text-dim: #64748b;
+        --success: #10b981;
+        --failed: #f43f5e;
+        --running: #3b82f6;
+        --registered: #475569;
+        --radius: 8px;
       }
 
-      * {
-        box-sizing: border-box;
+      * { box-sizing: border-box; }
+      html, body { 
+        margin: 0; padding: 0; height: 100%; 
+        background: var(--bg);
+        /* Subtle Imperial Alignment Grid */
+        background-image: 
+          linear-gradient(var(--grid-line) 1px, transparent 1px),
+          linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+        background-size: 40px 40px;
+        color: var(--text); 
+        font-family: 'IBM Plex Sans', sans-serif;
+        overflow: hidden;
       }
 
-      html,
-      body {
-        margin: 0;
-        min-height: 100%;
-        background:
-          radial-gradient(circle at top right, rgba(77, 193, 255, 0.15), transparent 28%),
-          radial-gradient(circle at left 20%, rgba(61, 220, 151, 0.12), transparent 24%),
-          linear-gradient(180deg, #07101a 0%, #08111b 45%, #050a11 100%);
-        color: var(--text);
-        font-family: var(--font);
-      }
-
-      body {
-        padding: 20px;
-      }
-
-      .shell {
+      .app {
         display: grid;
-        gap: 16px;
-        max-width: 1600px;
-        margin: 0 auto;
+        grid-template-rows: 80px 120px 1fr;
+        height: 100vh;
+        padding: 32px;
+        gap: 24px;
       }
 
-      .panel {
+      /* Alignment & Header */
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 16px;
+      }
+      .brand h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.1em; color: #fff; }
+      .brand p { margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--text-dim); font-weight: 600; }
+
+      .sys-info { display: flex; gap: 12px; }
+      .chip {
+        background: rgba(0,0,0,0.5);
+        border: 1px solid var(--border);
+        padding: 6px 14px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 700;
+        font-family: 'IBM Plex Mono', monospace;
+        color: var(--text-dim);
+      }
+      .chip span { color: #fff; }
+
+      /* Rigid Stats Grid */
+      .stats-row {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 20px;
+      }
+      .stat-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        padding: 20px;
+        border-radius: var(--radius);
+        backdrop-filter: blur(10px);
+      }
+      .stat-card label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--text-dim); font-weight: 700; display: block; margin-bottom: 8px; }
+      .stat-card .val { font-size: 24px; font-weight: 700; font-family: 'IBM Plex Mono', monospace; color: var(--accent); }
+
+      /* Main Pipeline Grid */
+      .main {
+        display: grid;
+        grid-template-columns: 1fr 360px;
+        gap: 24px;
+        min-height: 0;
+      }
+
+      .box {
         background: var(--panel);
         border: 1px solid var(--border);
         border-radius: var(--radius);
-        box-shadow: var(--shadow);
-        backdrop-filter: blur(16px);
-      }
-
-      .topbar {
-        display: grid;
-        grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
-        gap: 16px;
-        padding: 18px;
-      }
-
-      .title-wrap {
-        display: grid;
-        gap: 10px;
-      }
-
-      h1 {
-        margin: 0;
-        font-size: 24px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .subtitle {
-        color: var(--muted);
-        font-size: 12px;
-        line-height: 1.5;
-      }
-
-      .status-strip {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-      }
-
-      .chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        min-height: 34px;
-        padding: 0 12px;
-        border: 1px solid var(--border);
-        border-radius: 999px;
-        background: rgba(6, 14, 24, 0.66);
-        color: var(--text);
-        font-size: 12px;
-      }
-
-      .dot {
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        background: var(--muted);
-        box-shadow: 0 0 14px currentColor;
-      }
-
-      .controls {
-        display: grid;
-        gap: 12px;
-        align-content: start;
-      }
-
-      .control-label {
-        color: var(--muted);
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-      }
-
-      .control-row {
-        display: flex;
-        gap: 10px;
-      }
-
-      input {
-        width: 100%;
-        min-width: 0;
-        padding: 11px 12px;
-        color: var(--text);
-        background: rgba(5, 12, 20, 0.95);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        font: inherit;
-      }
-
-      input:focus {
-        outline: none;
-        border-color: var(--accent);
-        box-shadow: 0 0 0 3px rgba(77, 193, 255, 0.18);
-      }
-
-      button {
-        padding: 11px 14px;
-        border: 1px solid #2a6787;
-        border-radius: 10px;
-        background: linear-gradient(180deg, #12354a 0%, #0b2433 100%);
-        color: #dff5ff;
-        font: inherit;
-        cursor: pointer;
-      }
-
-      button:hover {
-        border-color: #3e91bc;
-      }
-      
-      button:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-      }
-
-      .hint {
-        color: var(--muted);
-        font-size: 11px;
-        line-height: 1.5;
-      }
-
-      .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-        gap: 12px;
-        padding: 0 18px 18px;
-      }
-
-      .stat {
-        padding: 14px;
-        border: 1px solid var(--border);
-        border-radius: 14px;
-        background: linear-gradient(180deg, rgba(8, 18, 29, 0.95) 0%, rgba(8, 14, 22, 0.95) 100%);
         display: flex;
         flex-direction: column;
-        justify-content: center;
-      }
-
-      .stat-label {
-        color: var(--muted);
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-      }
-
-      .stat-value {
-        margin-top: 8px;
-        font-size: 26px;
-        line-height: 1;
-      }
-
-      .cards-panel {
-        padding: 18px;
-      }
-
-      .section-title {
-        margin: 0 0 14px;
-        color: var(--muted);
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-      }
-
-      .cards {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-        gap: var(--grid-gap);
-      }
-
-      .empty-state {
-        padding: 28px;
-        border: 1px dashed var(--border);
-        border-radius: var(--radius-sm);
-        color: var(--muted);
-        text-align: center;
-        background: rgba(5, 12, 20, 0.7);
-      }
-
-      .card {
-        display: grid;
-        gap: 14px;
-        padding: 16px;
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        background: linear-gradient(180deg, rgba(11, 22, 34, 0.98), rgba(7, 14, 22, 0.98));
-        position: relative;
         overflow: hidden;
-        cursor: pointer;
-        transition: transform 150ms ease, box-shadow 150ms ease;
+        backdrop-filter: blur(10px);
       }
 
-      .card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-      }
-
-      .card::before {
-        content: "";
-        position: absolute;
-        inset: 0 auto 0 0;
-        width: 4px;
-        background: var(--card-accent, var(--registered));
-      }
-
-      .card-top,
-      .meta-row,
-      .usage-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-      }
-
-      .task-id {
-        font-size: 15px;
-        font-weight: 600;
-        word-break: break-word;
-      }
-
-      .capability {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .badge {
-        padding: 6px 9px;
-        border: 1px solid currentColor;
-        border-radius: 999px;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        white-space: nowrap;
-      }
-
-      .progress-block {
-        display: grid;
-        gap: 8px;
-      }
-
-      .progress-meta {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      .progress-track {
-        height: 10px;
-        overflow: hidden;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.05);
-      }
-
-      .progress-fill {
-        height: 100%;
-        width: 0%;
-        border-radius: inherit;
-        background: linear-gradient(90deg, rgba(61, 164, 255, 0.6), rgba(77, 193, 255, 0.95));
-        transition: width 180ms ease;
-      }
-
-      .card.expanded {
-        grid-column: 1 / -1;
-        transform: none !important;
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
-      }
-
-      .task-details {
-        display: grid;
-        gap: 8px;
-        animation: slideDown 200ms ease-out;
-      }
-
-      @keyframes slideDown {
-        from { opacity: 0; transform: translateY(-10px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
-
-      .detail-row {
-        display: flex;
-        gap: 8px;
-        color: var(--text);
-      }
-
-      .detail-row strong {
-        color: var(--muted);
-        min-width: 70px;
-      }
-
-      .path-link:hover {
-        text-decoration: underline;
-      }
-
-      .detail-json pre {
-        font-size: 11px;
-        color: #a5d6ff;
-        tab-size: 2;
-      }
-
-      .message {
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.4;
-      }
-
-      .meta-row,
-      .usage-row {
-        font-size: 11px;
-        color: var(--muted);
-      }
-
-      .mono-strong {
-        color: var(--text);
-      }
-
-      .log-panel {
-        padding: 18px;
-      }
-
-      .log-header {
-        cursor: pointer;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin: 0 0 14px;
-        color: var(--muted);
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        user-select: none;
-      }
-      
-      .log-header:hover {
-        color: var(--text);
-      }
-
-      .log-panel.collapsed .log-list {
-        display: none;
-      }
-
-      .log-panel.collapsed .log-header {
-        margin: 0;
-      }
-
-      .log-list {
-        display: grid;
-        gap: 8px;
-        max-height: 320px;
-        overflow: auto;
-      }
-
-      .log-item {
-        display: grid;
-        grid-template-columns: 96px 140px minmax(0, 1fr);
-        gap: 12px;
-        padding: 10px 12px;
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        background: rgba(4, 10, 17, 0.78);
-        font-size: 12px;
-      }
-
-      .log-time,
-      .log-type {
-        color: var(--muted);
-      }
-
-      .log-message {
-        word-break: break-word;
-      }
-
-      /* Modal Styles */
-      .modal-overlay {
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.7);
-        backdrop-filter: blur(4px);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 1000;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 200ms ease;
-      }
-
-      .modal-overlay.active {
-        opacity: 1;
-        pointer-events: auto;
-      }
-
-      .modal-content {
-        background: var(--panel-strong);
-        border: 1px solid var(--border-strong);
-        border-radius: var(--radius);
-        box-shadow: var(--shadow);
-        width: 90%;
-        max-width: 1000px;
-        max-height: 90vh;
-        display: flex;
-        flex-direction: column;
-      }
-
-      .modal-header {
-        padding: 18px;
+      .box-header {
+        padding: 16px 24px;
+        background: rgba(255,255,255,0.02);
         border-bottom: 1px solid var(--border);
         display: flex;
         justify-content: space-between;
         align-items: center;
       }
+      .box-header h2 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--text-dim); }
 
-      .modal-title {
-        margin: 0;
-        font-size: 18px;
-        font-weight: 600;
+      .scroll { flex: 1; overflow-y: auto; padding: 24px; }
+      .scroll::-webkit-scrollbar { width: 4px; }
+      .scroll::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 10px; }
+
+      /* Causal Task Cards */
+      .task-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+        gap: 16px;
       }
-
-      .modal-close {
-        background: transparent;
-        border: none;
-        color: var(--muted);
-        font-size: 24px;
-        cursor: pointer;
-        padding: 0;
-        line-height: 1;
-      }
-
-      .modal-close:hover {
-        color: var(--text);
-      }
-
-      .modal-body {
-        padding: 18px;
-        overflow: auto;
-      }
-
-      .modal-body pre {
-        margin: 0;
-        white-space: pre-wrap;
-        word-wrap: break-word;
-        font-family: var(--font);
-        font-size: 13px;
-        color: #c4d4e1;
-      }
-
-      [data-state="connected"] .dot {
-        color: var(--success);
-        background: var(--success);
-      }
-
-      [data-state="connecting"] .dot {
-        color: var(--warn);
-        background: var(--warn);
-      }
-
-      [data-state="disconnected"] .dot,
-      [data-state="error"] .dot {
-        color: var(--failed);
-        background: var(--failed);
-      }
-
-      .status-registered { color: var(--registered); }
-      .status-running { color: var(--running); }
-      .status-success,
-      .status-completed { color: var(--success); }
-      .status-failed,
-      .status-error,
-      .status-cancelled { color: var(--failed); }
-      .status-expired { color: var(--registered); opacity: 0.5; }
-
-      .peers-grid {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        padding: 14px 18px 18px;
-      }
-
-      .peer-card {
+      .card {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 20px;
+        position: relative;
         display: flex;
         flex-direction: column;
-        gap: 6px;
-        padding: 12px 14px;
-        border: 1px solid var(--border);
-        border-radius: var(--radius-sm);
-        background: rgba(4, 10, 17, 0.78);
-        font-size: 12px;
-        min-width: 200px;
-        flex: 1 1 200px;
-        max-width: 320px;
         transition: border-color 0.2s;
+        cursor: pointer;
+      }
+      .card:hover { border-color: var(--accent); }
+      .card::before {
+        content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+        background: var(--status-color, var(--registered));
       }
 
-      .peer-card.a2a {
-        border-color: var(--accent);
-        box-shadow: 0 0 12px rgba(77, 193, 255, 0.15);
-      }
+      .card-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+      .task-id { font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 700; color: var(--text-dim); }
+      .cap-badge { font-size: 10px; font-weight: 800; background: rgba(0,0,0,0.3); padding: 2px 8px; border-radius: 4px; color: var(--accent); border: 1px solid rgba(56, 189, 248, 0.2); }
 
-      .peer-card.busy {
-        border-color: var(--running);
-      }
+      .goal { font-size: 14px; font-weight: 700; color: #fff; line-height: 1.4; margin-bottom: 4px; }
+      .intent { font-size: 12px; color: var(--text-dim); margin-bottom: 12px; font-style: italic; }
+      .cause { font-size: 11px; color: var(--failed); background: rgba(244, 63, 94, 0.1); padding: 6px 10px; border-radius: 4px; margin-top: auto; border: 1px solid rgba(244, 63, 94, 0.2); }
 
-      .peer-top {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-      }
+      .prog-bar { height: 3px; background: rgba(255,255,255,0.05); border-radius: 2px; margin: 12px 0; overflow: hidden; }
+      .prog-fill { height: 100%; background: var(--status-color, var(--running)); transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
 
-      .peer-cap {
-        font-weight: 600;
-        font-size: 13px;
-        color: var(--text);
-        letter-spacing: 0.05em;
-      }
+      .card-foot { display: flex; justify-content: space-between; font-size: 10px; font-weight: 700; font-family: 'IBM Plex Mono', monospace; color: var(--text-dim); text-transform: uppercase; }
 
-      .peer-badge {
-        font-size: 10px;
-        padding: 2px 7px;
-        border-radius: 6px;
-        font-weight: 700;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-      }
+      /* Signal Stream */
+      .log-line { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.02); font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
+      .log-line .ts { color: var(--registered); flex-shrink: 0; }
+      .log-line .tag { color: var(--accent); flex-shrink: 0; font-weight: 700; width: 60px; }
+      .log-line .msg { color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-      .peer-badge.a2a { background: rgba(77,193,255,0.18); color: var(--accent); }
-      .peer-badge.busy { background: rgba(61,164,255,0.18); color: var(--running); }
-      .peer-badge.idle { background: rgba(61,220,151,0.12); color: var(--success); }
+      /* Overlay */
+      .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(10px); display: none; align-items: center; justify-content: center; z-index: 1000; }
+      .overlay.active { display: flex; }
+      .modal { width: 90%; max-width: 900px; max-height: 80vh; background: #0c0f16; border: 1px solid var(--border-hover); border-radius: 12px; display: flex; flex-direction: column; box-shadow: 0 40px 100px rgba(0,0,0,0.8); }
+      .modal-body { padding: 32px; overflow-y: auto; flex: 1; }
+      .modal-body pre { margin: 0; white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #cbd5e1; font-family: 'IBM Plex Mono', monospace; }
 
-      .peer-meta {
-        color: var(--muted);
-        font-size: 11px;
-        word-break: break-all;
-      }
-
-      .peers-empty {
-        color: var(--muted);
-        font-size: 13px;
-        padding: 14px 18px 18px;
-      }
-
-      @media (max-width: 980px) {
-        .topbar,
-        .stats-grid {
-          grid-template-columns: 1fr;
-        }
-
-        .log-item {
-          grid-template-columns: 1fr;
-          gap: 4px;
-        }
-      }
+      button { cursor: pointer; border: none; font-family: inherit; font-weight: 700; }
+      .btn-reset { background: rgba(244, 63, 94, 0.1); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.2); padding: 8px 16px; border-radius: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; }
+      .btn-reset:hover { background: rgba(244, 63, 94, 0.2); }
     </style>
   </head>
   <body>
-    <main class="shell">
-      <section class="panel">
-        <div class="topbar">
-          <div class="title-wrap">
-            <h1 id="dashTitle">ROME Dashboard</h1>
-            <div class="subtitle">Operational task view for the Dictator daemon. Snapshot loads via `status`, then cards update from the live event stream.</div>
-            <div class="status-strip">
-              <div class="chip" id="wsChip" data-state="connecting">
-                <span class="dot"></span>
-                <span id="wsLabel">WS CONNECTING</span>
-              </div>
-              <div class="chip">
-                <span>UPTIME</span>
-                <span id="uptimeLabel">--</span>
-              </div>
-              <div class="chip">
-                <span>HOST</span>
-                <span id="hostLabel">--</span>
-              </div>
-            </div>
+    <div class="app">
+      <header class="header">
+        <div class="brand">
+          <h1 id="dashTitle">ROME Dashboard</h1>
+          <p>Autonomous Mesh Intelligence · Sovereign Command</p>
+        </div>
+        <div class="sys-info">
+          <div class="chip">UPTIME: <span id="uptime">--</span></div>
+          <div class="chip">WS: <span id="wsStatus">...</span></div>
+          <button class="btn-reset" onclick="meshReset()">PURGE SESSION</button>
+        </div>
+      </header>
+
+      <section class="stats-row">
+        <div class="stat-card"><label>Session Cost</label><div class="val" id="statCost">$0.0000</div></div>
+        <div class="stat-card"><label>Throughput</label><div class="val" id="statThroughput">0 tasks/min</div></div>
+        <div class="stat-card"><label>Mesh Workers</label><div class="val" id="statWorkers">0 active</div></div>
+        <div class="stat-card"><label>Token Volume</label><div class="val" id="statTokens">0</div></div>
+      </section>
+
+      <div class="main">
+        <div class="box">
+          <div class="box-header">
+            <h2>Active Causal Pipeline</h2>
+            <div id="caps" style="display:flex; gap:8px;"></div>
+          </div>
+          <div class="scroll">
+            <div class="task-grid" id="taskGrid"></div>
           </div>
         </div>
-        <div class="stats-grid">
-          <div class="stat">
-            <div class="stat-label">Session Cost</div>
-            <div class="stat-value" id="sessionCost">--</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Throughput</div>
-            <div class="stat-value" id="throughput">--</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Workers</div>
-            <div class="stat-value" id="workerCount">0 active</div>
-          </div>
 
-          <div class="stat">
-            <div class="stat-label">Tokens</div>
-            <div class="stat-value" id="totalTokens" style="font-size:1.1rem">0</div>
-            <div style="font-size:0.7rem;color:var(--text-dim);margin-top:2px"><span id="workerTokensLabel">0</span> workers / <span id="dictatorTokensLabel">0</span> dictator</div>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel" id="peersPanel">
-        <h2 class="section-title" style="padding: 14px 18px 0; margin: 0;">A2A Peers</h2>
-        <div id="peersGrid" class="peers-grid"></div>
-      </section>
-
-      <section class="panel cards-panel">
-        <h2 class="section-title">Tasks</h2>
-        <div id="cards" class="cards"></div>
-      </section>
-
-      <section class="panel log-panel collapsed" id="logPanel">
-        <h2 class="log-header" id="logHeader">
-          <span>Event Log (<span id="logHeaderCount">0</span>)</span>
-          <span id="logToggleIcon">▼</span>
-        </h2>
-        <div id="eventLog" class="log-list"></div>
-      </section>
-    </main>
-
-    <div id="reportModal" class="modal-overlay">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h2 id="modalTitle" class="modal-title">Task Report</h2>
-          <button id="modalClose" class="modal-close">&times;</button>
-        </div>
-        <div class="modal-body">
-          <pre id="modalBodyContent">Loading...</pre>
+        <div class="box">
+          <div class="box-header"><h2>Mesh Signal Stream</h2><span id="logCount" class="chip">0</span></div>
+          <div class="scroll" id="logStream"></div>
         </div>
       </div>
     </div>
 
+    <div id="modal" class="overlay" onclick="this.classList.remove('active')">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div class="box-header"><h2 id="modalTitle">REPORT</h2><button class="btn-reset" style="color:var(--text-dim)" onclick="document.getElementById('modal').classList.remove('active')">CLOSE</button></div>
+        <div class="modal-body"><pre id="modalContent"></pre></div>
+      </div>
+    </div>
+
     <script>
-      (function () {
-        const cardsEl = document.getElementById("cards");
-        const eventLogEl = document.getElementById("eventLog");
-        const wsChip = document.getElementById("wsChip");
-        const wsLabel = document.getElementById("wsLabel");
-
-        const uptimeLabel = document.getElementById("uptimeLabel");
-        const hostLabel = document.getElementById("hostLabel");
-        const activeTasksEl = document.getElementById("activeTasks");
-        const totalTasksEl = document.getElementById("totalTasks");
-        const runningTasksEl = document.getElementById("runningTasks");
-        const eventCountEl = document.getElementById("eventCount");
-        const totalTokensEl = document.getElementById("totalTokens");
-        const sessionCostEl = document.getElementById("sessionCost");
-        const throughputEl = document.getElementById("throughput");
-        const workerCountEl = document.getElementById("workerCount");
-        const capabilitiesStripEl = document.getElementById("capabilitiesStrip");
-
-        const logPanel = document.getElementById("logPanel");
-        const logHeader = document.getElementById("logHeader");
-        const logHeaderCount = document.getElementById("logHeaderCount");
-        const logToggleIcon = document.getElementById("logToggleIcon");
-
-        const reportModal = document.getElementById("reportModal");
-        const modalTitle = document.getElementById("modalTitle");
-        const modalBodyContent = document.getElementById("modalBodyContent");
-        const modalClose = document.getElementById("modalClose");
-
-        const state = {
-          socket: null,
-          reconnectTimer: null,
-          statusTimer: null,
-          clockTimer: null,
-          requestId: 0,
-          eventsSeen: 0,
-          dictatorTokens: 0,
-          workerTokens: 0,
-          daemonStatus: null,
-          tasks: new Map(),
-          logs: [],
-          lastLogKey: null,
-          lastLogTs: 0,
-          capabilities: {},
-          daemonCapabilities: [],
-          expandedTasks: {},
-          tokenCostRate: 0.000015, // fallback only — real cost comes from session_cost_usd
-          completedTasksHistory: [], // To track completed tasks for throughput
-          workers: []
+      (function() {
+        const state = { socket: null, tasks: new Map(), logs: [], history: [], workers: [], cost: 0, tokens: 0 };
+        const els = {
+          grid: document.getElementById('taskGrid'),
+          logs: document.getElementById('logStream'),
+          cost: document.getElementById('statCost'),
+          throughput: document.getElementById('statThroughput'),
+          workers: document.getElementById('statWorkers'),
+          tokens: document.getElementById('statTokens'),
+          ws: document.getElementById('wsStatus'),
+          uptime: document.getElementById('uptime'),
+          modal: document.getElementById('modal'),
+          modalTitle: document.getElementById('modalTitle'),
+          modalContent: document.getElementById('modalContent')
         };
 
-        hostLabel.textContent = window.location.host || "localhost";
-
-        logHeader.addEventListener("click", function() {
-          logPanel.classList.toggle("collapsed");
-          if (logPanel.classList.contains("collapsed")) {
-            logToggleIcon.textContent = "▼";
-          } else {
-            logToggleIcon.textContent = "▲";
-          }
-        });
-
-        function escapeHtml(value) {
-          return String(value == null ? "" : value)
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#39;");
+        function formatTime(s) {
+          if (!s) return "0s";
+          if (s < 60) return s.toFixed(0) + "s";
+          const m = Math.floor(s / 60);
+          const h = Math.floor(m / 60);
+          if (h > 0) return `${h}h ${m%60}m`;
+          return `${m}m ${Math.floor(s%60)}s`;
         }
 
-        function formatDuration(seconds) {
-          if (!Number.isFinite(seconds) || seconds < 0) {
-            return "--";
-          }
-          if (seconds < 60) {
-            return seconds.toFixed(1) + "s";
-          }
-          const mins = Math.floor(seconds / 60);
-          const secs = Math.floor(seconds % 60);
-          if (mins < 60) {
-            return mins + "m " + secs + "s";
-          }
-          const hours = Math.floor(mins / 60);
-          return hours + "h " + (mins % 60) + "m";
-        }
-
-        function formatTimestamp(ts) {
-          if (!Number.isFinite(ts)) {
-            return "--";
-          }
-          return new Date(ts * 1000).toLocaleTimeString();
-        }
-
-        function formatNumber(value) {
-          const n = Number(value);
-          return Number.isFinite(n) ? n.toLocaleString() : "--";
-        }
-
-        function formatCurrency(value) {
-          const n = Number(value);
-          if (!Number.isFinite(n)) {
-            return "--";
-          }
-          return "$" + n.toFixed(4);
-        }
-
-        function formatUsage(usage) {
-          const data = usage || {};
-          const total = Number(data.total_tokens);
-          const inTokens = Number(data.input_tokens);
-          const outTokens = Number(data.output_tokens);
-
-          let tokenText = "--";
-          if (Number.isFinite(total) && total > 0) {
-            tokenText = formatNumber(total) + " tok";
-          } else if ((Number.isFinite(inTokens) && inTokens > 0) || (Number.isFinite(outTokens) && outTokens > 0)) {
-            tokenText = formatNumber(inTokens || 0) + " in / " + formatNumber(outTokens || 0) + " out";
-          }
-
-          return { tokenText };
-        }
-
-        function canonicalStatus(status) {
-          const raw = String(status || "registered").trim();
-          const lower = raw.toLowerCase();
-          if (lower === "success") {
-            return "SUCCESS";
-          }
-          if (lower === "failed") {
-            return "FAILED";
-          }
-          if (lower === "completed") {
-            return "completed";
-          }
-          if (lower === "cancelled") {
-            return "cancelled";
-          }
-          if (lower === "expired") {
-            return "expired";
-          }
-          if (lower === "running") {
-            return "running";
-          }
-          return "registered";
-        }
-
-        function statusClass(status) {
-          const lower = String(status || "").toLowerCase();
-          if (lower === "success") {
-            return "status-success";
-          }
-          if (lower === "failed") {
-            return "status-failed";
-          }
-          if (lower === "completed") {
-            return "status-completed";
-          }
-          if (lower === "cancelled") {
-            return "status-cancelled";
-          }
-          if (lower === "expired") {
-            return "status-expired";
-          }
-          if (lower === "running") {
-            return "status-running";
-          }
-          return "status-registered";
-        }
-
-        function statusColor(status) {
-          const lower = String(status || "").toLowerCase();
-          if (lower === "success" || lower === "completed") {
-            return "var(--success)";
-          }
-          if (lower === "failed" || lower === "cancelled") {
-            return "var(--failed)";
-          }
-          if (lower === "running") {
-            return "var(--running)";
-          }
+        function getColor(status) {
+          const s = String(status || "").toLowerCase();
+          if (s === "success" || s === "completed") return "var(--success)";
+          if (s === "failed" || s === "error" || s === "cancelled") return "var(--failed)";
+          if (s === "running") return "var(--running)";
           return "var(--registered)";
         }
 
-        function addLog(kind, taskId, message, ts) {
-          const eventTs = Number.isFinite(ts) ? ts : Date.now() / 1000;
-          const logKey = [String(kind || "event"), taskId || "-", String(message || "")].join("::");
-          if (state.lastLogKey === logKey && Math.abs(eventTs - state.lastLogTs) < 2) {
-            return;
-          }
-          state.lastLogKey = logKey;
-          state.lastLogTs = eventTs;
-          state.logs.unshift({
-            kind: String(kind || "event"),
-            taskId: taskId || "-",
-            message: String(message || ""),
-            ts: eventTs
-          });
-          state.logs = state.logs.slice(0, 20);
-          renderLogs();
-        }
-
-        function shouldLogEvent(type) {
-          return type !== "progress" && type !== "cost_update" && type !== "heartbeat";
-        }
-
-        function renderLogs() {
-          if (!state.logs.length) {
-            eventLogEl.innerHTML = '<div class="empty-state">No events received yet.</div>';
-            return;
-          }
-          eventLogEl.innerHTML = state.logs.map(function (entry) {
-            return (
-              '<div class="log-item">' +
-                '<div class="log-time">' + escapeHtml(formatTimestamp(entry.ts)) + '</div>' +
-                '<div class="log-type">' + escapeHtml(entry.kind + " :: " + entry.taskId) + '</div>' +
-                '<div class="log-message">' + escapeHtml(entry.message) + '</div>' +
-              '</div>'
-            );
-          }).join("");
-        }
-
-        function toggleTask(taskId) {
-          state.expandedTasks[taskId] = !state.expandedTasks[taskId];
-          renderTasks();
-        }
-
-        function upsertTask(taskId, patch) {
-          const existing = state.tasks.get(taskId) || {
-            task_id: taskId,
-            capability: "UNKNOWN",
-            status: "registered",
-            progress_percent: 0,
-            progress_message: "",
-            usage: {},
-            report_path: null,
-            created_at: Date.now() / 1000,
-            updated_at: Date.now() / 1000
-          };
-          const merged = Object.assign({}, existing, patch || {});
-          merged.task_id = merged.task_id || taskId;
-          merged.usage = Object.assign({}, existing.usage || {}, (patch && patch.usage) || {});
-          merged.status = canonicalStatus(merged.status);
-          merged.progress_percent = Math.max(0, Math.min(100, Number(merged.progress_percent) || 0));
-          merged.created_at = Number(merged.created_at) || existing.created_at || Date.now() / 1000;
-          merged.updated_at = Number(merged.updated_at) || Date.now() / 1000;
-          state.tasks.set(taskId, merged);
-
-          // If task just completed, add to history for throughput calculation
-          const oldStatus = canonicalStatus(existing.status);
-          const newStatus = canonicalStatus(merged.status);
-          const isFinished = (s) => (s === "SUCCESS" || s === "completed" || s === "FAILED");
-          
-          if (!isFinished(oldStatus) && isFinished(newStatus)) {
-            state.completedTasksHistory.push(Date.now());
-          }
-
-          renderTasks();
-        }
-
-        function handleSnapshot(tasks) {
-          state.tasks.clear(); // Clear existing tasks before populating from snapshot
-          const entries = tasks || {};
-          Object.keys(entries).forEach(function (taskId) {
-            upsertTask(taskId, entries[taskId]);
-          });
-        }
-
-        function handleEventEnvelope(event) {
-          state.eventsSeen += 1;
-          const payload = event && event.payload ? event.payload : {};
-          const taskId = event ? event.task_id : null;
-          const ts = event && Number.isFinite(event.ts) ? event.ts : Date.now() / 1000;
-          const type = event ? event.type : "event";
-
-          if (type === "heartbeat") {
-            renderStats();
-            return;
-          }
-
-          if (type === "agent_hello" || type === "daemon_hello") {
-            state.daemonCapabilities = payload.capabilities || [];
-            state.capabilities = {}; // Reset capabilities status on new hello
-            state.daemonCapabilities.forEach(cap => state.capabilities[cap] = null); // Initialize with null (grey)
-            renderCapabilities();
-            renderStats(); // May impact overall stats
-            return;
-          }
-
-          if (type === "capability_status") {
-            if (state.capabilities.hasOwnProperty(payload.capability)) {
-              state.capabilities[payload.capability] = payload.available;
-              renderCapabilities();
-            }
-            renderStats(); // May impact overall stats
-            return;
-          }
-
-          if (type === "system_status") {
-            // Update daemon uptime, host etc if available
-            if (payload.hasOwnProperty('uptime_s')) {
-                uptimeLabel.textContent = formatDuration(Number(payload.uptime_s));
-            }
-            if (payload.hasOwnProperty('host')) {
-                hostLabel.textContent = payload.host;
-            }
-            renderStats(); // Re-render stats for potentially other dashboard elements
-            return;
-          }
-
-          if (type === "dictator_waste") {
-            const usage = payload.usage || {};
-            state.dictatorTokens += Number(usage.total_tokens || 0);
-            state.sessionCost += Number(usage.cost_usd || 0);
-            renderStats();
-            return;
-          }
-
-          if (!taskId) {
-            if (shouldLogEvent(type)) {
-              addLog(type, "-", JSON.stringify(payload), ts);
-            }
-            renderStats();
-            return;
-          }
-
-          if (type === "dispatch_start") {
-            upsertTask(taskId, {
-              task_id: taskId,
-              capability: payload.capability || "UNKNOWN",
-              status: "registered",
-              progress_message: "Dispatch accepted",
-              updated_at: ts
-            });
-            if (shouldLogEvent(type)) {
-              addLog(type, taskId, "capability=" + (payload.capability || "UNKNOWN"), ts);
-            }
-          } else if (type === "progress") {
-            const existing = state.tasks.get(taskId);
-            const existingStatus = existing ? canonicalStatus(existing.status) : "";
-            const isTerminal = ["SUCCESS", "completed", "FAILED", "cancelled", "expired"].includes(existingStatus);
-            if (!isTerminal) {
-              upsertTask(taskId, {
-                status: "running",
-                progress_percent: payload.percent,
-                progress_message: payload.message || "",
-                updated_at: ts
-              });
-            }
-          } else if (type === "cost_update") {
-            upsertTask(taskId, {
-              usage: payload.usage || {},
-              updated_at: ts
-            });
-          } else if (type === "complete") {
-            const usage = payload.usage || {};
-            state.workerTokens += Number(usage.total_tokens || 0);
-            upsertTask(taskId, {
-              status: payload.status || "SUCCESS",
-              progress_percent: 100,
-              progress_message: payload.report_path || "Task complete",
-              report_path: payload.report_path || null,
-              usage,
-              updated_at: ts
-            });
-            if (shouldLogEvent(type)) {
-              addLog(type, taskId, String(payload.status || "complete"), ts);
-            }
-          } else if (type === "error") {
-            upsertTask(taskId, {
-              status: "FAILED",
-              progress_message: payload.message || "Unknown error",
-              updated_at: ts
-            });
-            if (shouldLogEvent(type)) {
-              addLog(type, taskId, payload.message || "error", ts);
-            }
-          } else {
-            if (shouldLogEvent(type)) {
-              addLog(type, taskId, JSON.stringify(payload), ts);
-            }
-          }
-
-          renderStats();
-        }
-
-        function renderTasks() {
-          const tasks = Array.from(state.tasks.values()).sort(function (a, b) {
-            return Number(b.updated_at || 0) - Number(a.updated_at || 0);
-          });
-          if (!tasks.length) {
-            cardsEl.innerHTML = '<div class="empty-state">No tasks registered. The dashboard will populate after the daemon returns a snapshot or emits events.</div>';
-            renderStats();
-            return;
-          }
-
-          cardsEl.innerHTML = tasks
-            .filter(function(task) {
-              const status = (task.status || "").toLowerCase();
-              return status !== "expired";
-            })
-            .map(function (task) {
-            const status = canonicalStatus(task.status);
-            const isExpanded = !!state.expandedTasks[task.task_id];
-            const percent = Math.max(0, Math.min(100, Number(task.progress_percent) || 0));
-            const usageBits = formatUsage(task.usage);
-            const createdAt = Number(task.created_at) || Number(task.updated_at) || Date.now() / 1000;
-            const lastUpdate = Number(task.updated_at) || createdAt;
-            const elapsed = formatDuration((status === "SUCCESS" || status === "FAILED" || status === "completed" || status === "cancelled" || status === "expired" ? lastUpdate : Date.now() / 1000) - createdAt);
-            const cardColor = statusColor(status);
-            
-            var retryHtml = "";
-            if (status === "FAILED") {
-              retryHtml = '<button type="button" class="retry-btn" style="margin-left: 8px; font-size: 11px; padding: 4px 8px;">Retry</button>';
-            }
-
-            var dispatchBadge = "";
-            var dm = task.dispatch_mode || "";
-            if (dm === "a2a") {
-              dispatchBadge = '<span class="peer-badge a2a" style="font-size:10px;padding:2px 6px;border-radius:5px;margin-left:4px;">A2A</span>';
-            } else if (dm === "native") {
-              dispatchBadge = '<span class="peer-badge" style="font-size:10px;padding:2px 6px;border-radius:5px;margin-left:4px;background:rgba(61,220,151,0.12);color:var(--success);">NATIVE</span>';
-            } else if (dm === "persistent_worker") {
-              dispatchBadge = '<span class="peer-badge" style="font-size:10px;padding:2px 6px;border-radius:5px;margin-left:4px;background:rgba(255,179,71,0.12);color:var(--warn);">WORKER</span>';
-            }
-
-            let detailsHtml = "";
-            if (isExpanded) {
-                detailsHtml = `
-                    <div class="task-details" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 11px;">
-                        <div class="detail-row"><strong>Created:</strong> ${formatTimestamp(createdAt)}</div>
-                        <div class="detail-row"><strong>Updated:</strong> ${formatTimestamp(lastUpdate)}</div>
-                        ${task.report_path ? `
-                            <div class="detail-row"><strong>Report:</strong> <span class="path-link" onclick="openReport('${task.report_path}')" style="color: var(--accent); cursor: pointer;">${escapeHtml(task.report_path)}</span></div>
-                        ` : ''}
-                        <div class="detail-json" style="margin-top: 8px; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px; overflow-x: auto;">
-                            <pre style="margin: 0; font-family: monospace; white-space: pre-wrap;">${escapeHtml(JSON.stringify(task, null, 2))}</pre>
-                        </div>
-                    </div>
-                `;
-            }
-
-            return (
-              '<article class="card ' + (isExpanded ? 'expanded' : '') + '" data-task-id="' + escapeHtml(task.task_id) + '" onclick="toggleTask(\'' + escapeHtml(task.task_id) + '\')" style="--card-accent:' + cardColor + '; cursor: pointer;">' +
-                '<div class="card-top">' +
-                  '<div>' +
-                    '<div class="task-id">' + escapeHtml(task.task_id) + '</div>' +
-                    '<div class="capability" style="display:flex;align-items:center;gap:4px;">' + escapeHtml(task.capability || "UNKNOWN") + dispatchBadge + '</div>' +
-                  '</div>' +
-                  '<div style="display:flex; align-items:center;">' +
-                    '<div class="badge ' + statusClass(status) + '">' + escapeHtml(status) + '</div>' +
-                    retryHtml +
-                  '</div>' +
-                '</div>' +
-                '<div class="progress-block">' +
-                  '<div class="progress-meta">' +
-                    '<span>' + escapeHtml(percent.toFixed(0) + "%") + '</span>' +
-                    '<span>' + escapeHtml(elapsed) + '</span>' +
-                  '</div>' +
-                  '<div class="progress-track">' +
-                    '<div class="progress-fill" style="width:' + percent + '%; background:' + cardColor + ';"></div>' +
-                  '</div>' +
-                '</div>' +
-                (isExpanded ? '' : '<div class="message" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(task.progress_message || task.report_path || "Awaiting events") + '</div>') +
-                detailsHtml +
-              '</article>'
-            );
-          }).join("");
-
-          renderStats();
+        function addLog(type, tid, msg) {
+          state.logs.unshift({ ts: Date.now(), type, tid, msg });
+          state.logs = state.logs.slice(0, 50);
+          document.getElementById('logCount').textContent = state.logs.length;
+          els.logs.innerHTML = state.logs.map(l => `
+            <div class="log-line">
+              <span class="ts">${new Date(l.ts).toLocaleTimeString([], {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'})}</span>
+              <span class="tag">${l.type}</span>
+              <span class="msg">${tid !== '-' ? `[${tid}] ` : ''}${msg}</span>
+            </div>
+          `).join("");
         }
 
         function renderStats() {
-          const tasks = Array.from(state.tasks.values());
-
-          // Session Cost
-          const totalTokens = state.workerTokens + state.dictatorTokens;
-          const sessionCost = state.sessionCost || (totalTokens / 1000) * state.tokenCostRate;
-          sessionCostEl.textContent = formatCurrency(sessionCost);
-
-          // Throughput
+          els.cost.textContent = "$" + (state.cost || 0).toFixed(4);
+          els.tokens.textContent = (state.tokens || 0).toLocaleString();
+          els.workers.textContent = state.workers.length + " active";
           const now = Date.now();
-          state.completedTasksHistory = state.completedTasksHistory.filter(ts => now - ts < 60 * 1000); // Last 1 minute
-          const throughput = state.completedTasksHistory.length;
-          throughputEl.textContent = throughput + " tasks/min";
+          state.history = state.history.filter(t => now - t < 60000);
+          els.throughput.textContent = state.history.length + " tasks/min";
+        }
 
-          // Workers
-          const workersCount = state.workers ? state.workers.length : 0;
-          workerCountEl.textContent = workersCount + " active";
+        function renderTasks() {
+          const tasks = Array.from(state.tasks.values())
+            .filter(t => t.status !== 'expired')
+            .sort((a,b) => b.updated_at - a.updated_at);
           
-          // Original Tokens Stat - remains unchanged but included for completeness in the new block
-          const workerTok = state.workerTokens || 0;
-          const dictatorTok = state.dictatorTokens || 0;
-          totalTokensEl.textContent = formatNumber(workerTok + dictatorTok);
-          document.getElementById("workerTokensLabel").textContent = formatNumber(workerTok);
-          document.getElementById("dictatorTokensLabel").textContent = formatNumber(dictatorTok);
-          if (logHeaderCount) logHeaderCount.textContent = String(state.eventsSeen);
-        }
-
-          function renderCapabilities() {
-          if (!capabilitiesStripEl) {
-            return;
-          }
-          if (!state.daemonCapabilities.length) {
-            capabilitiesStripEl.innerHTML = '<span class="dot" style="background: var(--muted);"></span><span style="color: var(--muted);">CAPABILITIES</span>';
+          if (!tasks.length) {
+            els.grid.innerHTML = `<div style="padding:40px; text-align:center; color:var(--text-dim); font-size:12px; letter-spacing:0.1em; border:1px dashed var(--border); grid-column:1/-1;">NO MESH ACTIVITY DETECTED</div>`;
             return;
           }
 
-          capabilitiesStripEl.innerHTML = state.daemonCapabilities.map(function (cap) {
-            const status = state.capabilities[cap];
-            let dotColor = 'var(--muted)'; // Default grey
-            if (status === true) {
-              dotColor = 'var(--success)';
-            } else if (status === false) {
-              dotColor = 'var(--failed)';
-            }
-            return '<div class="capability-dot-wrap" style="display:flex;align-items:center;gap:4px;" title="' + escapeHtml(cap) + '">' +
-                   '<span class="dot" style="background: ' + dotColor + '; box-shadow: 0 0 8px ' + dotColor + ';"></span>' +
-                   '<span style="font-size: 11px; color: var(--muted);">' + escapeHtml(cap) + '</span>' +
-                   '</div>';
-          }).join('');
-          }
+          els.grid.innerHTML = tasks.map(t => {
+            const color = getColor(t.status);
+            const pct = Math.min(100, Math.max(0, t.progress_percent || 0));
+            const elapsed = formatTime((t.completed_at || (Date.now()/1000)) - t.created_at);
+            
+            // SURFACE CAUSAL CHAIN
+            const goal = t.goal || t.task_id;
+            const intent = t.intent || "Implicit task goal";
+            const cause = (t.status === "failed" || t.status === "error") ? (t.cause || t.progress_message || "Execution error") : null;
 
-          function renderWorkers() {
-            const peersGrid = document.getElementById("peersGrid");
-            if (!peersGrid) return;
-            const workers = state.workers || [];
-            if (!workers.length) {
-              peersGrid.innerHTML = '<div class="peers-empty">No workers connected.</div>';
-              return;
-            }
-            peersGrid.innerHTML = workers.map(function(w) {
-              const caps = (w.capabilities || []).join(", ");
-              const isA2A = !!w.peer_url;
-              const isBusy = (w.busy_tasks || []).length > 0;
-              const connectedAgo = formatDuration((Date.now() / 1000) - Number(w.connected_at || 0));
-              const busyIds = w.busy_tasks || [];
-              const busyLabel = isBusy ? busyIds.map(function(id) {
-                return '<span style="color:var(--accent);cursor:pointer;" onclick="toggleTask(\'' + escapeHtml(id) + '\')">' + escapeHtml(id) + '</span>';
-              }).join(", ") : "idle";
-              const cardClass = "peer-card" + (isA2A ? " a2a" : "") + (isBusy ? " busy" : "");
-              const badgeClass = isBusy ? "busy" : "idle";
-              const badgeText = isBusy ? "BUSY" : "IDLE";
-              return (
-                '<div class="' + cardClass + '">' +
-                  '<div class="peer-top">' +
-                    '<span class="peer-cap">' + escapeHtml(caps || "UNKNOWN") + '</span>' +
-                    '<div style="display:flex;gap:4px;">' +
-                      (isA2A ? '<span class="peer-badge a2a">A2A</span>' : '') +
-                      '<span class="peer-badge ' + badgeClass + '">' + badgeText + '</span>' +
-                    '</div>' +
-                  '</div>' +
-                  (isA2A ? '<div class="peer-meta">' + escapeHtml(w.peer_url) + '</div>' : '') +
-                  '<div class="peer-meta">up ' + escapeHtml(connectedAgo) + (isBusy ? ' · ' + busyLabel : '') + '</div>' +
-                '</div>'
-              );
-            }).join("");
-          }
-
-          function setWsState(kind, detail) {
-          wsChip.dataset.state = kind;
-          if (kind === "connected") {
-            wsLabel.textContent = "WS CONNECTED";
-          } else if (kind === "connecting") {
-            wsLabel.textContent = "WS CONNECTING";
-          } else if (kind === "error") {
-            wsLabel.textContent = "WS ERROR";
-          } else {
-            wsLabel.textContent = detail ? "WS " + detail.toUpperCase() : "WS DISCONNECTED";
-          }
+            return `
+              <div class="card" style="--status-color: ${color}" onclick="viewReport('${t.task_id}')">
+                <div class="card-head">
+                  <span class="task-id">${t.task_id}</span>
+                  <span class="cap-badge">${t.capability}</span>
+                </div>
+                <div class="goal">${goal}</div>
+                <div class="intent">${intent}</div>
+                <div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div>
+                <div class="card-foot">
+                  <span>${pct.toFixed(0)}%</span>
+                  <span style="color:${color}">${t.status.toUpperCase()}</span>
+                  <span>${elapsed}</span>
+                </div>
+                ${cause ? `<div class="cause">CAUSE: ${cause}</div>` : ''}
+              </div>
+            `;
+          }).join("");
         }
 
-        function wsUrl() {
-          const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-          return protocol + "//" + window.location.host + "/ws";
+        window.viewReport = (tid) => {
+          const task = state.tasks.get(tid);
+          els.modalTitle.textContent = "TASK REPORT :: " + tid;
+          els.modalContent.textContent = task.report || "Requesting report from mesh...";
+          els.modal.classList.add('active');
+          if (task.report_path && task.report_path !== 'null' && !task.report) {
+            send("read_report", { report_path: task.report_path });
+          }
+        };
+
+        window.meshReset = () => { 
+          if(confirm("Confirm purge of all mesh state?")) {
+            send("reset", {});
+            state.tasks.clear(); state.logs = []; state.cost = 0; state.tokens = 0;
+            renderTasks(); renderStats();
+          }
+        };
+
+        function send(cmd, p) {
+          if (!state.socket || state.socket.readyState !== 1) return;
+          state.socket.send(JSON.stringify({ type:"command", command:cmd, request_id:"r"+Date.now(), payload:p||{} }));
         }
 
-        function sendCommand(command, payload) {
-          if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
-            return;
-          }
-          state.requestId += 1;
-          state.socket.send(JSON.stringify({
-            type: "command",
-            command: command,
-            request_id: "req-" + state.requestId,
-            payload: payload || {}
-          }));
+        function connect() {
+          const ws = new WebSocket(((window.location.protocol==="https:")?"wss:":"ws:")+"//"+window.location.host+"/ws");
+          state.socket = ws;
+          ws.onopen = () => { els.ws.textContent = "CONNECTED"; els.ws.style.color = "var(--success)"; send("get_state",{}); };
+          ws.onclose = () => { els.ws.textContent = "OFFLINE"; els.ws.style.color = "var(--failed)"; setTimeout(connect, 3000); };
+          ws.onmessage = (m) => {
+            const data = JSON.parse(m.data);
+            if (data.type === "response" && data.ok) {
+              const p = data.payload;
+              if (p.tasks) { Object.keys(p.tasks).forEach(id => state.tasks.set(id, p.tasks[id])); renderTasks(); }
+              if (p.workers) { state.workers = p.workers; renderStats(); }
+              if (p.session_cost_usd !== undefined) state.cost = p.session_cost_usd;
+              if (p.session_worker_tokens !== undefined) state.tokens = p.session_worker_tokens + (p.session_dictator_tokens || 0);
+              if (p.uptime_s) els.uptime.textContent = formatTime(p.uptime_s);
+              if (p.content) els.modalContent.textContent = p.content;
+              if (p.dictator) document.getElementById('dashTitle').textContent = "ROME :: " + p.dictator.toUpperCase();
+              renderStats();
+            }
+            if (data.type === "event") {
+              const ev = data.event; const tid = ev.task_id; const p = ev.payload;
+              if (ev.type === "progress" && state.tasks.has(tid)) {
+                const t = state.tasks.get(tid); t.progress_percent = p.percent; t.progress_message = p.message; t.updated_at = ev.ts; renderTasks();
+              } else if (ev.type === "complete") {
+                if (state.tasks.has(tid)) { 
+                  const t = state.tasks.get(tid); t.status = p.status; t.completed_at = ev.ts; t.report = p.report; t.report_path = p.report_path;
+                  state.history.push(Date.now()); renderTasks();
+                }
+                addLog("COMPLETE", tid, p.status);
+              } else if (ev.type === "dispatch_start") {
+                state.tasks.set(tid, { task_id:tid, capability:p.capability, status:"running", created_at:ev.ts, updated_at:ev.ts });
+                renderTasks(); addLog("DISPATCH", tid, p.capability);
+              } else if (ev.type === "system_status") { els.uptime.textContent = formatTime(p.uptime_s); }
+              renderStats();
+            }
+          };
         }
-
-        function connectSocket() {
-          if (state.socket && (state.socket.readyState === WebSocket.OPEN || state.socket.readyState === WebSocket.CONNECTING)) {
-            state.socket.close();
-          }
-          if (state.reconnectTimer) {
-            clearTimeout(state.reconnectTimer);
-            state.reconnectTimer = null;
-          }
-
-          setWsState("connecting");
-          const socket = new WebSocket(wsUrl());
-          state.socket = socket;
-
-          socket.addEventListener("open", function () {
-            setWsState("connected");
-            addLog("ws", "-", "connected", Date.now() / 1000);
-            sendCommand("get_state", {});
-            renderCapabilities(); // Initial render of capabilities
-          });
-
-          socket.addEventListener("message", function (messageEvent) {
-            let data;
-            try {
-              data = JSON.parse(messageEvent.data);
-            } catch (error) {
-              addLog("parse_error", "-", "Invalid JSON frame", Date.now() / 1000);
-              return;
-            }
-
-            if (data.type === "response") {
-              if (data.ok && data.payload && data.payload.content !== undefined) {
-                if (reportModal.classList.contains("active")) {
-                  modalBodyContent.textContent = data.payload.content;
-                }
-                return;
-              }
-
-              if (data.ok && data.payload) {
-                if (data.payload.active_tasks !== undefined) {
-                  state.daemonStatus = data.payload;
-                  uptimeLabel.textContent = formatDuration(Number(data.payload.uptime_s));
-                  // hostLabel.textContent = data.payload.host; // Host is now handled by system_status event
-                }
-                if (data.payload.capabilities !== undefined) {
-                  state.daemonCapabilities = data.payload.capabilities || [];
-                  const capsStatus = data.payload.capability_status || {};
-                  state.capabilities = {};
-                  state.daemonCapabilities.forEach(cap => {
-                    state.capabilities[cap] = capsStatus[cap] !== undefined ? capsStatus[cap] : null;
-                  });
-                  renderCapabilities();
-                }
-                if (data.payload.workers !== undefined) {
-                  state.workers = data.payload.workers || [];
-                  renderWorkers();
-                }
-                if (data.payload.tasks !== undefined) {
-                  handleSnapshot(data.payload.tasks);
-                  addLog("snapshot", "-", Object.keys(data.payload.tasks).length + " tasks", Date.now() / 1000);
-                }
-                if (data.payload.session_worker_tokens !== undefined) {
-                  state.workerTokens = data.payload.session_worker_tokens;
-                }
-                if (data.payload.session_dictator_tokens !== undefined) {
-                  state.dictatorTokens = data.payload.session_dictator_tokens;
-                }
-                if (data.payload.session_cost_usd !== undefined) {
-                  state.sessionCost = data.payload.session_cost_usd;
-                }
-                if (data.payload.session_waste_tokens !== undefined) {
-                  state.wasteTokens = data.payload.session_waste_tokens;
-                }
-                if (data.payload.dictator) {
-                  const dictatorName = data.payload.dictator.toUpperCase();
-                  const modelId = data.payload.dictator_model || "";
-                  let modelDisplay = "";
-                  if (modelId) {
-                    const m = modelId.replace(/^claude-/, "").replace(/-\d{8}$/, "");
-                    const parts = m.split("-");
-                    if (parts.length >= 3) {
-                      const name = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
-                      const ver = parts.slice(1).join(".");
-                      modelDisplay = " (" + name + " " + ver + ")";
-                    } else if (parts.length > 0) {
-                      modelDisplay = " (" + m.charAt(0).toUpperCase() + m.slice(1) + ")";
-                    }
-                  }
-                  document.getElementById("dashTitle").textContent = "ROME Dashboard — " + dictatorName + modelDisplay;
-                  document.title = "ROME — " + dictatorName + modelDisplay;
-                }
-
-                renderStats(); // Ensure stats are updated after processing initial state
-              } else if (!data.ok) {
-                addLog("response_error", "-", data.error || "command failed", Date.now() / 1000);
-              }
-              // renderStats(); // This was redundant here, moved into the `if (data.ok && data.payload)` block
-              return;
-            }
-
-            if (data.type === "event" && data.event) {
-              handleEventEnvelope(data.event);
-            }
-          });
-
-          socket.addEventListener("close", function (event) {
-            setWsState("disconnected", "disconnected");
-            addLog("ws", "-", "closed code=" + event.code, Date.now() / 1000);
-            state.reconnectTimer = window.setTimeout(connectSocket, 5000);
-          });
-
-          socket.addEventListener("error", function () {
-            setWsState("error");
-            addLog("ws", "-", "socket error", Date.now() / 1000);
-          });
-        }
-
-        function refreshDaemonStatus() {
-          if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
-            return;
-          }
-          sendCommand("status", { summary: true });
-        }
-
-        modalClose.addEventListener("click", function() {
-          reportModal.classList.remove("active");
-        });
-
-        reportModal.addEventListener("click", function(e) {
-          if (e.target === reportModal) {
-            reportModal.classList.remove("active");
-          }
-        });
-
-        cardsEl.addEventListener("click", function(e) {
-          if (e.target && e.target.classList.contains("retry-btn")) {
-            var btn = e.target;
-            var retryCard = btn.closest(".card");
-            if (retryCard) {
-              var retryTaskId = retryCard.getAttribute("data-task-id");
-              var retryCapability = retryCard.getAttribute("data-capability");
-              if (retryTaskId && retryCapability) {
-                btn.textContent = "Retrying...";
-                btn.disabled = true;
-                sendCommand("dispatch", {
-                  task_id: retryTaskId + "_retry",
-                  capability: retryCapability,
-                  prompt: "..."
-                });
-              }
-            }
-            return;
-          }
-
-          var card = e.target.closest(".card");
-          if (card) {
-            var taskId = card.getAttribute("data-task-id");
-            var task = state.tasks.get(taskId);
-            if (task && task.report_path) {
-              modalTitle.textContent = "Report: " + taskId;
-              modalBodyContent.textContent = "Loading report...";
-              reportModal.classList.add("active");
-              
-              sendCommand("read_report", { report_path: task.report_path });
-            } else if (task) {
-              modalTitle.textContent = "Report: " + taskId;
-              modalBodyContent.textContent = "No report available";
-              reportModal.classList.add("active");
-            }
-          }
-        });
-
-        renderLogs();
-        renderTasks();
-        renderWorkers();
-        renderCapabilities();
-        refreshDaemonStatus();
-        connectSocket();
-        state.statusTimer = window.setInterval(refreshDaemonStatus, 5000);
-        state.clockTimer = window.setInterval(function() { renderTasks(); renderWorkers(); }, 1000);
-      }());
+        connect();
+        setInterval(() => send("status", {summary:true}), 5000);
+      })();
     </script>
   </body>
 </html>

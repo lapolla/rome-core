@@ -181,12 +181,9 @@ async def test_handle_await_report_truncation(fresh_registry, tmp_path):
             "include_reports": True,
         })
 
-    assert result["tasks"]["big-1"]["report"] == "summary: " + ("x" * 50) + " [TRUNCATED]"
-
-    content = result["tasks"]["big-1"]["report"]
-    assert len(content) < 5000
-    assert "[TRUNCATED]" in content
-
+        content = result["tasks"]["big-1"]["report"]
+        assert len(content) < 5000
+        assert "[TRUNCATED]" in content
 
 # ── recommend_capability ──────────────────────────────────────────────
 

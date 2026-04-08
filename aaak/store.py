@@ -34,6 +34,7 @@ class FactStore:
         self._path = self._store_dir / f"{prefix}.jsonl"
         self._ttl = ttl_seconds
         self._lock = threading.Lock()
+        self._save_count = 0
 
     def save(self, fact: dict[str, Any]) -> None:
         """Append a fact to the store. Adds timestamp if missing."""
@@ -43,6 +44,10 @@ class FactStore:
         with self._lock:
             with open(self._path, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
+                f.flush()
+        self._save_count += 1
+        if self._save_count % 50 == 0:
+            self.compact()
 
     def load_active(self) -> list[dict[str, Any]]:
         """Load all non-expired facts."""
@@ -94,12 +99,27 @@ class FactStore:
 
     def compact(self) -> int:
         """Remove expired facts from the store file. Returns count of facts kept."""
-        active = self.load_active()
+        cutoff = time.time() - self._ttl
         with self._lock:
+            if not self._path.exists():
+                return 0
+            lines = self._path.read_text(encoding="utf-8").splitlines()
+            active = []
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    fact = json.loads(line)
+                    if fact.get("ts", 0) >= cutoff:
+                        active.append(line)
+                except json.JSONDecodeError:
+                    continue
             with open(self._path, "w", encoding="utf-8") as f:
-                for fact in active:
-                    f.write(json.dumps(fact, ensure_ascii=False, separators=(",", ":")) + "\n")
-        return len(active)
+                for line in active:
+                    f.write(line + "\n")
+                f.flush()
+            return len(active)
 
     def clear(self) -> None:
         """Delete all facts."""
@@ -110,7 +130,7 @@ class FactStore:
 
 def _tokenize(text: str) -> set[str]:
     """Split text into lowercase tokens, drop short ones."""
-    return {w for w in text.lower().split() if len(w) > 2}
+    return {w for w in text.lower().split() if len(w) >= 2}
 
 
 def _fact_to_text(fact: dict[str, Any]) -> str:

@@ -267,8 +267,10 @@ async def execute_task(task_id, capability_name, cmd_args, ui_sender=None):
             with open(task_md_path, "r") as f: initial_task_content = f.read()
         except: pass
 
-    # AAAK Hook 2: Safety net — distill oversized prompts before sending to model
-    if AAAK_ENABLED and initial_task_content and needs_distill(initial_task_content):
+    # AAAK Hook 2: Safety net — only applies to subprocess mode
+    # Persistent workers receive prompts via WS, not task.md
+    worker_mode = os.environ.get("ROME_WORKER_MODE") == "worker"
+    if AAAK_ENABLED and not worker_mode and initial_task_content and needs_distill(initial_task_content):
         try:
             _aaak = get_aaak(prefix=task_id)
             if _aaak:
@@ -494,7 +496,7 @@ async def run_worker(ws_url, capabilities, capability_cmd_base, token=None):
                         
                         asyncio.create_task(task_runner())
                         # Ack the dispatch
-                        await ws.send(json.dumps({"type": "response", "request_id": msg.get("request_id"), "ok": True}))
+                        await ws.send(json.dumps({"type": "response", "request_id": msg.get("request_id"), "ok": true}))
         except Exception as e:
             print(f"ROME V4: Worker error: {e}. Reconnecting in {backoff:.1f}s...")
             await asyncio.sleep(backoff)

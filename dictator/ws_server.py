@@ -19,7 +19,7 @@ import yaml
 from websockets.exceptions import ConnectionClosed
 
 from dictator.core import event_bus, task_registry, DAEMON_START_TIME, DAEMON_START_WALL, ROME_ROOT, ARSENAL_PATH, IS_DAEMON
-from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_dispatch_start, emit_error, emit_capability_status, emit_system_status
+from dictator.events import RomeEvent, emit_complete, emit_cost_update, emit_dispatch_start, emit_error, emit_capability_status, emit_system_status, emit_facts_broadcast
 from dictator.tools_legion import _execute_legion_impl, _resolve_arsenal_paths
 
 # AAAK — Adaptive Agent Attention Kernel
@@ -552,20 +552,6 @@ async def _execute_legion_native(
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    # AAAK Hook 1 (daemon path): Pre-dispatch — recall facts and distill prompt
-    if AAAK_ENABLED and capability not in ("SAFE_SHELL", "NATIVE_SHELL") and args:
-        try:
-            _aaak = get_aaak(prefix=parent_task_id or task_id)
-            if _aaak and _aaak.should_process(capability):
-                original = args[0]
-                distilled = _aaak.pre_dispatch(original, goal=original[:200], capability=capability)
-                if distilled != original:
-                    args = list(args)
-                    args[0] = distilled
-                    logger.debug("aaak distill %s: %d→%d chars", task_id, len(original), len(distilled))
-        except Exception as _e:
-            logger.debug("aaak pre_dispatch error: %s", _e)
-
     cap_args = " ".join(cap.get("args", []))
     quoted_args = shlex.quote(" ".join(args)) if cap_args.rstrip().endswith("-p") else " ".join(shlex.quote(a) for a in args)
     command = f"{cap['exec']} {task_id} {time.time()} {cap_args} {quoted_args}"
@@ -600,10 +586,13 @@ async def _execute_legion_native(
     usage, manifest_f = None, task_dir / "manifest.json"
     manifest_data = None
     if manifest_f.exists():
+        logger.info("Found manifest for task %s", task_id)
         try:
             manifest_data = json.loads(manifest_f.read_text())
             usage = manifest_data.get("usage")
         except Exception as e: logger.debug("Swallowed exception: %s", e)
+    else:
+        logger.info("No manifest found at %s", manifest_f)
 
     # AAAK Hook 3 (daemon path): Post-result — compress manifest into facts
     if AAAK_ENABLED and capability not in ("SAFE_SHELL", "NATIVE_SHELL") and manifest_data:
@@ -611,7 +600,11 @@ async def _execute_legion_native(
             _aaak = get_aaak(prefix=parent_task_id or task_id)
             if _aaak and _aaak.should_process(capability):
                 task_desc = args[0][:200] if args else task_id
-                _aaak.post_result(manifest_data, task_description=task_desc)
+                _aaak.post_result(
+                    manifest_data, 
+                    task_description=task_desc,
+                    broadcast_fn=lambda msg: asyncio.create_task(emit_facts_broadcast(event_bus, parent_task_id or task_id, msg["payload"]["fact"]))
+                )
                 logger.debug("aaak compressed result for %s", task_id)
         except Exception as _e:
             logger.debug("aaak post_result error: %s", _e)
@@ -732,10 +725,11 @@ async def _dispatch_runner(
     no_cache: bool,
     prompt_file: str,
     output_path: str | None = None,
+    parent_task_id: str | None = None,
 ) -> None:
     logger.info("_dispatch_runner START task=%s cap=%s", task_id, capability)
     if IS_DAEMON:
-        task_registry.register(task_id, capability)
+        task_registry.register(task_id, capability, parent_task_id=parent_task_id)
         await emit_dispatch_start(event_bus, task_id, capability)
         task_registry.update_task(task_id, {"dispatch_mode": "subprocess"})
         # Immediately mark as running so dashboard doesn't sit at REGISTERED
@@ -819,6 +813,7 @@ async def _dispatch_to_worker(ws: WebSocket, task_id: str, capability: str, prom
 async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     task_id = str(payload.get("task_id") or "").strip()
     capability = str(payload.get("capability") or "").strip().upper()
+    parent_task_id = payload.get("parent_task_id")
     prompt = str(payload.get("prompt") or "").strip()
     input_files = payload.get("input_files") or None
     no_cache = bool(payload.get("no_cache", False))
@@ -836,13 +831,46 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     if input_files is not None and not isinstance(input_files, list):
         raise ValueError("payload.input_files must be a list when provided")
 
+    # --- Pre-Registration (Sovereign V5) ---
+    # Register task FIRST so the Signal Gate has a valid object to update
+    if IS_DAEMON and not task_registry.get(task_id):
+        task_registry.register(task_id, capability, parent_task_id=parent_task_id)
+        await emit_dispatch_start(event_bus, task_id, capability)
+
+    # --- AAAK Signal Gate (V5 Causal Check) ---
+    if capability not in ("SAFE_SHELL", "NATIVE_SHELL") and prompt:
+        try:
+            from aaak import get_aaak, AAAK_ENABLED
+            from aaak.distill import needs_distill
+            if AAAK_ENABLED:
+                _aaak = get_aaak(prefix=task_id)
+                if _aaak and _aaak.should_process(capability):
+                    if needs_distill(prompt):
+                        # Use StructuralExtract directly to get the dict
+                        from aaak.distill import StructuralExtract
+                        extractor = StructuralExtract()
+                        structured = extractor.run(prompt)
+                        
+                        distilled = _aaak.pre_dispatch(prompt, goal=prompt[:200], capability=capability)
+                        if distilled != prompt:
+                            logger.debug("aaak distill (Gate) %s: %d→%d chars", task_id, len(prompt), len(distilled))
+                            prompt = distilled
+                            
+                            # LOCK the causal chain into the registry for the dashboard
+                            task_registry.update_task(task_id, {
+                                "goal": structured.get("goal"),
+                                "intent": structured.get("intent"),
+                                "cause": structured.get("cause")
+                            })
+                    
+                    if "GOAL:" not in prompt or "CAUSE:" not in prompt:
+                        return {"task_id": task_id, "capability": capability, "accepted": False, "error": "Causal chain missing. Message must be structured or distillable."}
+        except Exception as _e:
+            logger.debug("aaak pre_dispatch error (Gate): %s", _e)
+
     # --- Native DSA Routing (ROME v4) ---
     if capability == "NATIVE_SHELL":
-        if IS_DAEMON:
-            task_registry.register(task_id, capability)
-            await emit_dispatch_start(event_bus, task_id, capability)
-            task_registry.update_task(task_id, {"dispatch_mode": "native"})
-
+        task_registry.update_task(task_id, {"dispatch_mode": "native"})
         async def _run_native_background():
             try:
                 # Execute immediately via native handler
@@ -875,12 +903,9 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         worker_ws = await worker_registry.find_worker(capability)
 
     if worker_ws is not None:
-        # Register task in daemon's registry so await/status/dashboard work
-        import os
+        # Task is already pre-registered at top of handle_dispatch
         peer_url = await worker_registry.get_peer_url(worker_ws)
         if IS_DAEMON:
-            task_registry.register(task_id, capability)
-            await emit_dispatch_start(event_bus, task_id, capability)
             dispatch_mode = "a2a" if peer_url else "persistent_worker"
             task_registry.update_task(task_id, {"dispatch_mode": dispatch_mode, "peer_url": peer_url})
             task_registry.update_progress(task_id, 0, "Routing to persistent worker...")
@@ -899,7 +924,7 @@ async def handle_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     # --- Fallback: spawn subprocess ---
     logger.info("handle_dispatch SPAWNING task=%s cap=%s", task_id, capability)
     task = asyncio.create_task(
-        _dispatch_runner(task_id, capability, prompt, input_files, no_cache, prompt_file, output_path),
+        _dispatch_runner(task_id, capability, prompt, input_files, no_cache, prompt_file, output_path, parent_task_id=parent_task_id),
         name=f"rome-ws-dispatch-{task_id}",
     )
     def _task_done(t):
@@ -939,8 +964,10 @@ async def handle_submit_result(payload: dict[str, Any]) -> dict[str, Any]:
         task_registry.update_task(task_id, {"summary": summary})
 
     status = "completed"
-    task_registry.complete(task_id, status, str(report_path))
     report_snippet = content[:4000] + "\n...[TRUNCATED]" if len(content) > 4000 else content
+    # Use upgraded complete() to lock both path AND content
+    task_registry.complete(task_id, status, str(report_path), report=report_snippet)
+    
     await emit_complete(event_bus, task_id, status, str(report_path), None, report=report_snippet)
 
     return {"task_id": task_id, "status": status, "report_path": str(report_path)}
@@ -1202,13 +1229,17 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
             pending.discard(tid)
             return
 
-        if include_reports and task.get("report_path"):
-            if not full and task.get("summary"):
-                results[tid]["report"] = _track_output(task["summary"])
-            else:
-                content = _read_report_content(task["report_path"])
-                if content:
-                    results[tid]["report"] = _track_output(content)
+        if include_reports:
+            # Prioritize content already locked in the registry (Sovereign WS flow)
+            if task.get("report"):
+                results[tid]["report"] = _track_output(task["report"])
+            elif task.get("report_path"):
+                if not full and task.get("summary"):
+                    results[tid]["report"] = _track_output(task["summary"])
+                else:
+                    content = _read_report_content(task["report_path"])
+                    if content:
+                        results[tid]["report"] = _track_output(content)
         pending.discard(tid)
 
     # 1. Subscribe FIRST to avoid race condition
@@ -1247,6 +1278,8 @@ async def handle_await(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def handle_reset(_: dict[str, Any]) -> dict[str, Any]:
+    global _SESSION_USAGE
+    _SESSION_USAGE = {"worker_tokens": 0, "dictator_tokens": 0, "cost_usd": 0.0, "dictator_model": ""}
     return {"ok": True, "cleared": task_registry.clear_all()}
 
 
