@@ -1,5 +1,28 @@
 {
   "dependencies": {
-    "puppeteer": "^24.40.0"
-  }
+    "puppeteer": "^24.40.0",
+    "uuid": "^13.0.0"
+  },
+  "name": "rome-core",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A Python orchestration framework. Provides a persistent WebSocket-native daemon that dispatches AI workers (Legions) in parallel, supports persistent worker connections, streams live progress, and serves a browser dashboard.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2",
+    "ws": "^8.20.0"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
 }

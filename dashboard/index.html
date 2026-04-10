@@ -47,12 +47,14 @@
 
       /* Alignment & Header */
       .header {
+        position: relative; overflow: hidden;
         display: flex;
         justify-content: space-between;
         align-items: center;
         border-bottom: 1px solid var(--border);
         padding-bottom: 16px;
       }
+      .brand { position: relative; z-index: 1; }
       .brand h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.1em; color: #fff; }
       .brand p { margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--text-dim); font-weight: 600; }
 
@@ -61,7 +63,7 @@
         background: rgba(0,0,0,0.5);
         border: 1px solid var(--border);
         padding: 6px 14px;
-        border-radius: 4px;
+        border-radius: 30px;
         font-size: 10px;
         font-weight: 700;
         font-family: 'IBM Plex Mono', monospace;
@@ -88,7 +90,7 @@
       /* Main Pipeline Grid */
       .main {
         display: grid;
-        grid-template-columns: 1fr 360px;
+        grid-template-columns: 1fr 300px;
         gap: 24px;
         min-height: 0;
       }
@@ -178,7 +180,9 @@
           <h1 id="dashTitle">ROME Dashboard</h1>
           <p>Autonomous Mesh Intelligence · Sovereign Command</p>
         </div>
-        <div class="sys-info">
+        <canvas id="meshGraph" style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:0; pointer-events:none;"></canvas>
+        <div class="sys-info" style="position:relative; z-index:1;">
+          <div id="meshTopology" style="display: flex; gap: 8px;"></div>
           <div class="chip">UPTIME: <span id="uptime">--</span></div>
           <div class="chip">WS: <span id="wsStatus">...</span></div>
           <button class="btn-reset" onclick="meshReset()">PURGE SESSION</button>
@@ -204,7 +208,7 @@
         </div>
 
         <div class="box">
-          <div class="box-header"><h2>Mesh Signal Stream</h2><span id="logCount" class="chip">0</span></div>
+          <div class="box-header"><h2>Signal Stream</h2><span id="logCount" class="chip">0</span></div>
           <div class="scroll" id="logStream"></div>
         </div>
       </div>
@@ -219,10 +223,11 @@
 
     <script>
       (function() {
-        const state = { socket: null, tasks: new Map(), logs: [], history: [], workers: [], cost: 0, tokens: 0 };
+        const state = { socket: null, tasks: new Map(), logs: [], history: [], workers: [], cost: 0, tokens: 0, agents: [] };
         const els = {
           grid: document.getElementById('taskGrid'),
           logs: document.getElementById('logStream'),
+          mesh: document.getElementById('meshTopology'),
           cost: document.getElementById('statCost'),
           throughput: document.getElementById('statThroughput'),
           workers: document.getElementById('statWorkers'),
@@ -233,6 +238,72 @@
           modalTitle: document.getElementById('modalTitle'),
           modalContent: document.getElementById('modalContent')
         };
+
+        function renderMesh() {
+          if (!els.mesh) return;
+          if (!state.agents || !state.agents.length) {
+            els.mesh.innerHTML = '';
+            return;
+          }
+          els.mesh.innerHTML = state.agents.map(a => `
+            <div class="chip" title="${a.peer_url || 'local connection'}">
+              <span>${a.agent_id.split('-')[1] || a.agent_id}</span>
+              <span style="color:var(--accent)">[${(a.capabilities || []).join(',')}]</span>
+            </div>
+          `).join("");
+        }
+
+        // --- MESH GRAPH ANIMATION (CURVES) ---
+        const canvas = document.getElementById('meshGraph');
+        const ctx = canvas.getContext('2d');
+        const waves = [];
+        function taskWaveColor(status) {
+          const s = String(status || '').toLowerCase();
+          if (s === 'running') return '#38bdf8';
+          if (s === 'success' || s === 'completed') return '#22c55e';
+          if (s === 'failed' || s === 'error' || s === 'cancelled') return '#f43f5e';
+          return '#475569';
+        }
+        function syncWavesToTasks() {
+          const tasks = Array.from(state.tasks.values()).filter(t => t.status !== 'expired');
+          const taskIds = new Set(tasks.map(t => t.task_id));
+          const waveIds = new Set(waves.map(w => w.task_id));
+          tasks.forEach(t => {
+            if (!waveIds.has(t.task_id)) waves.push({ task_id: t.task_id, color: taskWaveColor(t.status), base: 0.15 + Math.random() * 0.7, speed: 0.0008 + Math.random() * 0.0014, freq: 0.008 + Math.random() * 0.010, offset: Math.random() * Math.PI * 2, currentAmp: 0, targetAmp: 26, dying: false });
+          });
+          waves.forEach(wv => {
+            const t = state.tasks.get(wv.task_id);
+            if (!t || !taskIds.has(wv.task_id)) { wv.dying = true; wv.targetAmp = 0; return; }
+            wv.color = taskWaveColor(t.status);
+            const s = String(t.status || '').toLowerCase();
+            if (s === 'running') wv.targetAmp = 18 + (t.progress_percent || 0) * 0.18;
+            else { wv.targetAmp = 0; wv.dying = true; }
+          });
+        }
+        function drawGraph() {
+          if (!canvas) return;
+          const w = canvas.width = canvas.offsetWidth;
+          const h = canvas.height = canvas.offsetHeight;
+          if (w === 0 || h === 0) { requestAnimationFrame(drawGraph); return; }
+          ctx.clearRect(0, 0, w, h);
+          const time = Date.now();
+          for (let i = waves.length - 1; i >= 0; i--) {
+            const wv = waves[i];
+            wv.currentAmp += (wv.targetAmp - wv.currentAmp) * 0.04;
+            if (wv.dying && wv.currentAmp < 0.5) { waves.splice(i, 1); continue; }
+            ctx.beginPath();
+            ctx.strokeStyle = wv.color; ctx.lineWidth = 1.5;
+            ctx.globalAlpha = Math.min(0.55, wv.currentAmp / 26 * 0.55);
+            for (let x = 0; x <= w; x += 3) {
+              const y = h * wv.base + Math.sin(x * wv.freq + time * wv.speed + wv.offset) * wv.currentAmp;
+              x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+          }
+          ctx.globalAlpha = 1.0;
+          requestAnimationFrame(drawGraph);
+        }
+        drawGraph();
 
         function formatTime(s) {
           if (!s) return "0s";
@@ -271,6 +342,7 @@
           const now = Date.now();
           state.history = state.history.filter(t => now - t < 60000);
           els.throughput.textContent = state.history.length + " tasks/min";
+          syncWavesToTasks();
         }
 
         function renderTasks() {
@@ -357,17 +429,23 @@
             if (data.type === "event") {
               const ev = data.event; const tid = ev.task_id; const p = ev.payload;
               if (ev.type === "progress" && state.tasks.has(tid)) {
-                const t = state.tasks.get(tid); t.progress_percent = p.percent; t.progress_message = p.message; t.updated_at = ev.ts; renderTasks();
+                const t = state.tasks.get(tid); t.progress_percent = p.percent; t.progress_message = p.message; t.updated_at = ev.ts; renderTasks(); syncWavesToTasks();
               } else if (ev.type === "complete") {
                 if (state.tasks.has(tid)) { 
                   const t = state.tasks.get(tid); t.status = p.status; t.completed_at = ev.ts; t.report = p.report; t.report_path = p.report_path;
                   state.history.push(Date.now()); renderTasks();
                 }
                 addLog("COMPLETE", tid, p.status);
+                syncWavesToTasks();
               } else if (ev.type === "dispatch_start") {
                 state.tasks.set(tid, { task_id:tid, capability:p.capability, status:"running", created_at:ev.ts, updated_at:ev.ts });
                 renderTasks(); addLog("DISPATCH", tid, p.capability);
-              } else if (ev.type === "system_status") { els.uptime.textContent = formatTime(p.uptime_s); }
+                syncWavesToTasks();
+              } else if (ev.type === "system_status") { 
+                els.uptime.textContent = formatTime(p.uptime_s); 
+                state.agents = p.agents || [];
+                renderMesh();
+              }
               renderStats();
             }
           };
