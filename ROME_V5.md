@@ -41,7 +41,7 @@ No central broker required. Any agent can dispatch to any other agent directly.
 | Claude Code | WS client only | WS client + peer server |
 | Gemini CLI | WS client + worker | WS client + worker + peer server |
 | Daemon | Central broker | Optional peer (registry + dashboard) |
-| CODEX/OPENCODE | Subprocess | Can be persistent peer |
+| CODEX/MISTRAL | Subprocess | Can be persistent peer |
 
 **Peer discovery** — static config or simple broadcast:
 ```json

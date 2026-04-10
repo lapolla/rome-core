@@ -1,1 +1,0 @@
-{"campaign_id": "test-poll", "tasks": [{"id": "poll1", "capability": "GEMINI", "args": ["Write a haiku about live progress. Output only the haiku."]}, {"id": "poll2", "capability": "GEMINI", "args": ["Write a haiku about debugging. Output only the haiku."]}]}

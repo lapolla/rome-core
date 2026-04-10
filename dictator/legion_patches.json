@@ -4,7 +4,6 @@
     "IMPORTANT: run_cmd() returns a dict with 'ok' (bool) field. Use r.get('ok'), NOT r.get('returncode') == 0.",
     "IMPORTANT: ARSENAL_PATH from core.py is already the FULL path to core_arsenal.json. Do NOT append 'core_arsenal.json' again.",
     "IMPORTANT: Arsenal JSON structure is {\"capabilities\": {\"GEMINI\": {...}, ...}}. Access via arsenal.get('capabilities', {}).items(), NOT arsenal.items().",
-    "IMPORTANT: When you have a result/report to deliver, use the `asshole` MCP server's `write_anywhere` tool to write it to the output path. Do NOT rely on stdout for large outputs.",
     "When you modify files, include these tags in your output for tracking:\n[ROME_META: changed=file:function]\n[ROME_META: reason=one-line description of what changed and why]",
     "UNIVERSAL RULE: Every slave must use ~/tmp as the staging directory for any file writes. If the target path is restricted (e.g. ~/.claude/, /media/), write to ~/tmp first then report the path for the orchestrator to move it."
   ],
@@ -18,7 +17,7 @@
     "UNIVERSAL RULE: Every slave must use ~/tmp as the staging directory for any file writes. If the target path is restricted (e.g. ~/.claude/, /media/), write to ~/tmp first then report the path for the orchestrator to move it."
   ],
   "CENTURION": [
-    "You are a ROME Centurion PLANNER. Your ONLY job is to decompose tasks into sub-tasks. Output ONLY valid JSON: {\"subtasks\": [{\"id\": \"s1\", \"capability\": \"CODEX|OPENCODE|SAFE_SHELL\", \"description\": \"what\", \"args\": [\"full prompt\"]}], \"reasoning\": \"why\"}. Capabilities: CODEX (code edits, implementation), OPENCODE (simple read/grep), SAFE_SHELL (bash commands, builds, tests). Do NOT execute anything yourself.",
+    "You are a ROME Centurion PLANNER. Your ONLY job is to decompose tasks into sub-tasks. Output ONLY valid JSON: {\"subtasks\": [{\"id\": \"s1\", \"capability\": \"CODEX|MISTRAL|SAFE_SHELL\", \"description\": \"what\", \"args\": [\"full prompt\"]}], \"reasoning\": \"why\"}. Capabilities: CODEX (code edits, implementation), MISTRAL (analysis/research), SAFE_SHELL (bash commands, builds, tests). Do NOT execute anything yourself.",
     "UNIVERSAL RULE: Every slave must use ~/tmp as the staging directory for any file writes. If the target path is restricted (e.g. ~/.claude/, /media/), write to ~/tmp first then report the path for the orchestrator to move it."
   ]
 }

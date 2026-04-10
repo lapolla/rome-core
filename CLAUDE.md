@@ -19,7 +19,7 @@ Model-agnostic Python orchestration framework. Persistent WebSocket-native daemo
 - **`legions/shell_executor.py`** — Dedicated bash executor for SAFE_SHELL. WS progress reporting, timeout/SIGKILL, manifest.json output.
 - **`legions/centurion_wrapper.py`** — Campaign orchestrator: inline ANSI dashboard + retry loop (max 3 per task through fallback chain).
 - **`legions/dashboard.py`** — Inline ANSI TUI. Cursor-control row rewrites.
-- **`arsenal/core_arsenal.json`** — 7 capabilities: GEMINI, CLAUDE, CODEX, MISTRAL, MCP_TOOL_CLIENT, SAFE_SHELL, NATIVE_SHELL. (OPENCODE replaced by MISTRAL — Mistral Vibe CLI.)
+- **`arsenal/core_arsenal.json`** — 6 capabilities: GEMINI, CLAUDE, CODEX, MISTRAL, SAFE_SHELL, CENTURION.
 - **`aaak/`** — Adaptive Agent Attention Kernel. Purely programmatic (no LLM) context compression middleware. 3 hooks: `pre_dispatch` (recall facts + distill prompt), `post_result` (compress output → fact, store, broadcast), `guard_prompt` (subprocess safety net). Fact store: thread-safe JSONL with TTL=2h, Jaccard recall, auto-compaction every 50 saves. Only SUCCESS facts stored — failures never enter recall context.
 - **`senate/brain.py`** — Soul spawner: loads sector manifesto + dispatches GEMINI legion.
 - **`senate/architects/`** — 64 sector manifestos (T0.md–T63.md).

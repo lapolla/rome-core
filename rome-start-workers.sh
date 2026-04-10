@@ -7,9 +7,9 @@ WS_TOKEN="ROME_V4_SECURE_TOKEN"
 
 # --- Capability Config (from arsenal) ---
 GEMINI_CLI="$HOME/projects/gemini-cli/bundle/gemini.js"
-GEMINI_ARGS=("$GEMINI_CLI" "--sandbox" "false" "--include-directories" "$ROME_ROOT" "--yolo" "--output-format" "json" "-m" "gemini-3.1-pro-preview" "--allowed-mcp-server-names" "rome-results" "-p")
+GEMINI_ARGS=("$GEMINI_CLI" "--sandbox" "false" "--include-directories" "$ROME_ROOT" "--yolo" "--output-format" "json" "-m" "gemini-3.1-pro-preview" "-p")
 
-CLAUDE_ARGS=("claude" "--dangerously-skip-permissions" "--output-format" "json" "--allowed-mcp-server-names" "rome-results" "-p")
+CLAUDE_ARGS=("claude" "--dangerously-skip-permissions" "--output-format" "json" "-p")
 
 # --- Launch Helpers ---
 start_worker() {
@@ -28,6 +28,7 @@ start_worker() {
 
 # --- Main ---
 pkill -f 'legion_wrapper.py --mode worker' 2>/dev/null
+pkill -f 'src/index.ts rome-worker' 2>/dev/null
 
 # Start GEMINI
 start_worker "GEMINI" "${GEMINI_ARGS[@]}"
@@ -36,7 +37,7 @@ start_worker "GEMINI" "${GEMINI_ARGS[@]}"
 start_worker "SAFE_SHELL" "python3" "$ROME_ROOT/legions/shell_executor.py"
 
 # Start MISTRAL
-start_worker "MISTRAL" "python3" "-m" "vibe.cli.entrypoint" "env:PYTHONPATH=/home/paul-kane/projects/mistral-cli" "--agent" "auto-approve" "--output" "streaming" "--ws-url" "$WS_URL" "--ws-token" "$WS_TOKEN" "-p"
+start_worker "MISTRAL" "python3" "-m" "vibe.cli.entrypoint" "env:PYTHONPATH=/home/paul-kane/projects/mistral-cli" "--agent" "auto-approve" "--output" "streaming" "-p"
 
 # Start CLAUDE
 start_worker "CLAUDE" "${CLAUDE_ARGS[@]}"

@@ -93,7 +93,7 @@ def main():
     
     plan_prompt = f"""You are a ROME Centurion planner. Decompose this task into sub-tasks.
 OUTPUT ONLY valid JSON:
-{{"subtasks": [{{"id": "s1", "capability": "CODEX|OPENCODE|SAFE_SHELL", "description": "what", "args": ["full prompt for worker"]}}], "reasoning": "why"}}
+{{"subtasks": [{{"id": "s1", "capability": "CODEX|MISTRAL|SAFE_SHELL", "description": "what", "args": ["full prompt for worker"]}}], "reasoning": "why"}}
 TASK: {user_prompt}"""
     
     r = run_cmd(planner_args + [plan_prompt], task_id)

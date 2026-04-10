@@ -1,1 +1,0 @@
-{"campaign_id": "test-stderr", "tasks": [{"id": "bar1", "capability": "GEMINI", "args": ["Write a haiku about victory. Output only the haiku."]}, {"id": "bar2", "capability": "GEMINI", "args": ["Write a haiku about persistence. Output only the haiku."]}]}

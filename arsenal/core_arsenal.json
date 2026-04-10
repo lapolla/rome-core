@@ -13,15 +13,12 @@
         "json",
         "-m",
         "gemini-3.1-pro-preview",
-        "--ws-url",
-        "ws://127.0.0.1:8741/ws",
-        "--ws-token",
-        "ROME_V4_SECURE_TOKEN",
         "-p"
       ],
       "timeout": 300,
       "min_version": "2.0",
-      "_note": "Gemini CLI \u2014 -p must be last"
+      "_note": "Gemini CLI — -p must be last",
+      "peer_port": 8742
     },
     "CLAUDE": {
       "exec": "{ROME_ROOT}/legions/legion_wrapper.py",
@@ -32,15 +29,12 @@
         "json",
         "--model",
         "claude-opus-4-6",
-        "--ws-url",
-        "ws://127.0.0.1:8741/ws",
-        "--ws-token",
-        "ROME_V4_SECURE_TOKEN",
         "-p"
       ],
       "timeout": 300,
       "min_version": "1.0",
-      "_note": "Anthropic Claude Opus 4.6 \u2014 -p must be last"
+      "_note": "Anthropic Claude Opus 4.6 — -p must be last",
+      "peer_port": 8743
     },
     "CODEX": {
       "exec": "{ROME_ROOT}/legions/legion_wrapper.py",
@@ -54,7 +48,8 @@
       ],
       "timeout": 300,
       "min_version": "0.1",
-      "_note": "OpenAI Codex CLI \u2014 requires OPENAI_API_KEY, not ChatGPT account. Currently disabled."
+      "_note": "OpenAI Codex CLI — requires OPENAI_API_KEY, not ChatGPT account. Currently disabled.",
+      "peer_port": 8744
     },
     "SAFE_SHELL": {
       "exec": "python3",
@@ -62,7 +57,8 @@
         "{ROME_ROOT}/legions/shell_executor.py"
       ],
       "timeout": 600,
-      "_note": "Dedicated bash executor \u2014 no LLM wrapper, no JSON parsing"
+      "_note": "Dedicated bash executor — no LLM wrapper, no JSON parsing",
+      "peer_port": 8745
     },
     "CENTURION": {
       "exec": "python3",
@@ -70,13 +66,15 @@
         "{ROME_ROOT}/legions/centurion.py"
       ],
       "timeout": 600,
-      "_note": "Parallel campaign orchestrator"
+      "_note": "Parallel campaign orchestrator",
+      "peer_port": 8746
     },
     "BROWSER": {
       "exec": "{ROME_ROOT}/legions/browser_worker.py",
       "args": [],
       "timeout": 300,
-      "_note": "Native WS browser worker"
+      "_note": "Native WS browser worker",
+      "peer_port": 8747
     },
     "MISTRAL": {
       "exec": "{ROME_ROOT}/legions/legion_wrapper.py",
@@ -89,15 +87,12 @@
         "auto-approve",
         "--output",
         "streaming",
-        "--ws-url",
-        "ws://127.0.0.1:8741/ws",
-        "--ws-token",
-        "ROME_V4_SECURE_TOKEN",
         "-p"
       ],
       "timeout": 300,
       "min_version": "2.0",
-      "_note": "Mistral Vibe CLI \u2014 -p must be last, requires PYTHONPATH=/home/paul-kane/projects/mistral-cli"
+      "_note": "Mistral Vibe CLI — -p must be last, requires PYTHONPATH=/home/paul-kane/projects/mistral-cli",
+      "peer_port": 8748
     }
   },
   "protocol_version": "1.0"

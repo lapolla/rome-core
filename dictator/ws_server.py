@@ -87,7 +87,7 @@ def _resolve_gemini_cli() -> str:
     return shutil.which("gemini") or "gemini"
 GEMINI_CLI = _resolve_gemini_cli()
 
-FALLBACK_CHAIN = {"GEMINI": "CODEX", "CODEX": "OPENCODE"}
+FALLBACK_CHAIN = {"GEMINI": "CODEX", "CODEX": "MISTRAL"}
 BUSY_PATTERNS = ["service temporarily unavailable", "overloaded", "rate_limit",
                  "rate limit", "quota", "503", "429", "capacity"]
 
@@ -297,7 +297,7 @@ async def _load_capabilities() -> dict[str, bool]:
                 capabilities_status[capability_name] = True
 
             # 3. Subprocess LLM capabilities (green if binary exists on PATH)
-            elif capability_name in {"GEMINI", "CLAUDE", "CODEX", "OPENCODE"}:
+            elif capability_name in {"GEMINI", "CLAUDE", "CODEX", "MISTRAL"}:
                 cli_args = details.get("args", [])
                 cli_bin = cli_args[0] if cli_args else exec_path
                 capabilities_status[capability_name] = bool(shutil.which(cli_bin) or Path(cli_bin).exists())

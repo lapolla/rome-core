@@ -5,7 +5,6 @@
 - pip
 
 ## Dependencies
-- fastmcp (MCP stdio transport for Claude Code)
 - websockets (daemon + worker connections)
 
 ## Install
