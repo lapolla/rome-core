@@ -90,10 +90,11 @@
       /* Main Pipeline Grid */
       .main {
         display: grid;
-        grid-template-columns: 1fr 300px;
-        gap: 24px;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 20px;
         min-height: 0;
       }
+      .main > .box:first-child { grid-column: span 3; }
 
       .box {
         background: var(--panel);
