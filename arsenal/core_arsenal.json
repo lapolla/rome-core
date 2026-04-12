@@ -82,6 +82,13 @@
       "peer_port": 8745,
       "peer_host": "127.0.0.1"
     },
+    "TEST": {
+      "type": "shell",
+      "timeout": 300,
+      "_note": "Automated test runner",
+      "peer_port": 8751,
+      "peer_host": "127.0.0.1"
+    },
     "HAIKU": {
       "type": "llm",
       "args": [

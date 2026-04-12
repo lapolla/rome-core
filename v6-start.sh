@@ -34,6 +34,9 @@ start_worker "GEMINI" node "$GEMINI_CLI" --sandbox false --include-directories "
 # SAFE_SHELL
 start_worker "SAFE_SHELL" bash -c
 
+# TEST
+start_worker "TEST" npm test --prefix "$ROME_ROOT"
+
 # MISTRAL (Upgraded with Native WS)
 start_worker "MISTRAL" python3 -m vibe.cli.entrypoint "env:PYTHONPATH=/home/paul-kane/projects/mistral-cli" --agent auto-approve --output text -p
 

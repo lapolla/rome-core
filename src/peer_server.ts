@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import type { RomeMessage, TaskInfo, TaskUsage } from './rome_types.js';
 import { EventBus, TaskRegistry, WorkerRegistry } from './registry.js';
 import { executeTask } from './legion_worker.js';
@@ -88,7 +88,7 @@ export class PeerServer {
     return "CODEX";
   }
 
-  start() {
+  start(): Promise<void> {
     this.server = http.createServer((req, res) => {
       const url = new URL(req.url || '', `http://${req.headers.host}`);
       if (url.pathname === '/health') {
@@ -109,12 +109,22 @@ export class PeerServer {
     });
 
     this.wss = new WebSocketServer({ server: this.server });
-    this.server.listen(this.port, () => {
-      console.log(`ROME Peer Server (${this.capability}) started on port ${this.port}`);
-      console.log(`Dashboard available at http://localhost:${this.port}/dashboard/`);
-    });
+    
+    this.intervals.push(setInterval(() => this.bus.broadcast({ type: 'heartbeat', task_id: '', payload: {} }), 15000));
+    this.intervals.push(setInterval(() => this.reapZombies(), 60000));
+    this.intervals.push(setInterval(() => this.broadcastSystemStatus(), 15000));
 
-    this.wss.on('connection', (ws, req) => {
+    return new Promise((resolve, reject) => {
+      this.server!.on('error', reject);
+      this.server!.listen(this.port, () => {
+        const addr = this.server!.address();
+        this.port = typeof addr === 'object' && addr !== null ? addr.port : this.port;
+        console.log(`ROME Peer Server (${this.capability}) started on port ${this.port}`);
+        console.log(`Dashboard available at http://localhost:${this.port}/dashboard/`);
+        resolve();
+      });
+
+      this.wss!.on('connection', (ws, req) => {
       const url = new URL(req.url || '', `http://${req.headers.host}`);
       // Same-origin dashboard connections bypass auth (browser can't set Authorization on WS upgrade)
       let sameOrigin = false;
@@ -153,9 +163,7 @@ export class PeerServer {
         this.bus.unsubscribe(ws);
       });
     });
-    this.intervals.push(setInterval(() => this.bus.broadcast({ type: 'heartbeat', task_id: '', payload: {} }), 15000));
-    this.intervals.push(setInterval(() => this.reapZombies(), 60000));
-    this.intervals.push(setInterval(() => this.broadcastSystemStatus(), 15000));
+    });
   }
 
   private broadcastSystemStatus() {
@@ -183,9 +191,21 @@ export class PeerServer {
   }
 
   stop() { 
-    if (this.wss) this.wss.close(); 
-    if (this.server) this.server.close();
     this.intervals.forEach(clearInterval); 
+    if (this.wss) {
+      this.wss.clients.forEach(ws => ws.terminate());
+      this.wss.close(); 
+    }
+    if (this.server) {
+      if (typeof (this.server as any).closeAllConnections === 'function') {
+        (this.server as any).closeAllConnections();
+      }
+      this.server.close();
+    }
+  }
+
+  getPort(): number {
+    return this.port || 0;
   }
 
   private handleWorkerEvent(ws: WebSocket, event: any) {
@@ -387,27 +407,71 @@ export class PeerServer {
   }
 
   private runNativeShell(ws: WebSocket, request_id: string, command: string, taskId?: string) {
-    const proc = exec(command, { encoding: 'utf-8', shell: '/bin/bash', cwd: ROME_ROOT }, (error, stdout, stderr) => {
+    const proc = spawn('/bin/bash', ['-c', command], { cwd: ROME_ROOT, env: { ...process.env, FORCE_COLOR: '1' }, detached: true });
+    proc.unref();
+    let output = '';
+    
+    this.activeSubprocesses.set(request_id, { 
+      kill: () => { 
+        if (proc.pid) {
+          try { 
+            // Kill the entire process group
+            process.kill(-proc.pid, 'SIGTERM'); 
+          } catch (_) {
+            try { proc.kill('SIGTERM'); } catch(__) {}
+          }
+        }
+      } 
+    });
+
+    proc.stdout.on('data', (data) => {
+      const chunk = data.toString();
+      output += chunk;
+      if (taskId) {
+        this.registry.updateProgress(taskId, 0, chunk.split('\n').pop() || 'Executing...');
+        this.bus.broadcast({ type: 'progress', task_id: taskId, payload: { percent: 0, message: chunk.split('\n').pop() || 'Executing...' } });
+      }
+    });
+
+    proc.stderr.on('data', (data) => {
+      const chunk = data.toString();
+      output += chunk;
+      if (taskId) {
+        this.registry.updateProgress(taskId, 0, chunk.split('\n').pop() || 'Executing...');
+        this.bus.broadcast({ type: 'progress', task_id: taskId, payload: { percent: 0, message: chunk.split('\n').pop() || 'Executing...' } });
+      }
+    });
+
+    proc.on('close', (exitCode) => {
       this.activeSubprocesses.delete(request_id);
-      const exitCode = (error as any)?.code || 0;
       const ok = exitCode === 0;
-      const report = stdout || (error ? error.message : '');
+      const report = output || (ok ? 'Command completed successfully' : 'Command failed');
 
       if (taskId) {
         const status = ok ? 'completed' : 'failed';
-        this.registry.update(taskId, status, { report, exit_code: exitCode });
-        this.bus.broadcast({ type: 'complete', task_id: taskId, payload: { status: ok ? 'SUCCESS' : 'FAILED', report, exit_code: exitCode } });
+        this.registry.update(taskId, status, { report, exit_code: exitCode || 0 });
+        this.bus.broadcast({ type: 'complete', task_id: taskId, payload: { status: ok ? 'SUCCESS' : 'FAILED', report, exit_code: exitCode || 0 } });
       }
 
-      if (error) {
-        ws.send(JSON.stringify({ type: 'response', request_id, ok: false, payload: { report, exit_code: exitCode } }));
-      } else {
-        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { report, exit_code: 0 } }));
+      const response = { 
+        type: 'response', 
+        request_id, 
+        ok, 
+        payload: { task_id: taskId, report, exit_code: exitCode || 0 } 
+      };
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(response));
+    });
+
+    proc.on('error', (err) => {
+      this.activeSubprocesses.delete(request_id);
+      if (taskId) {
+        this.registry.update(taskId, 'failed', { report: err.message, exit_code: 1 });
+        this.bus.broadcast({ type: 'complete', task_id: taskId, payload: { status: 'FAILED', report: err.message, exit_code: 1 } });
+      }
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: false, payload: { task_id: taskId, report: err.message, exit_code: 1 } }));
       }
     });
-    if (proc.pid) {
-      this.activeSubprocesses.set(request_id, { kill: () => { try { process.kill(proc.pid!, 'SIGTERM'); } catch (_) {} } });
-    }
   }
 
   private async runLegion(task_id: string, capability: string, prompt: string) {
