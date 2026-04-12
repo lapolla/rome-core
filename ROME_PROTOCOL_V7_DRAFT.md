@@ -1,5 +1,5 @@
 # ROME Protocol v7.0.0 (DRAFT)
-**Status:** DRAFT | **Focus:** The Decomposer Pattern
+**Status:** DRAFT | **Focus:** Decomposer Pattern & Sovereign Blackboard
 
 ## 1. Overview: The Decomposer Layer
 Building upon the Agent-to-Agent Direct Signal Mesh (A2A-DSM) established in v6, ROME v7 introduces the **Decomposer** concept. 
@@ -27,3 +27,24 @@ This enables:
 To maintain the fluidity of the mesh and adhere to the KISS principle:
 - The Decomposer pattern should be bypassed for trivial tasks to avoid latency overhead.
 - Agents must remain adaptable; if live system feedback from a probe contradicts the initial hypothesis, the agent can discard the plan and revert to iterative `[ROME_SHELL]` execution.
+
+## 5. The Sovereign Blackboard (Distributed State)
+ROME v7 evolves from a "Log of Tasks" to a **Sovereign State Machine**. This provides agents with a unified, queryable source of truth.
+
+### 5.1 Protocol: RSB over DAS
+State management moves from legacy stdout tags (DAS) to the **ROME Signal Bus (RSB)**. Agents interact with state via structured JSON commands over their persistent WebSocket connection:
+- `state_set`: Update a global state variable with causal metadata (e.g., `caused_by_task`).
+- `state_get`: Explicitly query a slice of the state tree.
+
+### 5.2 The Mesh Reducer
+The ROME daemon implements a deterministic **Mesh Reducer** that transforms raw mesh events into state transitions:
+1. **Intercept:** Detects `task_completed` events.
+2. **Reduce:** Maps JSON report payloads to state patches based on predefined schemas.
+3. **Link:** Automatically binds updates to the triggering `task_id` for perfect causal auditability.
+
+### 5.3 Architecture: Centralized Memory, Distributed Access
+To maintain the **ROME KISS mandate**, the state object (the Blackboard) is held in the daemon’s memory. Distributing state via consensus protocols (like Raft) is avoided to minimize complexity and latency. Centralization ensures atomic writes and immediate consistency for the ephemeral mesh.
+
+### 5.4 The "Context Diet" Win
+- **Massive context savings:** Agents query a specific JSON state object instead of parsing megabytes of historical task logs.
+- **Decoupled Orchestration:** Specialized agents can be spawned to react to specific state changes (e.g., `build_status: FAILED`), perform a fix, and exit without needing full session history.

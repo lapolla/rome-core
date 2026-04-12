@@ -365,6 +365,7 @@
             wv.color = taskWaveColor(t);
             const s = String(t.status || '').toLowerCase();
             if (s === 'running') wv.targetAmp = 18 + (t.progress_percent || 0) * 0.18;
+            else if (s === 'completed' || s === 'success' || s === 'failed' || s === 'error') wv.targetAmp = 12;
             else { wv.targetAmp = 0; wv.dying = true; }
           });
         }
@@ -499,16 +500,7 @@
         function connect() {
           const ws = new WebSocket(((window.location.protocol==="https:")?"wss:":"ws:")+"//"+window.location.host+"/ws");
           state.socket = ws;
-          ws.onopen = () => { 
-            const chip = document.getElementById('uptimeChip');
-            if (chip) chip.style.borderColor = "var(--success)";
-            send("get_state",{}); 
-          };
-          ws.onclose = () => { 
-            const chip = document.getElementById('uptimeChip');
-            if (chip) chip.style.borderColor = "var(--failed)";
-            setTimeout(connect, 3000); 
-          };
+          
           ws.onmessage = (m) => {
             const data = JSON.parse(m.data);
             if (data.type === "response" && data.ok) {
@@ -551,6 +543,17 @@
               }
               renderStats();
             }
+          };
+
+          ws.onopen = () => { 
+            const chip = document.getElementById('uptimeChip');
+            if (chip) chip.style.borderColor = "var(--success)";
+            send("get_state",{}); 
+          };
+          ws.onclose = () => { 
+            const chip = document.getElementById('uptimeChip');
+            if (chip) chip.style.borderColor = "var(--failed)";
+            setTimeout(connect, 3000); 
           };
         }
         connect();
