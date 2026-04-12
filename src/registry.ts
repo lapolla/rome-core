@@ -42,15 +42,19 @@ export class TaskRegistry {
   private tasks: Map<string, TaskInfo & { emitter: EventEmitter }> = new Map();
   private sessionUsage: TaskUsage = { total_tokens: 0, cost_usd: 0 };
 
-  register(task_id: string, capability: string, prompt: string, parent_task_id?: string) {
+  register(task_id: string, capability: string, prompt: string, parent_task_id?: string, goal?: string, intent?: string) {
+    const now = Date.now() / 1000;
     const task: TaskInfo & { emitter: EventEmitter } = {
       task_id,
       capability,
       prompt,
       status: 'pending',
-      ts: Date.now() / 1000,
-      updated_at: Date.now() / 1000,
+      ts: now,
+      created_at: now,
+      updated_at: now,
       parent_task_id,
+      goal: goal || prompt.slice(0, 50),
+      intent: intent || 'Autonomous Execution',
       emitter: new EventEmitter()
     };
     this.tasks.set(task_id, task);
@@ -61,7 +65,15 @@ export class TaskRegistry {
     if (task) {
       task.status = status;
       task.updated_at = Date.now() / 1000;
-      if (result !== undefined) task.result = result;
+      if (result !== undefined) {
+        task.result = result;
+        if (result.report) task.report = result.report;
+
+      }
+      if (['completed', 'failed', 'cancelled'].includes(status) && !task.completed_at) {
+        task.completed_at = Date.now() / 1000;
+        if (status === 'completed') task.progress_percent = 100;
+      }
       if (usage) {
         task.usage = usage;
         this.sessionUsage.total_tokens += usage.total_tokens;

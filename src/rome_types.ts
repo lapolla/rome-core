@@ -14,7 +14,9 @@ export interface TaskInfo {
   prompt: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   ts: number;
+  created_at?: number;
   updated_at?: number;
+  completed_at?: number;
   result?: any;
   usage?: TaskUsage;
   parent_task_id?: string | undefined;
@@ -22,6 +24,10 @@ export interface TaskInfo {
   peer_url?: string | undefined;
   progress_percent?: number | undefined;
   progress_message?: string | undefined;
+  goal?: string | undefined;
+  intent?: string | undefined;
+  report?: string | undefined;
+
 }
 
 export interface TaskUsage {

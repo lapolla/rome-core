@@ -4,11 +4,11 @@ import * as path from 'path';
 
 const ROME_ROOT = process.env.ROME_ROOT || process.cwd();
 
-export async function executeShell(
+export function executeShell(
   taskId: string,
   command: string,
   wsSender?: (ev: any) => Promise<void>
-): Promise<{ status: 'SUCCESS' | 'FAILED'; report: string; exit_code: number; elapsed_s: number }> {
+): Promise<{ status: 'SUCCESS' | 'FAILED'; report: string; exit_code: number; elapsed_s: number }> & { kill?: () => void } {
   const taskDir = path.join(ROME_ROOT, 'legions', taskId);
   if (!fs.existsSync(taskDir)) {
     fs.mkdirSync(taskDir, { recursive: true });
@@ -21,9 +21,10 @@ export async function executeShell(
   let lineCount = 0;
   let totalLineCount = 0;
   let lastProgressTs = Date.now();
+  let proc!: ReturnType<typeof spawn>;
 
-  return new Promise((resolve) => {
-    const proc = spawn('bash', ['-c', command], {
+  const promise = new Promise<{ status: 'SUCCESS' | 'FAILED'; report: string; exit_code: number; elapsed_s: number }>((resolve) => {
+    proc = spawn('bash', ['-c', command], {
       detached: true,
       cwd: taskDir,
       env: {
@@ -68,10 +69,10 @@ export async function executeShell(
       }
     };
 
-    proc.stdout.on('data', onData);
-    proc.stderr.on('data', onData);
+    proc.stdout?.on('data', onData);
+    proc.stderr?.on('data', onData);
 
-    proc.on('close', (code) => {
+    proc.on('close', (code: number) => {
       clearTimeout(timeout);
       if (timedOut) {
           chunks.push(Buffer.from(`\n[TIMEOUT] Process killed after ${shellTimeout}s\n`));
@@ -88,7 +89,7 @@ export async function executeShell(
       });
     });
 
-    proc.on('error', (err) => {
+    proc.on('error', (err: Error) => {
       clearTimeout(timeout);
       const elapsed_s = (Date.now() - startTs) / 1000;
       chunks.push(Buffer.from(`\n[ERROR] ${err.message}\n`));
@@ -100,4 +101,12 @@ export async function executeShell(
       });
     });
   });
+
+  (promise as any).kill = () => {
+    if (proc && proc.pid) {
+      try { process.kill(-proc.pid, 'SIGTERM'); } catch (e) {}
+    }
+  };
+
+  return promise;
 }

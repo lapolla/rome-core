@@ -245,9 +245,14 @@
             els.mesh.innerHTML = '';
             return;
           }
-          els.mesh.innerHTML = state.agents.map(a => `
+          // Deduplicate by capability key — keep most recently connected (last in list)
+          const seen = new Map();
+          for (const a of state.agents) {
+            const key = (a.capabilities || []).join(',') || a.worker_id;
+            seen.set(key, a);
+          }
+          els.mesh.innerHTML = Array.from(seen.values()).map(a => `
             <div class="chip" title="${a.peer_url || 'local connection'}">
-              <span>${a.agent_id.split('-')[1] || a.agent_id}</span>
               <span style="color:var(--accent)">[${(a.capabilities || []).join(',')}]</span>
             </div>
           `).join("");
@@ -257,24 +262,34 @@
         const canvas = document.getElementById('meshGraph');
         const ctx = canvas.getContext('2d');
         const waves = [];
-        function taskWaveColor(status) {
-          const s = String(status || '').toLowerCase();
-          if (s === 'running') return '#38bdf8';
-          if (s === 'success' || s === 'completed') return '#22c55e';
-          if (s === 'failed' || s === 'error' || s === 'cancelled') return '#f43f5e';
-          return '#475569';
+        function getCapColor(cap) {
+          const c = String(cap || '').toUpperCase();
+          if (c === 'GEMINI') return '#38bdf8'; // Blue
+          if (c === 'MISTRAL') return '#f59e0b'; // Orange
+          if (c === 'CLAUDE') return '#a855f7'; // Purple
+          if (c === 'SAFE_SHELL') return '#22c55e'; // Green
+          return '#64748b'; // Slate
         }
+
+        function taskWaveColor(task) {
+          if (!task) return '#475569';
+          const s = String(task.status || '').toLowerCase();
+          if (s === 'failed' || s === 'error' || s === 'cancelled') return '#f43f5e';
+          if (s === 'success' || s === 'completed') return '#10b981';
+          return getCapColor(task.capability);
+        }
+
         function syncWavesToTasks() {
           const tasks = Array.from(state.tasks.values()).filter(t => t.status !== 'expired');
           const taskIds = new Set(tasks.map(t => t.task_id));
           const waveIds = new Set(waves.map(w => w.task_id));
           tasks.forEach(t => {
-            if (!waveIds.has(t.task_id)) waves.push({ task_id: t.task_id, color: taskWaveColor(t.status), base: 0.15 + Math.random() * 0.7, speed: 0.0008 + Math.random() * 0.0014, freq: 0.008 + Math.random() * 0.010, offset: Math.random() * Math.PI * 2, currentAmp: 0, targetAmp: 26, dying: false });
+            if (!waveIds.has(t.task_id)) waves.push({ task_id: t.task_id, color: taskWaveColor(t), base: 0.15 + Math.random() * 0.7, speed: 0.0008 + Math.random() * 0.0014, freq: 0.008 + Math.random() * 0.010, offset: Math.random() * Math.PI * 2, currentAmp: 0, targetAmp: 26, dying: false });
           });
           waves.forEach(wv => {
             const t = state.tasks.get(wv.task_id);
             if (!t || !taskIds.has(wv.task_id)) { wv.dying = true; wv.targetAmp = 0; return; }
-            wv.color = taskWaveColor(t.status);
+            wv.color = taskWaveColor(t);
             const s = String(t.status || '').toLowerCase();
             if (s === 'running') wv.targetAmp = 18 + (t.progress_percent || 0) * 0.18;
             else { wv.targetAmp = 0; wv.dying = true; }
@@ -356,7 +371,8 @@
           }
 
           els.grid.innerHTML = tasks.map(t => {
-            const color = getColor(t.status);
+            const statusColor = getColor(t.status);
+            const capColor = getCapColor(t.capability);
             const pct = Math.min(100, Math.max(0, t.progress_percent || 0));
             const elapsed = formatTime((t.completed_at || (Date.now()/1000)) - t.created_at);
             
@@ -366,17 +382,17 @@
             const cause = (t.status === "failed" || t.status === "error") ? (t.cause || t.progress_message || "Execution error") : null;
 
             return `
-              <div class="card" style="--status-color: ${color}" onclick="viewReport('${t.task_id}')">
+              <div class="card" style="--status-color: ${capColor}" onclick="viewReport('${t.task_id}')">
                 <div class="card-head">
                   <span class="task-id">${t.task_id}</span>
-                  <span class="cap-badge">${t.capability}</span>
+                  <span class="cap-badge" style="color:${capColor}; border-color:${capColor}44">${t.capability}</span>
                 </div>
                 <div class="goal">${goal}</div>
                 <div class="intent">${intent}</div>
-                <div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div>
+                <div class="prog-bar"><div class="prog-fill" style="width:${pct}%; background:${statusColor}"></div></div>
                 <div class="card-foot">
                   <span>${pct.toFixed(0)}%</span>
-                  <span style="color:${color}">${t.status.toUpperCase()}</span>
+                  <span style="color:${statusColor}">${t.status.toUpperCase()}</span>
                   <span>${elapsed}</span>
                 </div>
                 ${cause ? `<div class="cause">CAUSE: ${cause}</div>` : ''}
@@ -390,9 +406,6 @@
           els.modalTitle.textContent = "TASK REPORT :: " + tid;
           els.modalContent.textContent = task.report || "Requesting report from mesh...";
           els.modal.classList.add('active');
-          if (task.report_path && task.report_path !== 'null' && !task.report) {
-            send("read_report", { report_path: task.report_path });
-          }
         };
 
         window.meshReset = () => { 
@@ -431,8 +444,15 @@
               if (ev.type === "progress" && state.tasks.has(tid)) {
                 const t = state.tasks.get(tid); t.progress_percent = p.percent; t.progress_message = p.message; t.updated_at = ev.ts; renderTasks(); syncWavesToTasks();
               } else if (ev.type === "complete") {
-                if (state.tasks.has(tid)) { 
-                  const t = state.tasks.get(tid); t.status = p.status; t.completed_at = ev.ts; t.report = p.report; t.report_path = p.report_path;
+                if (!state.tasks.has(tid)) state.tasks.set(tid, { task_id: tid, status: 'running' });
+                if (state.tasks.has(tid)) {
+                  const rawStatus = String(p.status || '').toUpperCase();
+                  const normStatus = ['SUCCESS','OK','COMPLETED'].includes(rawStatus) ? 'completed' : (rawStatus === 'FAILED' ? 'failed' : (rawStatus === 'CANCELLED' ? 'cancelled' : p.status));
+                  const t = state.tasks.get(tid); t.status = normStatus; t.completed_at = ev.ts; t.report = p.report;
+                  if (p.usage) {
+                    state.cost += (p.usage.cost_usd || 0);
+                    state.tokens += (p.usage.total_tokens || 0);
+                  }
                   state.history.push(Date.now()); renderTasks();
                 }
                 addLog("COMPLETE", tid, p.status);
