@@ -376,16 +376,20 @@
             const pct = Math.min(100, Math.max(0, t.progress_percent || 0));
             const elapsed = formatTime((t.completed_at || (Date.now()/1000)) - t.created_at);
             
+            // Success overrides capability color for the border/badge
+            const isSuccess = (t.status === "success" || t.status === "completed");
+            const displayColor = isSuccess ? "var(--success)" : capColor;
+
             // SURFACE CAUSAL CHAIN
             const goal = t.goal || t.task_id;
             const intent = t.intent || "Implicit task goal";
             const cause = (t.status === "failed" || t.status === "error") ? (t.cause || t.progress_message || "Execution error") : null;
 
             return `
-              <div class="card" style="--status-color: ${capColor}" onclick="viewReport('${t.task_id}')">
+              <div class="card" style="--status-color: ${displayColor}" onclick="viewReport('${t.task_id}')">
                 <div class="card-head">
                   <span class="task-id">${t.task_id}</span>
-                  <span class="cap-badge" style="color:${capColor}; border-color:${capColor}44">${t.capability}</span>
+                  <span class="cap-badge" style="color:var(--status-color); border-color:${displayColor}44">${t.capability}</span>
                 </div>
                 <div class="goal">${goal}</div>
                 <div class="intent">${intent}</div>
