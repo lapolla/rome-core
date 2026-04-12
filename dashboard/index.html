@@ -185,7 +185,6 @@
           <div id="meshTopology" style="display: flex; gap: 8px;"></div>
           <div class="chip">UPTIME: <span id="uptime">--</span></div>
           <div class="chip">WS: <span id="wsStatus">...</span></div>
-          <button class="btn-reset" onclick="meshReset()">PURGE SESSION</button>
         </div>
       </header>
 
@@ -406,14 +405,6 @@
           els.modalTitle.textContent = "TASK REPORT :: " + tid;
           els.modalContent.textContent = task.report || "Requesting report from mesh...";
           els.modal.classList.add('active');
-        };
-
-        window.meshReset = () => { 
-          if(confirm("Confirm purge of all mesh state?")) {
-            send("reset", {});
-            state.tasks.clear(); state.logs = []; state.cost = 0; state.tokens = 0;
-            renderTasks(); renderStats();
-          }
         };
 
         function send(cmd, p) {
