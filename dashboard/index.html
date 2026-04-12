@@ -18,6 +18,7 @@
         --text-dim: #64748b;
         --success: #10b981;
         --failed: #f43f5e;
+        --pending: #f59e0b;
         --running: #3b82f6;
         --registered: #475569;
         --radius: 8px;
@@ -333,11 +334,12 @@
           const s = String(status || "").toLowerCase();
           if (s === "success" || s === "completed") return "var(--success)";
           if (s === "failed" || s === "error" || s === "cancelled") return "var(--failed)";
+          if (s === "pending") return "var(--pending)";
           if (s === "running") return "var(--running)";
           return "var(--registered)";
         }
 
-        function addLog(type, tid, msg) {
+        function renderStats() {
           state.logs.unshift({ ts: Date.now(), type, tid, msg });
           state.logs = state.logs.slice(0, 50);
           document.getElementById('logCount').textContent = state.logs.length;
@@ -376,9 +378,12 @@
             const pct = Math.min(100, Math.max(0, t.progress_percent || 0));
             const elapsed = formatTime((t.completed_at || (Date.now()/1000)) - t.created_at);
             
-            // Success overrides capability color for the border/badge
-            const isSuccess = (t.status === "success" || t.status === "completed");
-            const displayColor = isSuccess ? "var(--success)" : capColor;
+            // Status overrides capability color for the border/badge
+            const s = String(t.status || "").toLowerCase();
+            let displayColor = capColor;
+            if (s === "success" || s === "completed") displayColor = "var(--success)";
+            else if (s === "failed" || s === "error" || s === "cancelled") displayColor = "var(--failed)";
+            else if (s === "pending") displayColor = "var(--pending)";
 
             // SURFACE CAUSAL CHAIN
             const goal = t.goal || t.task_id;
