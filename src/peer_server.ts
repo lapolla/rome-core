@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
 import type { RomeMessage, TaskInfo, TaskUsage } from './rome_types.js';
 import { EventBus, TaskRegistry, WorkerRegistry } from './registry.js';
 import { executeTask } from './legion_worker.js';
@@ -52,6 +52,7 @@ export class PeerServer {
   private bus = new EventBus();
   private registry = new TaskRegistry();
   private workers = new WorkerRegistry();
+  private activeSubprocesses = new Map<string, { kill: () => void }>();
   private arsenal: any;
   private aaak: AAAK;
   private wss?: WebSocketServer;
@@ -126,14 +127,21 @@ export class PeerServer {
       }
       let isWorker = false;
       this.bus.subscribe(ws);
-      ws.send(JSON.stringify({ type: 'daemon_hello', version: '5.0.0-ts', platform: process.platform, capabilities: Object.keys(this.arsenal), uptime_s: (Date.now() / 1000) - this.startTime }));
+      ws.send(JSON.stringify({ type: 'daemon_hello', version: '6.0.0', platform: process.platform, capabilities: Object.keys(this.arsenal), uptime_s: (Date.now() / 1000) - this.startTime }));
       ws.on('message', async (data) => {
         try {
           const msg = JSON.parse(data.toString());
           if (msg.type === 'agent_hello') {
-            this.workers.register(ws, msg.payload?.capabilities || [], msg.payload?.version, msg.payload?.platform, msg.payload?.peer_url);
+            const p = msg.payload || {};
+            const caps = Array.isArray(p.capabilities) ? p.capabilities : [];
+            if (caps.length === 0) {
+              console.log(`[MESH] Ignoring worker registration with empty capabilities`);
+              return;
+            }
+            console.log(`[MESH] Registering worker ${ws.url} with caps:`, caps);
+            this.workers.register(ws, caps, p.version, p.platform, p.peer_url);
             isWorker = true;
-            ws.send(JSON.stringify({ type: 'worker_ack', ok: true, payload: { message: 'Registered' } }));
+            ws.send(JSON.stringify({ type: 'worker_ack', ok: true, payload: { message: 'Registered', capabilities_accepted: caps } }));
             return;
           }
           if (msg.type === 'event' && isWorker) { this.handleWorkerEvent(ws, msg.event); return; }
@@ -147,6 +155,21 @@ export class PeerServer {
     });
     this.intervals.push(setInterval(() => this.bus.broadcast({ type: 'heartbeat', task_id: '', payload: {} }), 15000));
     this.intervals.push(setInterval(() => this.reapZombies(), 60000));
+    this.intervals.push(setInterval(() => this.broadcastSystemStatus(), 15000));
+  }
+
+  private broadcastSystemStatus() {
+    const stats = this.registry.getSessionStats();
+    this.bus.broadcast({
+      type: 'system_status',
+      task_id: '',
+      payload: {
+        uptime_s: (Date.now() / 1000) - this.startTime,
+        agents: this.workers.getInfo(),
+        capability: this.capability,
+        ...stats
+      }
+    });
   }
 
   private reapZombies() {
@@ -183,7 +206,8 @@ export class PeerServer {
           }, task?.prompt || "");
         }
 
-        this.registry.update(task_id, status, payload.result || payload, payload.usage);
+        const resultPayload = { ...(payload.result || payload), report: payload.report };
+        this.registry.update(task_id, status, resultPayload, payload.usage);
         this.bus.broadcast({ type: 'complete', task_id, payload });
         this.workers.markIdle(ws, task_id);
         this.logUsage('worker', status, task_id, payload.usage);
@@ -210,8 +234,8 @@ export class PeerServer {
         // AAAK Hook: Pre-dispatch
         const distilledPrompt = this.aaak.preDispatch(prompt, '', capability);
 
-        this.registry.register(task_id, capability, prompt, payload.parent_task_id);
-        this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability } });
+        this.registry.register(task_id, capability, prompt, payload.parent_task_id, payload.goal, payload.intent);
+        this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability, goal: payload.goal, intent: payload.intent } });
         const workerWs = this.workers.findWorker(capability);
         if (workerWs) {
           this.workers.markBusy(workerWs, task_id);
@@ -224,17 +248,18 @@ export class PeerServer {
         break;
       }
       case 'native_shell': {
-        try {
-          const output = execSync(payload.command, { encoding: 'utf-8', cwd: ROME_ROOT });
-          ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { stdout: output } }));
-        } catch (e: any) {
-          ws.send(JSON.stringify({ type: 'response', request_id, ok: false, payload: { stderr: e.stderr || e.message } }));
-        }
+        const task_id = `ts-${uuidv4().substring(0, 8)}`;
+        const cmdStr = payload.command || '';
+        this.registry.register(task_id, 'NATIVE_SHELL', cmdStr, undefined, cmdStr.slice(0, 50), 'Native Daemon Shell');
+        this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability: 'NATIVE_SHELL', goal: cmdStr.slice(0, 50), intent: 'Native Daemon Shell' } });
+        this.runNativeShell(ws, request_id || '', cmdStr, task_id);
         break;
       }
       case 'status': {
         const task_id = payload.task_id;
-        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: task_id ? this.registry.get(task_id) : { tasks: this.registry.getAll(), workers: this.workers.getInfo() } }));
+        const tasksObj = Object.fromEntries(this.registry.getAll().map(t => [t.task_id, t]));
+        const stats = this.registry.getSessionStats();
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: task_id ? this.registry.get(task_id) : { tasks: tasksObj, workers: this.workers.getInfo(), ...stats, uptime_s: (Date.now() / 1000) - this.startTime } }));
         break;
       }
       case 'dashboard_stats': {
@@ -275,18 +300,26 @@ export class PeerServer {
       case 'cancel': {
         const task_id = payload.task_id;
         this.registry.update(task_id, 'cancelled');
+        const localProc = this.activeSubprocesses.get(task_id);
+        if (localProc) {
+          localProc.kill();
+          this.activeSubprocesses.delete(task_id);
+        }
         const workerWs = this.workers.findWorkerByTask(task_id);
         if (workerWs) workerWs.send(JSON.stringify({ type: 'interrupt', task_id }));
+        this.bus.broadcast({ type: 'complete', task_id, payload: { status: 'cancelled', ok: false, report: 'Task cancelled by user.' } });
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { task_id, cancelled: true } }));
         break;
       }
       case 'reset': {
         this.registry.clearAll();
+        this.bus.broadcast({ type: 'reset', task_id: '', payload: { cleared: true } });
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { cleared: true } }));
         break;
       }
       case 'clear': {
         this.registry.clearFinished();
+        this.bus.broadcast({ type: 'clear', task_id: '', payload: { cleared: true } });
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { cleared: true } }));
         break;
       }
@@ -322,16 +355,6 @@ export class PeerServer {
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { tokens_logged: payload.tokens } }));
         break;
       }
-      case 'read_report': {
-        const reportPath = payload.report_path;
-        try {
-          const content = fs.readFileSync(reportPath, 'utf-8').substring(0, 4096);
-          ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { content } }));
-        } catch (e: any) {
-          ws.send(JSON.stringify({ type: 'response', request_id, ok: false, error: e.message }));
-        }
-        break;
-      }
       case 'event': {
         this.bus.broadcast(payload);
         if (payload.type === 'complete' && payload.task_id) {
@@ -346,9 +369,15 @@ export class PeerServer {
       }
       case 'interrupt': {
         const task_id = payload.task_id;
+        const localProc = this.activeSubprocesses.get(task_id);
+        if (localProc) {
+          localProc.kill();
+          this.activeSubprocesses.delete(task_id);
+        }
         const workerWs = this.workers.findWorkerByTask(task_id);
         if (workerWs) workerWs.send(JSON.stringify({ type: 'interrupt', task_id }));
         this.registry.update(task_id, 'cancelled');
+        this.bus.broadcast({ type: 'complete', task_id, payload: { status: 'cancelled', ok: false, report: 'Interrupted by user.' } });
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true }));
         break;
       }
@@ -357,11 +386,65 @@ export class PeerServer {
     }
   }
 
+  private runNativeShell(ws: WebSocket, request_id: string, command: string, taskId?: string) {
+    const proc = exec(command, { encoding: 'utf-8', shell: '/bin/bash', cwd: ROME_ROOT }, (error, stdout, stderr) => {
+      this.activeSubprocesses.delete(request_id);
+      const exitCode = (error as any)?.code || 0;
+      const ok = exitCode === 0;
+      const report = stdout || (error ? error.message : '');
+
+      if (taskId) {
+        const status = ok ? 'completed' : 'failed';
+        this.registry.update(taskId, status, { report, exit_code: exitCode });
+        this.bus.broadcast({ type: 'complete', task_id: taskId, payload: { status: ok ? 'SUCCESS' : 'FAILED', report, exit_code: exitCode } });
+      }
+
+      if (error) {
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: false, payload: { report, exit_code: exitCode } }));
+      } else {
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { report, exit_code: 0 } }));
+      }
+    });
+    if (proc.pid) {
+      this.activeSubprocesses.set(request_id, { kill: () => { try { process.kill(proc.pid!, 'SIGTERM'); } catch (_) {} } });
+    }
+  }
+
   private async runLegion(task_id: string, capability: string, prompt: string) {
     const cap = this.arsenal[capability];
     if (!cap) { this.registry.update(task_id, 'failed', { error: `Unknown capability: ${capability}` }); return; }
     const taskDir = path.join(ROME_ROOT, 'legions', task_id);
     fs.mkdirSync(taskDir, { recursive: true });
+
+    const signalHandler = async (signal: any): Promise<object> => {
+      switch (signal.type) {
+        case 'dispatch': {
+          const sub_task_id = `ts-${uuidv4().substring(0, 8)}`;
+          const sub_cap = (signal.capability || 'SAFE_SHELL').toUpperCase();
+          const sub_prompt = signal.prompt || '';
+          this.registry.register(sub_task_id, sub_cap, sub_prompt, task_id);
+          this.bus.broadcast({ type: 'dispatch_start', task_id: sub_task_id, payload: { capability: sub_cap, parent_task_id: task_id } });
+          const workerWs = this.workers.findWorker(sub_cap);
+          if (workerWs) {
+            this.workers.markBusy(workerWs, sub_task_id);
+            workerWs.send(JSON.stringify({ type: 'command', command: 'dispatch', request_id: `fwd-${sub_task_id}`, payload: { task_id: sub_task_id, capability: sub_cap, prompt: sub_prompt } }));
+          } else {
+            this.runLegion(sub_task_id, sub_cap, sub_prompt);
+          }
+          return { ok: true, task_id: sub_task_id };
+        }
+        case 'await': {
+          const res = await this.registry.awaitTask(signal.task_id, 300000); // 5 min default
+          return res ? { ok: true, ...res } : { ok: false, error: 'Task not found or timed out' };
+        }
+        case 'shell': {
+          const res = await executeShell(task_id + '-shell', signal.command);
+          return { ok: res.status === 'SUCCESS', report: res.report, exit_code: res.exit_code };
+        }
+        default:
+          return { ok: false, error: `Signal type '${signal.type}' not supported by PeerServer` };
+      }
+    };
 
     if (cap.type === 'llm') {
       // LLM capabilities (GEMINI, CLAUDE, CODEX, HAIKU, MISTRAL) — run via TS executeTask in-process
@@ -376,7 +459,10 @@ export class PeerServer {
       };
       const cmdArgs = [...(cap.args as string[]), prompt];
       try {
-        const manifest = await executeTask(task_id, capability, cmdArgs, wsSender);
+        const taskPromise = executeTask(task_id, capability, cmdArgs, wsSender, undefined, signalHandler);
+        // Track the executeTask promise if possible, but executeTask spawns its own children
+        // The most critical part is the shell capability.
+        const manifest = await taskPromise;
         const ok = manifest.status === 'SUCCESS';
         
         // AAAK Hook: Post-result
@@ -389,6 +475,8 @@ export class PeerServer {
       } catch (e: any) {
         this.registry.update(task_id, 'failed', { error: String(e) });
         this.bus.broadcast({ type: 'complete', task_id, payload: { status: 'FAILED', ok: false, report: String(e) } });
+      } finally {
+        this.activeSubprocesses.delete(task_id);
       }
       return;
     }
@@ -403,7 +491,9 @@ export class PeerServer {
         this.bus.broadcast(inner);
       };
       try {
-        const result = await executeShell(task_id, prompt, wsSender);
+        const shellPromise = executeShell(task_id, prompt, wsSender);
+        this.activeSubprocesses.set(task_id, { kill: () => (shellPromise as any).kill?.() });
+        const result = await shellPromise;
         const ok = result.status === 'SUCCESS';
 
         // AAAK Hook: Post-result
@@ -419,6 +509,8 @@ export class PeerServer {
       } catch (e: any) {
         this.registry.update(task_id, 'failed', { error: String(e) });
         this.bus.broadcast({ type: 'complete', task_id, payload: { status: 'FAILED', ok: false, report: String(e) } });
+      } finally {
+        this.activeSubprocesses.delete(task_id);
       }
       return;
     }

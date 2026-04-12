@@ -40,6 +40,25 @@
       "peer_port": 8743,
       "peer_host": "127.0.0.1"
     },
+    "GEMMA": {
+      "type": "llm",
+      "args": [
+        "env:ANTHROPIC_AUTH_TOKEN=ollama",
+        "env:ANTHROPIC_BASE_URL=http://localhost:11434",
+        "claude",
+        "--dangerously-skip-permissions",
+        "--output-format",
+        "json",
+        "--model",
+        "gemma4:e4b",
+        "-p"
+      ],
+      "timeout": 300,
+      "min_version": "1.0",
+      "_note": "Gemma 4 via Ollama/Claude-CLI bridge",
+      "peer_port": 8750,
+      "peer_host": "127.0.0.1"
+    },
     "CODEX": {
       "type": "llm",
       "args": [
@@ -90,7 +109,7 @@
         "--agent",
         "auto-approve",
         "--output",
-        "streaming",
+        "text",
         "-p"
       ],
       "timeout": 300,

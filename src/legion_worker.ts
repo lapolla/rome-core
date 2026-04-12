@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /**
- * ROME LEGIONARY V4.0: PERSISTENT WORKER ENGINE (TypeScript)
- * Faithful port of legions/legion_wrapper.py
+ * ROME LEGIONARY V6: PERSISTENT WORKER ENGINE (TypeScript)
  */
 
 import { spawn } from 'child_process';
@@ -219,6 +218,7 @@ const _GEMINI_PRICING: Record<string, [number, number]> = {
   'gemini-2.0-flash':      [0.10,   0.40],
   'gemini-1.5-pro':        [1.25,   5.00],
   'gemini-1.5-flash':      [0.075,  0.30],
+  'gemma4':                [3.00,  15.00], // 0.003/0.015 per 1k (standard local estimate)
 };
 
 const _RATE_LIMIT_SIGNALS = [
@@ -270,17 +270,41 @@ function loadModelChain(capabilityName: string): string[] {
 
 // ── PARSING ────────────────────────────────────────────────────────────────────
 
+function extractJson(text: string): Record<string, any> | null {
+  try {
+    const start = text.indexOf('{');
+    if (start < 0) return null;
+    
+    let depth = 0;
+    let end = -1;
+    for (let i = start; i < text.length; i++) {
+      if (text[i] === '{') depth++;
+      else if (text[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    
+    if (end > 0) {
+      return JSON.parse(text.slice(start, end + 1));
+    }
+  } catch (e) {}
+  return null;
+}
+
 export function parseUsage(text: string): [string, Usage | null] {
   if (!text) return [text, null];
-  const stripped = text.trim();
-  const idx = stripped.indexOf('{');
-  if (idx < 0) return [text, null];
-
-  let data: Record<string, unknown>;
-  try {
-    data = JSON.parse(stripped.slice(idx)) as Record<string, unknown>;
-  } catch {
-    return [text, null];
+  
+  const data = extractJson(text);
+  if (!data) return [text, null];
+  
+  let cleanText = text;
+  const startIdx = text.indexOf('{');
+  if (startIdx >= 0) {
+    cleanText = text.slice(0, startIdx).trim();
   }
 
   // Claude shape: { result, usage, modelUsage?, total_cost_usd? }
@@ -302,7 +326,7 @@ export function parseUsage(text: string): [string, Usage | null] {
         (u.output_tokens ?? 0),
       cost_usd: typeof data.total_cost_usd === 'number' ? data.total_cost_usd : null,
     };
-    return [String(data.result ?? ''), usage];
+    return [String(data.result ?? cleanText), usage];
   }
 
   // Gemini shape: { response, stats: { models: { <name>: { tokens: { input, candidates, total } } } } }
@@ -324,7 +348,7 @@ export function parseUsage(text: string): [string, Usage | null] {
       total_tokens:  totalAll,
       cost_usd: calcGeminiCost(modelName, totalIn, totalOut),
     };
-    return [String(data.response ?? ''), usage];
+    return [String(data.response ?? cleanText), usage];
   }
 
   return [text, null];
@@ -400,9 +424,11 @@ function isEmptyContent(content: string | null | undefined): boolean {
   return false;
 }
 
+export type SignalHandler = (signal: PendingSignal) => Promise<object>;
+
 // ── ROME SIGNAL HANDLER ────────────────────────────────────────────────────────
 
-async function handleRomeSignal(signal: PendingSignal): Promise<object> {
+async function handleRomeSignal(signal: PendingSignal, handler?: SignalHandler): Promise<object> {
   if (signal.type === 'read' && signal.path) {
     try {
       return { ok: true, content: fs.readFileSync(signal.path, 'utf-8') };
@@ -410,7 +436,15 @@ async function handleRomeSignal(signal: PendingSignal): Promise<object> {
       return { ok: false, error: String(e) };
     }
   }
-  // dispatch / await / shell require full V6 mesh wiring — stub for now
+  
+  if (handler) {
+    try {
+      return await handler(signal);
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  }
+
   return { ok: false, error: `Signal type '${signal.type}' not yet wired in TS worker` };
 }
 
@@ -422,6 +456,7 @@ export async function executeTask(
   cmdArgs: string[],
   wsSender?: (ev: object) => Promise<void>,
   modelChain?: string[],
+  signalHandler?: SignalHandler,
 ): Promise<Manifest> {
   const t0 = Date.now() / 1000;
   const cmdArgsOrig = cmdArgs;
@@ -443,7 +478,7 @@ export async function executeTask(
   }
 
   const ui = new LegionaryUI(taskId, t0, wsSender, taskDir);
-  ui.log(0, 'Engaged (4.0.0).');
+  ui.log(0, 'Engaged.');
 
   // Separate env:KEY=VAL args from real command args
   const filteredArgs = cmdArgs.filter(a => !a.startsWith('env:'));
@@ -457,8 +492,8 @@ export async function executeTask(
   }
 
   const combinedEnv: NodeJS.ProcessEnv = {
-    ...envOverrides,
     ...process.env,
+    ...envOverrides,
     PYTHONUNBUFFERED: '1',
     ROME_TASK_ID: taskId,
     ROME_TASK_DIR: taskDir,
@@ -493,7 +528,7 @@ export async function executeTask(
       const sigData = parseRomeSignals(line);
       for (const pending of sigData.pending) {
         try {
-          const res = await handleRomeSignal(pending);
+          const res = await handleRomeSignal(pending, signalHandler);
           child.stdin?.write(JSON.stringify(res) + '\n');
         } catch (e) {
           child.stdin?.write(JSON.stringify({ ok: false, error: String(e) }) + '\n');
@@ -550,7 +585,7 @@ export async function executeTask(
 
   const progressLogPath = path.join(taskDir, 'progress.log');
   const manifest: Manifest = {
-    rome_v: '4.0',
+    rome_v: '6.0.0',
     task_id: taskId,
     status,
     metadata: signals.metadata,
@@ -655,8 +690,8 @@ export async function runWorker(
   capabilityCmdBase: string[],
   token?: string,
 ): Promise<void> {
-  console.log(`ROME V4: Connecting as persistent worker to ${wsUrl}`);
-  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const urlWithToken = token ? `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}token=${token}` : wsUrl;
+  console.log(`ROME V6: Connecting as persistent worker to ${wsUrl}`);
 
   const { port: peerPort } = await startPeerServer(capabilities, capabilityCmdBase);
   const peerUrl = `ws://127.0.0.1:${peerPort}`;
@@ -664,17 +699,19 @@ export async function runWorker(
   let backoff = 1.0;
   while (true) {
     await new Promise<void>(resolveLoop => {
-      const ws = new WebSocket(wsUrl, { headers });
+      const ws = new WebSocket(urlWithToken);
 
       ws.on('open', () => {
         backoff = 1.0;
-        console.log('ROME V4: Registered. Awaiting tasks...');
+        console.log('ROME V6: Registered. Awaiting tasks...');
         ws.send(JSON.stringify({
           type: 'agent_hello',
-          capabilities,
-          version: '4.0.0',
-          platform: process.platform,
-          peer_url: peerUrl,
+          payload: {
+            capabilities,
+            version: '6.0.0',
+            platform: process.platform,
+            peer_url: peerUrl,
+          }
         }));
       });
 
@@ -682,7 +719,12 @@ export async function runWorker(
         void (async () => {
           try {
             const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
-            console.log(`ROME V4: Received message type=${String(msg.type ?? '')}`);
+            console.log(`ROME V6: Received message type=${String(msg.type ?? '')}`, JSON.stringify(msg));
+
+            if (msg.type === 'worker_ack') {
+              console.log('ROME V6: Handshake confirmed by server:', JSON.stringify((msg as any).payload || {}));
+              return;
+            }
 
             if (msg.type !== 'command' || msg.command !== 'dispatch') return;
 
@@ -702,11 +744,12 @@ export async function runWorker(
 
             void (async () => {
               const manifest = await executeTask(taskId, cap, cmd, uiSender);
-              let reportContent = '';
-              try {
-                const p = manifest.artifacts[0]?.path;
-                if (p) reportContent = fs.readFileSync(p, 'utf-8');
-              } catch { /* ignore */ }
+              const reportPath = manifest.artifacts[0]?.path;
+              // Use manifest.report directly — artifact write may be skipped
+              let reportContent = manifest.report || '';
+              if (!reportContent && reportPath) {
+                try { reportContent = fs.readFileSync(reportPath, 'utf-8'); } catch { /* ignore */ }
+              }
               if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                   type: 'event',
@@ -715,7 +758,7 @@ export async function runWorker(
                     payload: {
                       status: manifest.status,
                       usage: manifest.usage,
-                      report_path: manifest.artifacts[0]?.path,
+
                       report: reportContent,
                     },
                   },
@@ -726,13 +769,13 @@ export async function runWorker(
             // Ack dispatch immediately so daemon keeps WS responsive
             ws.send(JSON.stringify({ type: 'response', request_id: msg.request_id, ok: true }));
           } catch (e) {
-            console.error('ROME V4: Message handler error:', e);
+            console.error('ROME V6: Message handler error:', e);
           }
         })();
       });
 
       ws.on('error', (err: Error) => {
-        console.error(`ROME V4: Worker error: ${err.message}. Reconnecting in ${backoff.toFixed(1)}s...`);
+        console.error(`ROME V6: Worker error: ${err.message}. Reconnecting in ${backoff.toFixed(1)}s...`);
       });
 
       ws.on('close', () => resolveLoop());
