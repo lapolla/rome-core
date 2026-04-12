@@ -108,8 +108,8 @@
       }
 
       .box-header {
-        padding: 16px 24px;
-        min-height: 52px;
+        padding: 0 24px;
+        height: 30px;
         background: rgba(255,255,255,0.02);
         border-bottom: 1px solid var(--border);
         display: flex;
@@ -174,10 +174,59 @@
       button { cursor: pointer; border: none; font-family: inherit; font-weight: 700; }
       .btn-reset { background: rgba(244, 63, 94, 0.1); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.2); padding: 8px 16px; border-radius: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; }
       .btn-reset:hover { background: rgba(244, 63, 94, 0.2); }
+
+      /* Command Bar */
+      .command-bar {
+        position: fixed; bottom: 0; left: 0; right: 0;
+        background: #0c0f16;
+        border-top: 1px solid var(--border);
+        padding: 12px 32px;
+        display: flex; gap: 16px;
+        align-items: center;
+        z-index: 100;
+        box-shadow: 0 -10px 40px rgba(0,0,0,0.5);
+      }
+      .command-bar select {
+        background: #1a1f2e;
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 11px;
+        outline: none;
+        appearance: none;
+        cursor: pointer;
+      }
+      .command-bar select option {
+        background: #0c0f16;
+        color: var(--text);
+      }
+      .command-bar input {
+        flex: 1;
+        background: transparent;
+        border: 1px solid var(--border);
+        color: #fff;
+        padding: 8px 16px;
+        border-radius: 4px;
+        font-family: inherit;
+        font-size: 13px;
+        outline: none;
+      }
+      .command-bar input:focus { border-color: var(--accent); }
+      .command-bar button {
+        background: var(--accent);
+        color: #000;
+        padding: 8px 24px;
+        border-radius: 4px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+      }
     </style>
   </head>
   <body>
-    <div class="app">
+    <div class="app" style="padding-bottom: 80px;">
       <header class="header">
         <div class="brand">
           <h1 id="dashTitle">ROME Dashboard</h1>
@@ -186,8 +235,7 @@
         <canvas id="meshGraph" style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:0; pointer-events:none;"></canvas>
         <div class="sys-info" style="position:relative; z-index:1;">
           <div id="meshTopology" style="display: flex; gap: 8px;"></div>
-          <div class="chip">UPTIME: <span id="uptime">--</span></div>
-          <div class="chip">WS: <span id="wsStatus">...</span></div>
+          <div id="uptimeChip" class="chip">UPTIME: <span id="uptime">--</span></div>
         </div>
       </header>
 
@@ -223,6 +271,12 @@
       </div>
     </div>
 
+    <div class="command-bar">
+      <select id="cmdCap"></select>
+      <input type="text" id="cmdInput" placeholder="Command prompt..." onkeydown="if(event.key==='Enter') submitCommand()">
+      <button onclick="submitCommand()">Dispatch</button>
+    </div>
+
     <script>
       (function() {
         const state = { socket: null, tasks: new Map(), logs: [], history: [], workers: [], cost: 0, tokens: 0, agents: [] };
@@ -238,7 +292,17 @@
           uptime: document.getElementById('uptime'),
           modal: document.getElementById('modal'),
           modalTitle: document.getElementById('modalTitle'),
-          modalContent: document.getElementById('modalContent')
+          modalContent: document.getElementById('modalContent'),
+          cmdCap: document.getElementById('cmdCap'),
+          cmdInput: document.getElementById('cmdInput')
+        };
+
+        window.submitCommand = () => {
+          const cap = els.cmdCap.value;
+          const prompt = els.cmdInput.value.trim();
+          if (!prompt) return;
+          send("dispatch", { capability: cap, prompt: prompt, goal: prompt.slice(0,50), intent: "Manual Dashboard Dispatch" });
+          els.cmdInput.value = "";
         };
 
         function renderMesh() {
@@ -253,11 +317,18 @@
             const key = (a.capabilities || []).join(',') || a.worker_id;
             seen.set(key, a);
           }
-          els.mesh.innerHTML = Array.from(seen.values()).map(a => `
+          const agents = Array.from(seen.values());
+          els.mesh.innerHTML = agents.map(a => `
             <div class="chip" title="${a.peer_url || 'local connection'}">
               <span style="color:var(--accent)">[${(a.capabilities || []).join(',')}]</span>
             </div>
           `).join("");
+
+          // Update command dropdown
+          const allCaps = new Set(['NATIVE_SHELL']);
+          agents.forEach(a => (a.capabilities || []).forEach(c => allCaps.add(c)));
+          const current = els.cmdCap.value;
+          els.cmdCap.innerHTML = Array.from(allCaps).sort().map(c => `<option value="${c}" ${c===current?'selected':''}>${c}</option>`).join("");
         }
 
         // --- MESH GRAPH ANIMATION (CURVES) ---
@@ -299,6 +370,7 @@
         }
         function drawGraph() {
           if (!canvas) return;
+          syncWavesToTasks();
           const w = canvas.width = canvas.offsetWidth;
           const h = canvas.height = canvas.offsetHeight;
           if (w === 0 || h === 0) { requestAnimationFrame(drawGraph); return; }
@@ -323,12 +395,12 @@
         drawGraph();
 
         function formatTime(s) {
-          if (!s) return "0s";
-          if (s < 60) return s.toFixed(0) + "s";
+          if (!s) return "00s";
+          if (s < 60) return s.toFixed(0).padStart(2, '0') + "s";
           const m = Math.floor(s / 60);
           const h = Math.floor(m / 60);
-          if (h > 0) return `${h}h ${m%60}m`;
-          return `${m}m ${Math.floor(s%60)}s`;
+          if (h > 0) return `${String(h).padStart(2, '0')}h ${String(m%60).padStart(2, '0')}m`;
+          return `${String(m).padStart(2, '0')}m ${String(Math.floor(s%60)).padStart(2, '0')}s`;
         }
 
         function getColor(status) {
@@ -340,10 +412,11 @@
           return "var(--registered)";
         }
 
-        function renderStats() {
-          state.logs.unshift({ ts: Date.now(), type, tid, msg });
+        function addLog(type, tid, msg, ts) {
+          const logTs = ts ? (ts * (ts > 1e12 ? 1 : 1000)) : Date.now();
+          state.logs.unshift({ ts: logTs, type, tid, msg });
           state.logs = state.logs.slice(0, 50);
-          document.getElementById('logCount').textContent = state.logs.length;
+          if (document.getElementById('logCount')) document.getElementById('logCount').textContent = state.logs.length;
           els.logs.innerHTML = state.logs.map(l => `
             <div class="log-line">
               <span class="ts">${new Date(l.ts).toLocaleTimeString([], {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'})}</span>
@@ -426,8 +499,16 @@
         function connect() {
           const ws = new WebSocket(((window.location.protocol==="https:")?"wss:":"ws:")+"//"+window.location.host+"/ws");
           state.socket = ws;
-          ws.onopen = () => { els.ws.textContent = "CONNECTED"; els.ws.style.color = "var(--success)"; send("get_state",{}); };
-          ws.onclose = () => { els.ws.textContent = "OFFLINE"; els.ws.style.color = "var(--failed)"; setTimeout(connect, 3000); };
+          ws.onopen = () => { 
+            const chip = document.getElementById('uptimeChip');
+            if (chip) chip.style.borderColor = "var(--success)";
+            send("get_state",{}); 
+          };
+          ws.onclose = () => { 
+            const chip = document.getElementById('uptimeChip');
+            if (chip) chip.style.borderColor = "var(--failed)";
+            setTimeout(connect, 3000); 
+          };
           ws.onmessage = (m) => {
             const data = JSON.parse(m.data);
             if (data.type === "response" && data.ok) {
@@ -457,11 +538,11 @@
                   }
                   state.history.push(Date.now()); renderTasks();
                 }
-                addLog("COMPLETE", tid, p.status);
+                addLog("COMPLETE", tid, p.status, ev.ts);
                 syncWavesToTasks();
               } else if (ev.type === "dispatch_start") {
                 state.tasks.set(tid, { task_id:tid, capability:p.capability, status:"running", created_at:ev.ts, updated_at:ev.ts });
-                renderTasks(); addLog("DISPATCH", tid, p.capability);
+                renderTasks(); addLog("DISPATCH", tid, p.capability, ev.ts);
                 syncWavesToTasks();
               } else if (ev.type === "system_status") { 
                 els.uptime.textContent = formatTime(p.uptime_s); 

@@ -9,6 +9,12 @@ export class EventBus {
 
   subscribe(ws: WebSocket) {
     this.subscribers.add(ws);
+    // Replay history to new subscriber
+    for (const ev of this.eventHistory) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'event', event: ev }));
+      }
+    }
   }
 
   unsubscribe(ws: WebSocket) {
