@@ -1,1 +1,12 @@
-{"rome_v": "1.0", "task_id": "STATE", "result": {"status": "SUCCESS", "exit_code": 0}}
+{
+  "state": {
+    "build_status": "SUCCESS"
+  },
+  "causalMeta": {
+    "build_status": {
+      "caused_by_task": "ts-fae23ef8",
+      "task_ts": 1776036700.954
+    }
+  },
+  "updated_at": 1776036700.962
+}

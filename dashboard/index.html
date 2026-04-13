@@ -40,7 +40,7 @@
 
       .app {
         display: grid;
-        grid-template-rows: 80px 120px 1fr;
+        grid-template-rows: auto auto 1fr;
         height: 100vh;
         padding: 32px;
         gap: 24px;
@@ -75,7 +75,7 @@
       /* Rigid Stats Grid */
       .stats-row {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 20px;
       }
       .stat-card {
@@ -90,12 +90,25 @@
 
       /* Main Pipeline Grid */
       .main {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
+        display: flex;
         gap: 20px;
         min-height: 0;
       }
-      .main > .box:first-child { grid-column: span 3; }
+
+      .main-content {
+        flex: 3;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+
+      .sidebar {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        min-height: 0;
+      }
 
       .box {
         background: var(--panel);
@@ -105,6 +118,15 @@
         flex-direction: column;
         overflow: hidden;
         backdrop-filter: blur(10px);
+        transition: flex 0.3s cubic-bezier(0.4, 0, 0.2, 1), height 0.3s ease;
+        flex: 1;
+      }
+
+      .box.collapsed {
+        flex: 0 0 30px !important;
+      }
+      .box.collapsed .scroll, .box.collapsed #caps {
+        display: none;
       }
 
       .box-header {
@@ -115,7 +137,10 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
+        cursor: pointer;
+        user-select: none;
       }
+      .box-header:hover { background: rgba(255,255,255,0.05); }
       .box-header h2 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--text-dim); }
 
       .scroll { flex: 1; overflow-y: auto; padding: 24px; }
@@ -240,26 +265,45 @@
       </header>
 
       <section class="stats-row">
-        <div class="stat-card"><label>Session Cost</label><div class="val" id="statCost">$0.0000</div></div>
+        <div class="stat-card">
+          <label>Cost</label>
+          <div class="val" id="statCost">$0.0000</div>
+          <div style="font-size:10px; color:var(--text-dim); margin-top:4px; font-family:'IBM Plex Mono', monospace;">PROJECT: <span id="statProjectCost">$0.0000</span></div>
+        </div>
         <div class="stat-card"><label>Throughput</label><div class="val" id="statThroughput">0 tasks/min</div></div>
         <div class="stat-card"><label>Mesh Workers</label><div class="val" id="statWorkers">0 active</div></div>
-        <div class="stat-card"><label>Token Volume</label><div class="val" id="statTokens">0</div></div>
+        <div class="stat-card">
+          <label>Tokens</label>
+          <div class="val" id="statTokens">0</div>
+          <div style="font-size:10px; color:var(--text-dim); margin-top:4px; font-family:'IBM Plex Mono', monospace;">PROJECT: <span id="statProjectTokens">0</span></div>
+        </div>
       </section>
 
       <div class="main">
-        <div class="box">
-          <div class="box-header">
-            <h2>Active Causal Pipeline</h2>
-            <div id="caps" style="display:flex; gap:8px;"></div>
-          </div>
-          <div class="scroll">
-            <div class="task-grid" id="taskGrid"></div>
+        <div class="main-content">
+          <div class="box">
+            <div class="box-header" onclick="this.parentElement.classList.toggle('collapsed')">
+              <h2>Active Causal Pipeline</h2>
+              <div id="caps" style="display:flex; gap:8px;"></div>
+            </div>
+            <div class="scroll">
+              <div class="task-grid" id="taskGrid"></div>
+            </div>
           </div>
         </div>
 
-        <div class="box">
-          <div class="box-header"><h2>Signal Stream</h2><span id="logCount" class="chip">0</span></div>
-          <div class="scroll" id="logStream"></div>
+        <div class="sidebar">
+          <div class="box">
+            <div class="box-header" onclick="this.parentElement.classList.toggle('collapsed')"><h2>Sovereign Blackboard</h2></div>
+            <div class="scroll" id="stateBlackboard" style="padding:16px;">
+              <div id="stateGrid" style="display:grid; gap:12px;"></div>
+            </div>
+          </div>
+
+          <div class="box">
+            <div class="box-header" onclick="this.parentElement.classList.toggle('collapsed')"><h2>Signal Stream</h2><span id="logCount" class="chip">0</span></div>
+            <div class="scroll" id="logStream"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -279,23 +323,47 @@
 
     <script>
       (function() {
-        const state = { socket: null, tasks: new Map(), logs: [], history: [], workers: [], cost: 0, tokens: 0, agents: [] };
+        const state = { socket: null, tasks: new Map(), logs: [], history: [], workers: [], cost: 0, tokens: 0, projectCost: 0, projectTokens: 0, agents: [], blackboard: {} };
         const els = {
           grid: document.getElementById('taskGrid'),
           logs: document.getElementById('logStream'),
           mesh: document.getElementById('meshTopology'),
           cost: document.getElementById('statCost'),
+          projectCost: document.getElementById('statProjectCost'),
           throughput: document.getElementById('statThroughput'),
           workers: document.getElementById('statWorkers'),
           tokens: document.getElementById('statTokens'),
-          ws: document.getElementById('wsStatus'),
+          projectTokens: document.getElementById('statProjectTokens'),
           uptime: document.getElementById('uptime'),
           modal: document.getElementById('modal'),
           modalTitle: document.getElementById('modalTitle'),
           modalContent: document.getElementById('modalContent'),
           cmdCap: document.getElementById('cmdCap'),
-          cmdInput: document.getElementById('cmdInput')
+          cmdInput: document.getElementById('cmdInput'),
+          stateGrid: document.getElementById('stateGrid')
         };
+
+        function renderBlackboard() {
+          if (!els.stateGrid) return;
+          const keys = Object.keys(state.blackboard).sort();
+          if (keys.length === 0) {
+            els.stateGrid.innerHTML = `<div style="color:var(--text-dim); font-size:11px; text-align:center; padding:20px;">State is currently empty</div>`;
+            return;
+          }
+          els.stateGrid.innerHTML = keys.map(k => {
+            const val = state.blackboard[k];
+            let color = 'var(--accent)';
+            if (val === 'SUCCESS' || val === 'CLEAN') color = 'var(--success)';
+            if (val === 'FAILED' || val === 'DIRTY') color = 'var(--failed)';
+            
+            return `
+              <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:4px; padding:10px;">
+                <div style="font-size:10px; font-weight:700; color:var(--text-dim); text-transform:uppercase; margin-bottom:4px;">${k}</div>
+                <div style="font-family:'IBM Plex Mono', monospace; font-size:13px; color:${color}; font-weight:700;">${val}</div>
+              </div>
+            `;
+          }).join("");
+        }
 
         window.submitCommand = () => {
           const cap = els.cmdCap.value;
@@ -329,6 +397,8 @@
           agents.forEach(a => (a.capabilities || []).forEach(c => allCaps.add(c)));
           const current = els.cmdCap.value;
           els.cmdCap.innerHTML = Array.from(allCaps).sort().map(c => `<option value="${c}" ${c===current?'selected':''}>${c}</option>`).join("");
+          
+          renderBlackboard();
         }
 
         // --- MESH GRAPH ANIMATION (CURVES) ---
@@ -429,7 +499,9 @@
 
         function renderStats() {
           els.cost.textContent = "$" + (state.cost || 0).toFixed(4);
+          if (els.projectCost) els.projectCost.textContent = "$" + (state.projectCost || 0).toFixed(4);
           els.tokens.textContent = (state.tokens || 0).toLocaleString();
+          if (els.projectTokens) els.projectTokens.textContent = (state.projectTokens || 0).toLocaleString();
           els.workers.textContent = state.workers.length + " active";
           const now = Date.now();
           state.history = state.history.filter(t => now - t < 60000);
@@ -507,8 +579,11 @@
               const p = data.payload;
               if (p.tasks) { Object.keys(p.tasks).forEach(id => state.tasks.set(id, p.tasks[id])); renderTasks(); }
               if (p.workers) { state.workers = p.workers; renderStats(); }
+              if (p.state) { state.blackboard = p.state; renderBlackboard(); }
               if (p.session_cost_usd !== undefined) state.cost = p.session_cost_usd;
               if (p.session_worker_tokens !== undefined) state.tokens = p.session_worker_tokens + (p.session_dictator_tokens || 0);
+              if (p.project_total_cost_usd !== undefined) state.projectCost = p.project_total_cost_usd;
+              if (p.project_total_tokens !== undefined) state.projectTokens = p.project_total_tokens;
               if (p.uptime_s) els.uptime.textContent = formatTime(p.uptime_s);
               if (p.content) els.modalContent.textContent = p.content;
               if (p.dictator) document.getElementById('dashTitle').textContent = "ROME :: " + p.dictator.toUpperCase();
@@ -518,6 +593,10 @@
               const ev = data.event; const tid = ev.task_id; const p = ev.payload;
               if (ev.type === "progress" && state.tasks.has(tid)) {
                 const t = state.tasks.get(tid); t.progress_percent = p.percent; t.progress_message = p.message; t.updated_at = ev.ts; renderTasks(); syncWavesToTasks();
+              } else if (ev.type === "state_changed") {
+                state.blackboard[p.key] = p.value;
+                renderBlackboard();
+                addLog("STATE", tid, `${p.key} → ${p.value}`, ev.ts);
               } else if (ev.type === "complete") {
                 if (!state.tasks.has(tid)) state.tasks.set(tid, { task_id: tid, status: 'running' });
                 if (state.tasks.has(tid)) {
@@ -527,6 +606,8 @@
                   if (p.usage) {
                     state.cost += (p.usage.cost_usd || 0);
                     state.tokens += (p.usage.total_tokens || 0);
+                    state.projectCost += (p.usage.cost_usd || 0);
+                    state.projectTokens += (p.usage.total_tokens || 0);
                   }
                   state.history.push(Date.now()); renderTasks();
                 }

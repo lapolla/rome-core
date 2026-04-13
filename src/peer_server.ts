@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as http from 'http';
 import { exec, spawn } from 'child_process';
 import type { RomeMessage, TaskInfo, TaskUsage } from './rome_types.js';
-import { EventBus, TaskRegistry, WorkerRegistry } from './registry.js';
+import { EventBus, TaskRegistry, WorkerRegistry, Blackboard, MeshReducer } from './registry.js';
 import { executeTask } from './legion_worker.js';
 import { executeShell } from "./shell_executor.js";
 import { AAAK } from "./aaak/index.js";
@@ -52,6 +52,8 @@ export class PeerServer {
   private bus = new EventBus();
   private registry = new TaskRegistry();
   private workers = new WorkerRegistry();
+  private blackboard = new Blackboard();
+  private reducer = new MeshReducer();
   private activeSubprocesses = new Map<string, { kill: () => void }>();
   private arsenal: any;
   private aaak: AAAK;
@@ -64,6 +66,8 @@ export class PeerServer {
     this.capability = capability.toUpperCase();
     this.arsenal = loadArsenal(ROME_ROOT);
     this.aaak = new AAAK("default", { enabled: true });
+    this.registry.hydrateFromLog(path.join(ROME_ROOT, 'logs', 'rome.jsonl'));
+    this.blackboard.setPersistence(path.join(ROME_ROOT, 'legions', '.rome_STATE.json'));
     const cap = this.arsenal[this.capability];
     this.port = port !== undefined ? port : (cap?.peer_port || 8741);
   }
@@ -137,7 +141,7 @@ export class PeerServer {
       }
       let isWorker = false;
       this.bus.subscribe(ws);
-      ws.send(JSON.stringify({ type: 'daemon_hello', version: '6.0.0', platform: process.platform, capabilities: Object.keys(this.arsenal), uptime_s: (Date.now() / 1000) - this.startTime }));
+      ws.send(JSON.stringify({ type: 'daemon_hello', version: '7.0.0', platform: process.platform, capabilities: Object.keys(this.arsenal), uptime_s: (Date.now() / 1000) - this.startTime }));
       ws.on('message', async (data) => {
         try {
           const msg = JSON.parse(data.toString());
@@ -228,6 +232,23 @@ export class PeerServer {
 
         const resultPayload = { ...(payload.result || payload), report: payload.report };
         this.registry.update(task_id, status, resultPayload, payload.usage);
+        
+        // V7 Mesh Reducer: Auto-State Transition
+        const task = this.registry.get(task_id);
+        if (task) {
+          console.log(`[V7] Reducing task ${task_id}: cap=${task.capability}, reportLength=${(task.report||'').length}`);
+          const update = this.reducer.reduce(task);
+          if (update) {
+            console.log(`[V7] State Transition detected: ${update.key} -> ${update.value}`);
+            if (this.blackboard.set(update)) {
+              console.log(`[V7] Blackboard updated: ${update.key}`);
+              this.bus.broadcast({ type: 'state_changed', task_id, payload: { key: update.key, value: update.value } });
+            } else {
+              console.log(`[V7] Blackboard update REJECTED (concurrency)`);
+            }
+          }
+        }
+
         this.bus.broadcast({ type: 'complete', task_id, payload });
         this.workers.markIdle(ws, task_id);
         this.logUsage('worker', status, task_id, payload.usage);
@@ -245,6 +266,32 @@ export class PeerServer {
   private async handleCommand(ws: WebSocket, msg: RomeMessage) {
     const { command, request_id, payload } = msg;
     switch (command) {
+      case 'ping': ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { pong: true } })); break;
+      case 'state_get': {
+        const key = payload?.key;
+        const val = this.blackboard.get(key);
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { key, value: val } }));
+        break;
+      }
+      case 'state_set': {
+        const { key, value, caused_by_task } = payload || {};
+        if (!key || !caused_by_task) {
+          ws.send(JSON.stringify({ type: 'response', request_id, ok: false, error: 'Missing key or caused_by_task' }));
+          break;
+        }
+        const task = this.registry.get(caused_by_task);
+        const success = this.blackboard.set({
+          key,
+          value,
+          caused_by_task,
+          task_ts: task ? task.ts : (Date.now() / 1000)
+        });
+        if (success) {
+          this.bus.broadcast({ type: 'state_changed', task_id: caused_by_task, payload: { key, value } });
+        }
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: success, payload: { success } }));
+        break;
+      }
       case 'dispatch': {
         const task_id = payload.task_id || `ts-${uuidv4().substring(0, 8)}`;
         let capability = (payload.capability || this.capability).toUpperCase();
@@ -279,7 +326,13 @@ export class PeerServer {
         const task_id = payload.task_id;
         const tasksObj = Object.fromEntries(this.registry.getAll().map(t => [t.task_id, t]));
         const stats = this.registry.getSessionStats();
-        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: task_id ? this.registry.get(task_id) : { tasks: tasksObj, workers: this.workers.getInfo(), ...stats, uptime_s: (Date.now() / 1000) - this.startTime } }));
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: task_id ? this.registry.get(task_id) : { 
+          tasks: tasksObj, 
+          workers: this.workers.getInfo(), 
+          ...stats, 
+          uptime_s: (Date.now() / 1000) - this.startTime,
+          state: this.blackboard.get()
+        } }));
         break;
       }
       case 'dashboard_stats': {
@@ -346,7 +399,14 @@ export class PeerServer {
       case 'get_state': {
         const tasksObj = Object.fromEntries(this.registry.getAll().map(t => [t.task_id, t]));
         const stats = this.registry.getSessionStats();
-        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { tasks: tasksObj, workers: this.workers.getInfo(), session_cost_usd: stats.session_cost_usd, session_worker_tokens: stats.session_worker_tokens, uptime_s: (Date.now() / 1000) - this.startTime } }));
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { 
+          tasks: tasksObj, 
+          workers: this.workers.getInfo(), 
+          session_cost_usd: stats.session_cost_usd, 
+          session_worker_tokens: stats.session_worker_tokens, 
+          uptime_s: (Date.now() / 1000) - this.startTime,
+          state: this.blackboard.get()
+        } }));
         break;
       }
       case 'workers': {
@@ -450,6 +510,23 @@ export class PeerServer {
       if (taskId) {
         const status = ok ? 'completed' : 'failed';
         this.registry.update(taskId, status, { report, exit_code: exitCode || 0 });
+        
+        // V7 Mesh Reducer: Auto-State Transition
+        const task = this.registry.get(taskId);
+        if (task) {
+          console.log(`[V7] Reducing native task ${taskId}: reportLength=${(task.report||'').length}`);
+          const update = this.reducer.reduce(task);
+          if (update) {
+            console.log(`[V7] State Transition detected: ${update.key} -> ${update.value}`);
+            if (this.blackboard.set(update)) {
+              console.log(`[V7] Blackboard updated: ${update.key}`);
+              this.bus.broadcast({ type: 'state_changed', task_id: taskId, payload: { key: update.key, value: update.value } });
+            } else {
+              console.log(`[V7] Blackboard update REJECTED (concurrency)`);
+            }
+          }
+        }
+
         this.bus.broadcast({ type: 'complete', task_id: taskId, payload: { status: ok ? 'SUCCESS' : 'FAILED', report, exit_code: exitCode || 0 } });
       }
 
@@ -521,7 +598,15 @@ export class PeerServer {
         }
         this.bus.broadcast(inner);
       };
-      const cmdArgs = [...(cap.args as string[]), prompt];
+
+      let cmdArgs: string[];
+      const hasPromptPlaceholder = (cap.args as string[]).some(arg => arg.includes('{PROMPT}'));
+      if (hasPromptPlaceholder) {
+        cmdArgs = (cap.args as string[]).map(arg => arg.replace(/{PROMPT}/g, prompt));
+      } else {
+        cmdArgs = [...(cap.args as string[]), prompt];
+      }
+
       try {
         const taskPromise = executeTask(task_id, capability, cmdArgs, wsSender, undefined, signalHandler);
         // Track the executeTask promise if possible, but executeTask spawns its own children

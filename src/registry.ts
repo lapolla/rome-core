@@ -1,6 +1,8 @@
 import { WebSocket } from 'ws';
 import type { TaskInfo, RomeEvent, TaskUsage, PeerInfo } from './rome_types.js';
 import { EventEmitter } from 'events';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class EventBus {
   private subscribers: Set<WebSocket> = new Set();
@@ -47,6 +49,24 @@ export class EventBus {
 export class TaskRegistry {
   private tasks: Map<string, TaskInfo & { emitter: EventEmitter }> = new Map();
   private sessionUsage: TaskUsage = { total_tokens: 0, cost_usd: 0 };
+  private projectUsage: TaskUsage = { total_tokens: 0, cost_usd: 0 };
+
+  hydrateFromLog(logPath: string) {
+    if (!fs.existsSync(logPath)) return;
+    try {
+      const content = fs.readFileSync(logPath, 'utf-8');
+      const lines = content.trim().split('\n');
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.usage) {
+            this.projectUsage.total_tokens += (entry.usage.total_tokens || 0);
+            this.projectUsage.cost_usd += (entry.usage.cost_usd || 0);
+          }
+        } catch (e) { /* skip malformed line */ }
+      }
+    } catch (e) { console.error(`[Registry] Hydration failed: ${e}`); }
+  }
 
   register(task_id: string, capability: string, prompt: string, parent_task_id?: string, goal?: string, intent?: string) {
     const now = Date.now() / 1000;
@@ -84,6 +104,8 @@ export class TaskRegistry {
         task.usage = usage;
         this.sessionUsage.total_tokens += usage.total_tokens;
         this.sessionUsage.cost_usd = (this.sessionUsage.cost_usd || 0) + (usage.cost_usd || 0);
+        this.projectUsage.total_tokens += usage.total_tokens;
+        this.projectUsage.cost_usd = (this.projectUsage.cost_usd || 0) + (usage.cost_usd || 0);
       }
       if (['completed', 'failed', 'cancelled'].includes(status)) {
         task.emitter.emit('done', task);
@@ -119,12 +141,16 @@ export class TaskRegistry {
     return {
       session_worker_tokens: this.sessionUsage.total_tokens,
       session_cost_usd: this.sessionUsage.cost_usd || 0,
+      project_total_tokens: this.projectUsage.total_tokens,
+      project_total_cost_usd: this.projectUsage.cost_usd || 0,
     };
   }
 
   addUsage(tokens: number, cost_usd: number) {
     this.sessionUsage.total_tokens += tokens;
     this.sessionUsage.cost_usd = (this.sessionUsage.cost_usd || 0) + cost_usd;
+    this.projectUsage.total_tokens += tokens;
+    this.projectUsage.cost_usd = (this.projectUsage.cost_usd || 0) + cost_usd;
   }
 
   clearFinished() {
@@ -217,5 +243,107 @@ export class WorkerRegistry {
 
   count(): number {
     return this.workers.size;
+  }
+}
+
+export interface StateUpdate {
+  key: string;
+  value: any;
+  caused_by_task: string;
+  task_ts: number;
+}
+
+export class Blackboard {
+  private state: Record<string, any> = {};
+  private causalMeta: Record<string, { caused_by_task: string, task_ts: number }> = {};
+  private persistencePath: string | null = null;
+
+  setPersistence(path: string) {
+    this.persistencePath = path;
+    this.hydrate();
+  }
+
+  hydrate() {
+    if (!this.persistencePath || !fs.existsSync(this.persistencePath)) return;
+    try {
+      const data = JSON.parse(fs.readFileSync(this.persistencePath, 'utf-8'));
+      if (data.state) this.state = data.state;
+      if (data.causalMeta) this.causalMeta = data.causalMeta;
+    } catch (e) { console.error(`[Blackboard] Hydration failed: ${e}`); }
+  }
+
+  save() {
+    if (!this.persistencePath) return;
+    try {
+      const dir = path.dirname(this.persistencePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(this.persistencePath, JSON.stringify({
+        state: this.state,
+        causalMeta: this.causalMeta,
+        updated_at: Date.now() / 1000
+      }, null, 2));
+    } catch (e) { console.error(`[Blackboard] Save failed: ${e}`); }
+  }
+
+  get(key?: string) {
+    if (key) return this.state[key];
+    return this.state;
+  }
+
+  getMeta(key: string) {
+    return this.causalMeta[key];
+  }
+
+  set(update: StateUpdate): boolean {
+    const existingMeta = this.causalMeta[update.key];
+    // Optimistic concurrency: reject updates from older tasks if a newer task updated it
+    if (existingMeta && existingMeta.task_ts > update.task_ts) {
+      return false; // Rejected
+    }
+    
+    // Atomic patching: shallow merge if both are objects, otherwise replace
+    if (typeof this.state[update.key] === 'object' && this.state[update.key] !== null &&
+        typeof update.value === 'object' && update.value !== null && !Array.isArray(update.value)) {
+      this.state[update.key] = { ...this.state[update.key], ...update.value };
+    } else {
+      this.state[update.key] = update.value;
+    }
+
+    this.causalMeta[update.key] = {
+      caused_by_task: update.caused_by_task,
+      task_ts: update.task_ts
+    };
+    this.save();
+    return true;
+  }
+}
+
+export class MeshReducer {
+  reduce(task: TaskInfo): StateUpdate | null {
+    const report = (task.report || '').toLowerCase();
+    const cap = task.capability.toUpperCase();
+    const prompt = (task.prompt || '').toLowerCase();
+
+    // Deterministic Pattern: Build & Test Status
+    if (cap === 'TEST' || (cap === 'SAFE_SHELL' && (prompt.includes('test') || prompt.includes('tsc')))) {
+      if (report.includes('fail') || report.includes('error') || report.includes('err!')) {
+        return { key: 'build_status', value: 'FAILED', caused_by_task: task.task_id, task_ts: task.ts };
+      }
+      if (report.includes('pass') || (report.includes('ok') && !report.includes('not ok'))) {
+        return { key: 'build_status', value: 'SUCCESS', caused_by_task: task.task_id, task_ts: task.ts };
+      }
+    }
+
+    // Deterministic Pattern: Linting
+    if (prompt.includes('lint') || prompt.includes('eslint')) {
+      if (report.includes('error') || (report.includes('problem') && !report.includes('0 problems'))) {
+        return { key: 'lint_status', value: 'DIRTY', caused_by_task: task.task_id, task_ts: task.ts };
+      }
+      if (report.includes('clean') || report.includes('0 problems') || report.includes('no problems')) {
+        return { key: 'lint_status', value: 'CLEAN', caused_by_task: task.task_id, task_ts: task.ts };
+      }
+    }
+
+    return null;
   }
 }

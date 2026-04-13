@@ -106,6 +106,28 @@
       "peer_port": 8749,
       "peer_host": "127.0.0.1"
     },
+    "DECOMPOSER": {
+      "type": "llm",
+      "args": [
+        "{GEMINI_CLI}",
+        "--sandbox",
+        "false",
+        "--include-directories",
+        "{ROME_ROOT}",
+        "--yolo",
+        "--output-format",
+        "json",
+        "-m",
+        "gemini-3.1-pro-preview",
+        "-p",
+        "You are the ROME Decomposer. Break complex goals into discrete domains and probes. Output valid YAML only. Goal: {PROMPT}"
+      ],
+      "timeout": 300,
+      "min_version": "2.0",
+      "_note": "Decomposer Persona — specialized for planning",
+      "peer_port": 8752,
+      "peer_host": "127.0.0.1"
+    },
     "MISTRAL": {
       "type": "llm",
       "args": [

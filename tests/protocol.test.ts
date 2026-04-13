@@ -79,4 +79,42 @@ describe('ROME Protocol Handshake', () => {
     });
     ws.close();
   });
+
+  test('should set and get state via RSB protocol', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}?token=ROME_V4_SECURE_TOKEN`);
+    
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Protocol timeout')), 5000);
+      
+      ws.on('open', () => {
+        // First set the state
+        ws.send(JSON.stringify({
+          type: 'command',
+          command: 'state_set',
+          request_id: 'set-1',
+          payload: { key: 'test_key', value: 'v7_value', caused_by_task: 'DAEMON' }
+        }));
+      });
+
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.request_id === 'set-1') {
+          assert.strictEqual(msg.ok, true);
+          // Now query it
+          ws.send(JSON.stringify({
+            type: 'command',
+            command: 'state_get',
+            request_id: 'get-1',
+            payload: { key: 'test_key' }
+          }));
+        } else if (msg.request_id === 'get-1') {
+          assert.strictEqual(msg.ok, true);
+          assert.strictEqual(msg.payload.value, 'v7_value');
+          clearTimeout(timeout);
+          ws.close();
+          resolve();
+        }
+      });
+    });
+  });
 });
