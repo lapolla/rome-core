@@ -6,8 +6,29 @@ import { executeTask } from './legion_worker.js';
 import { executeShell } from './shell_executor.js';
 
 const ROME_ROOT = process.env.ROME_ROOT || process.cwd();
-const WS_URL = process.env.ROME_WS_URL || "ws://127.0.0.1:8741/ws";
-const TOKEN = process.env.ROME_WS_TOKEN || "ROME_V4_SECURE_TOKEN";
+let WS_URL = process.env.ROME_WS_URL;
+let TOKEN = process.env.ROME_WS_TOKEN;
+
+const configPath = path.join(ROME_ROOT, 'dictator', 'config.json');
+if (fs.existsSync(configPath)) {
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    if (!WS_URL && config.mesh_port) {
+      WS_URL = `ws://127.0.0.1:${config.mesh_port}/ws`;
+    }
+    if (!TOKEN && config.sovereign_token_path) {
+      const tokenPath = path.join(ROME_ROOT, config.sovereign_token_path);
+      if (fs.existsSync(tokenPath)) {
+        TOKEN = fs.readFileSync(tokenPath, 'utf-8').trim();
+      }
+    }
+  } catch (e) {
+    console.error('Error reading config.json:', e);
+  }
+}
+
+if (!WS_URL) throw new Error("Mesh URL not configured (no ROME_WS_URL or dictator/config.json)");
+if (!TOKEN) throw new Error("Mesh Token not configured");
 
 function loadArsenal() {
   const arsenalPath = path.join(ROME_ROOT, 'arsenal', 'core_arsenal.json');
@@ -33,7 +54,7 @@ function loadArsenal() {
 
 async function runViaMesh(capability: string, prompt: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const ws = new WebSocket(`${WS_URL}${WS_URL.includes('?') ? '&' : '?'}token=${TOKEN}`);
+    const ws = new WebSocket(`${WS_URL!}${WS_URL!.includes('?') ? '&' : '?'}token=${TOKEN}`);
     let taskId: string;
 
     ws.on('open', () => {

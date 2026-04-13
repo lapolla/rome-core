@@ -650,7 +650,15 @@ async function startPeerServer(
             }));
 
             const cmd = [...capabilityCmdBase];
-            if (prompt) cmd.push(prompt);
+            // If the prompt contains ROME metadata (GOAL/INTENT), strip it for shell workers
+            let cleanPrompt = prompt || '';
+            if (cleanPrompt.includes('GOAL:')) {
+              const taskIdx = cleanPrompt.indexOf('TASK:');
+              if (taskIdx >= 0) {
+                cleanPrompt = cleanPrompt.slice(taskIdx + 5).trim();
+              }
+            }
+            if (cleanPrompt) cmd.push(cleanPrompt);
 
             void (async () => {
               const noopSender = async (_ev: object): Promise<void> => { /* no-op */ };
@@ -734,7 +742,15 @@ export async function runWorker(
             const prompt  = payload.prompt != null ? String(payload.prompt) : undefined;
 
             const cmd = [...capabilityCmdBase];
-            if (prompt) cmd.push(prompt);
+            // If the prompt contains ROME metadata (GOAL/INTENT), strip it for shell workers
+            let cleanPrompt = prompt || '';
+            if (cleanPrompt.includes('GOAL:')) {
+              const taskIdx = cleanPrompt.indexOf('TASK:');
+              if (taskIdx >= 0) {
+                cleanPrompt = cleanPrompt.slice(taskIdx + 5).trim();
+              }
+            }
+            if (cleanPrompt) cmd.push(cleanPrompt);
 
             const uiSender = async (ev: object): Promise<void> => {
               if (ws.readyState === WebSocket.OPEN) {
@@ -792,7 +808,7 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   let mode: 'once' | 'worker' = 'once';
   let taskId: string | undefined;
-  let wsUrl = 'ws://127.0.0.1:8741/ws';
+  let wsUrl: string | undefined;
   let wsToken: string | undefined;
   const capabilities: string[] = [];
   const unknown: string[] = [];
@@ -815,9 +831,33 @@ async function main(): Promise<void> {
     }
   }
 
+  if (!wsUrl || !wsToken) {
+    const configPath = path.join(ROME_ROOT, 'dictator', 'config.json');
+    if (fs.existsSync(configPath)) {
+      try {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        if (!wsUrl && config.mesh_port) {
+          wsUrl = `ws://127.0.0.1:${config.mesh_port}/ws`;
+        }
+        if (!wsToken && config.sovereign_token_path) {
+          const tokenPath = path.join(ROME_ROOT, config.sovereign_token_path);
+          if (fs.existsSync(tokenPath)) {
+            wsToken = fs.readFileSync(tokenPath, 'utf-8').trim();
+          }
+        }
+      } catch (e) {
+        console.error('Error reading config.json:', e);
+      }
+    }
+  }
+
   if (mode === 'worker') {
     if (capabilities.length === 0) {
       console.error('Worker mode requires --capabilities');
+      process.exit(1);
+    }
+    if (!wsUrl) {
+      console.error('Worker mode requires --ws-url or config.json mesh_port');
       process.exit(1);
     }
     const tok = wsToken ?? process.env.ROME_WEBSOCKET_TOKEN;
