@@ -1,4 +1,4 @@
-# ROME: Remote Orchestrated Model Execution (v6.0.0)
+# ROME: Remote Orchestrated Model Execution
 
 A distributed Agent-to-Agent Direct Signal Mesh (A2A-DSM). Peer-to-peer orchestration with real-time signal interception and autonomous sub-tasking.
 
@@ -10,19 +10,25 @@ A distributed Agent-to-Agent Direct Signal Mesh (A2A-DSM). Peer-to-peer orchestr
     └────────────── WS (Peer Protocol) ─────────┘
 ```
 
-## Architecture (v6)
+## Architecture
 
 - **Peer Mesh:** Every agent runs a `PeerServer` (TS), capable of hosting LLMs (GEMINI/CLAUDE) or Shell executors.
 - **DAS Protocol:** Agents trigger actions via stdout tags: `[ROME_DISPATCH: ...]`, `[ROME_AWAIT: ...]`, `[ROME_SHELL: ...]`.
 - **Worker Hub:** `src/legion_worker.ts` (TS) handles the real-time interception and stdio-feedback loop.
 - **Registry:** `src/registry.ts` tracks causal chains (goals/intents) across the mesh.
 
+## Configuration
+
+ROME uses file-based configuration to enhance security and simplify setup:
+- **`dictator/config.json`**: Contains daemon settings (e.g., ports, interface bindings).
+- **`.rome_SOVEREIGN_TOKEN`**: Stores the secure token for WebSocket authentication. Do not commit this file.
+
 ## Quick Start
 
 ### Start the Mesh
 
 ```bash
-npx tsc && bash v6-start.sh
+npx tsc && bash start.sh
 ```
 
 ### Dispatch to the Mesh

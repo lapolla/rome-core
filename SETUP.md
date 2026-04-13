@@ -7,6 +7,12 @@
 ## Dependencies
 - websockets (daemon + worker connections)
 
+## Configuration
+
+Before starting, configure your environment using file-based configuration:
+- **`dictator/config.json`**: Define your daemon settings such as the port to listen on.
+- **`.rome_SOVEREIGN_TOKEN`**: A file containing your secure WebSocket token. Keep this file safe and do not commit it.
+
 ## Install
 ```bash
 pip install -r requirements.txt
@@ -22,7 +28,7 @@ Description=ROME Dictator Daemon
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 -m dictator.daemon --port 8741
+ExecStart=/usr/bin/python3 -m dictator.daemon
 WorkingDirectory=/path/to/rome-core
 Environment=PYTHONPATH=/path/to/rome-core
 Restart=always
@@ -46,7 +52,7 @@ systemctl --user enable --now rome-dictator
 
 ### 3. Manual (any OS)
 ```bash
-python3 -m dictator.daemon --port 8741
+python3 -m dictator.daemon
 ```
 
 ## Start Persistent Workers
@@ -64,8 +70,6 @@ After=default.target
 ExecStart=/usr/bin/python3 %h/projects/rome-core/legions/legion_wrapper.py \
   --mode worker \
   --capabilities GEMINI \
-  --ws-url ws://127.0.0.1:8741/ws \
-  --ws-token ROME_V4_SECURE_TOKEN \
   -- gemini --sandbox false --yolo --output-format json -m gemini-3.1-pro-preview -p
 WorkingDirectory=%h/projects/rome-core
 Environment=PYTHONPATH=%h/projects/rome-core
@@ -84,8 +88,6 @@ systemctl --user enable --now rome-gemini-worker
 python3 legions/legion_wrapper.py \
   --mode worker \
   --capabilities GEMINI \
-  --ws-url ws://127.0.0.1:8741/ws \
-  --ws-token ROME_V4_SECURE_TOKEN \
   -- gemini --sandbox false --yolo --output-format json -m gemini-3.1-pro-preview -p
 ```
 
@@ -93,11 +95,11 @@ python3 legions/legion_wrapper.py \
 
 ```bash
 # Check daemon health
-curl http://127.0.0.1:8741/health
+curl http://127.0.0.1:<PORT>/health
 
 # Check via WS
 python3 rome_native.py ping '{}'
 
 # Dashboard
-open http://127.0.0.1:8741/dashboard/
+open http://127.0.0.1:<PORT>/dashboard/
 ```

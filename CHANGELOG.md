@@ -1,3 +1,15 @@
+## v7.1.0 — 2026-04-13
+
+### Security & Configuration
+- **File-based Config**: Documented `dictator/config.json` for daemon settings and `.rome_SOVEREIGN_TOKEN` for secure WebSocket authentication.
+- **Secrets Cleanup**: Removed hardcoded ports and environment variable secrets (e.g., `ROME_V4_SECURE_TOKEN`) from setup documentation.
+
+### Cleanup & Maintenance
+- **Legacy References**: Removed v6 architectural and quick-start references from `README.md`.
+- **Migration Files**: Removed completed v7 migration plans (`V7_MIGRATION_PLAN.md`, `TS_MIGRATION_PLAN.md`) and draft specifications (`ROME_PROTOCOL_V7_DRAFT.md`).
+
+---
+
 ## v4.0.0 — 2026-04-03
 
 ### Breaking Changes
