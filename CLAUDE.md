@@ -1,4 +1,4 @@
-# ROME Core — Imperial Directives (v6.0.0)
+# ROME Core — Imperial Directives (v7.1.0)
 
 > **I am not here to do work. I am here to decompose it and get out of the way.**
 
@@ -45,7 +45,7 @@ Frames: `{"type": "command", "command": "<name>", "request_id": "<id>", "payload
 | `report_usage` | Self-report token usage |
 | `dashboard_stats` | Aggregated stats |
 
-## ROME Protocol Rules (v6.0.0)
+## ROME Protocol Rules (v7.1.0)
 
 1. **Atomic Changes**: Surgical commits, one concern per commit.
 2. **Sub-division**: Tasks exceeding 45s should be split into smaller units.

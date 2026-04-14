@@ -1,8 +1,20 @@
 #!/bin/bash
 # ROME: START PEER MESH
+
 ROME_ROOT="$(cd "$(dirname "$0")" && pwd)"
-WS_URL="ws://127.0.0.1:8741"
-WS_TOKEN="ROME_V4_SECURE_TOKEN"
+CONFIG_PATH="$ROME_ROOT/dictator/rome.conf"
+
+if [ ! -f "$CONFIG_PATH" ]; then
+    echo "Error: rome.conf not found at $CONFIG_PATH"
+    exit 1
+fi
+
+MESH_PORT=$(grep '^MESH_PORT=' "$CONFIG_PATH" | cut -d= -f2)
+TOKEN_REL_PATH=$(grep '^SOVEREIGN_TOKEN_PATH=' "$CONFIG_PATH" | cut -d= -f2)
+
+TOKEN_PATH="$ROME_ROOT/$TOKEN_REL_PATH"
+WS_TOKEN=$(cat "$TOKEN_PATH")
+WS_URL="ws://127.0.0.1:$MESH_PORT"
 
 # 0. Kill stale workers and daemon
 pkill -f "peer_server.js" 2>/dev/null || true
@@ -10,8 +22,8 @@ pkill -f "legion_worker.js" 2>/dev/null || true
 sleep 1
 
 # 1. Start Peer Server (Daemon)
-echo "Starting ROME Peer Server (Port 8741)..."
-nohup node "$ROME_ROOT/dist/src/peer_server.js" DAEMON 8741 > "/tmp/rome-daemon.log" 2>&1 &
+echo "Starting ROME Peer Server (Port $MESH_PORT)..."
+nohup node "$ROME_ROOT/dist/src/peer_server.js" DAEMON "$MESH_PORT" > "/tmp/rome-daemon.log" 2>&1 &
 sleep 2
 
 # 2. Start Workers
@@ -19,26 +31,29 @@ start_worker() {
     local cap=$1
     shift
     echo "Starting worker: $cap"
-    nohup node "$ROME_ROOT/dist/src/legion_worker.js" \
-        --mode worker \
-        --capabilities "$cap" \
-        --ws-url "$WS_URL" \
-        --ws-token "$WS_TOKEN" \
-        -- "$@" > "/tmp/rome-worker-$cap.log" 2>&1 &
+    # We use an array to preserve arguments exactly
+    local args=(
+        "--mode" "worker"
+        "--capabilities" "$cap"
+        "--ws-url" "$WS_URL"
+        "--ws-token" "$WS_TOKEN"
+        "--"
+        "$@"
+    )
+    nohup node "$ROME_ROOT/dist/src/legion_worker.js" "${args[@]}" > "/tmp/rome-worker-$cap.log" 2>&1 &
 }
 
 # GEMINI
 GEMINI_CLI="$HOME/projects/gemini-cli/bundle/gemini.js"
 start_worker "GEMINI" node "$GEMINI_CLI" --sandbox false --include-directories "$ROME_ROOT" --yolo --output-format json -m gemini-3.1-pro-preview -p
 
-# SAFE_SHELL
-start_worker "SAFE_SHELL" bash -c
-
-# TEST
-start_worker "TEST" npm test --prefix "$ROME_ROOT"
+# SAFE_SHELL (Scaled to 11 for parallel decomposition)
+for i in {1..11}; do
+    start_worker "SAFE_SHELL" bash -c
+done
 
 # MISTRAL (Upgraded with Native WS)
-start_worker "MISTRAL" python3 -m vibe.cli.entrypoint "env:PYTHONPATH=/home/paul-kane/projects/mistral-cli" --agent auto-approve --output text -p
+start_worker "MISTRAL" env PYTHONPATH=/home/paul-kane/projects/mistral-cli python3 -m vibe.cli.entrypoint --agent auto-approve --output text -p
 
 # CLAUDE
 start_worker "CLAUDE" claude --dangerously-skip-permissions --output-format json -p

@@ -5,22 +5,24 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 export class EventBus {
-  private subscribers: Set<WebSocket> = new Set();
+  private subscribers: Set<WebSocket | ((ev: RomeEvent) => void)> = new Set();
   private eventHistory: RomeEvent[] = [];
   private sequence = 0;
 
-  subscribe(ws: WebSocket) {
-    this.subscribers.add(ws);
+  subscribe(sub: WebSocket | ((ev: RomeEvent) => void)) {
+    this.subscribers.add(sub);
     // Replay history to new subscriber
     for (const ev of this.eventHistory) {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'event', event: ev }));
+      if (typeof sub === 'function') {
+        sub(ev);
+      } else if (sub.readyState === WebSocket.OPEN) {
+        sub.send(JSON.stringify({ type: 'event', event: ev }));
       }
     }
   }
 
-  unsubscribe(ws: WebSocket) {
-    this.subscribers.delete(ws);
+  unsubscribe(sub: WebSocket | ((ev: RomeEvent) => void)) {
+    this.subscribers.delete(sub);
   }
 
   broadcast(event: Omit<RomeEvent, 'ts' | 'sequence'>) {
@@ -34,9 +36,11 @@ export class EventBus {
     if (this.eventHistory.length > 100) this.eventHistory.shift();
 
     const msg = JSON.stringify({ type: 'event', event: fullEvent });
-    for (const ws of this.subscribers) {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(msg);
+    for (const sub of this.subscribers) {
+      if (typeof sub === 'function') {
+        sub(fullEvent);
+      } else if (sub.readyState === WebSocket.OPEN) {
+        sub.send(msg);
       }
     }
   }
@@ -94,7 +98,6 @@ export class TaskRegistry {
       if (result !== undefined) {
         task.result = result;
         if (result.report) task.report = result.report;
-
       }
       if (['completed', 'failed', 'cancelled'].includes(status) && !task.completed_at) {
         task.completed_at = Date.now() / 1000;
@@ -321,27 +324,31 @@ export class Blackboard {
 export class MeshReducer {
   reduce(task: TaskInfo): StateUpdate | null {
     const report = (task.report || '').toLowerCase();
-    const cap = task.capability.toUpperCase();
+    const cap = (task.capability || '').toUpperCase();
     const prompt = (task.prompt || '').toLowerCase();
+    const status = (task.status || '').toLowerCase();
 
     // Deterministic Pattern: Build & Test Status
     if (cap === 'TEST' || (cap === 'SAFE_SHELL' && (prompt.includes('test') || prompt.includes('tsc')))) {
-      if (report.includes('fail') || report.includes('error') || report.includes('err!')) {
-        return { key: 'build_status', value: 'FAILED', caused_by_task: task.task_id, task_ts: task.ts };
-      }
-      if (report.includes('pass') || (report.includes('ok') && !report.includes('not ok'))) {
-        return { key: 'build_status', value: 'SUCCESS', caused_by_task: task.task_id, task_ts: task.ts };
-      }
+      const hasActualFailures = /# fail\s+[1-9]/i.test(report) || report.includes('err_test_failure') || report.includes('failed');
+      const val = {
+        status: (status === 'failed' || hasActualFailures || report.includes('error:')) ? 'FAILED' : 'SUCCESS',
+        ts: task.ts,
+        task_id: task.task_id,
+        goal: task.goal
+      };
+      return { key: 'build_status', value: val, caused_by_task: task.task_id, task_ts: task.ts };
     }
 
     // Deterministic Pattern: Linting
     if (prompt.includes('lint') || prompt.includes('eslint')) {
-      if (report.includes('error') || (report.includes('problem') && !report.includes('0 problems'))) {
-        return { key: 'lint_status', value: 'DIRTY', caused_by_task: task.task_id, task_ts: task.ts };
-      }
-      if (report.includes('clean') || report.includes('0 problems') || report.includes('no problems')) {
-        return { key: 'lint_status', value: 'CLEAN', caused_by_task: task.task_id, task_ts: task.ts };
-      }
+      const val = {
+        status: (status === 'failed' || report.includes('error')) ? 'DIRTY' : 'CLEAN',
+        ts: task.ts,
+        task_id: task.task_id,
+        goal: task.goal
+      };
+      return { key: 'lint_status', value: val, caused_by_task: task.task_id, task_ts: task.ts };
     }
 
     return null;

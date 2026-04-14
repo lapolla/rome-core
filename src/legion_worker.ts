@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
 import { WebSocket, WebSocketServer } from 'ws';
+import { getRomeVersion } from './rome_types.js';
 
 // ── constants ──────────────────────────────────────────────────────────────────
 
@@ -481,10 +482,10 @@ export async function executeTask(
   ui.log(0, 'Engaged.');
 
   // Separate env:KEY=VAL args from real command args
-  const filteredArgs = cmdArgs.filter(a => !a.startsWith('env:'));
+  const filteredArgs = cmdArgs.filter(a => typeof a === 'string' && a.trim() !== '' && !a.startsWith('env:'));
   const envOverrides: NodeJS.ProcessEnv = {};
   for (const a of cmdArgs) {
-    if (a.startsWith('env:')) {
+    if (typeof a === 'string' && a.startsWith('env:')) {
       const rest = a.slice(4);
       const eq = rest.indexOf('=');
       if (eq >= 0) envOverrides[rest.slice(0, eq)] = rest.slice(eq + 1);
@@ -500,9 +501,21 @@ export async function executeTask(
     ROME_TASK_TOKEN: process.env.ROME_TASK_TOKEN ?? '',
   };
 
-  const child = spawn(filteredArgs[0], filteredArgs.slice(1), {
+  let spawnArgs = filteredArgs.slice(1);
+  // Optimization: If base command is bash -c, join all subsequent args into one
+  if (filteredArgs[0] === 'bash' && (filteredArgs[1] === '-c' || filteredArgs[1] === '--')) {
+    const actualCmd = spawnArgs.filter(a => a !== '-c' && a !== '--').join(' ');
+    spawnArgs = ['-c', actualCmd];
+  }
+
+  const finalCmd = filteredArgs[0];
+  if (!finalCmd) {
+    throw new Error('No command provided to executeTask');
+  }
+
+  const child = spawn(finalCmd, spawnArgs, {
     detached: true,
-    cwd: taskDir,
+    cwd: ROME_ROOT,
     env: combinedEnv,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -585,7 +598,7 @@ export async function executeTask(
 
   const progressLogPath = path.join(taskDir, 'progress.log');
   const manifest: Manifest = {
-    rome_v: '6.0.0',
+    rome_v: getRomeVersion(),
     task_id: taskId,
     status,
     metadata: signals.metadata,
@@ -716,7 +729,7 @@ export async function runWorker(
           type: 'agent_hello',
           payload: {
             capabilities,
-            version: '6.0.0',
+            version: getRomeVersion(),
             platform: process.platform,
             peer_url: peerUrl,
           }
@@ -825,6 +838,7 @@ async function main(): Promise<void> {
       }
     } else if (arg === '--') {
       unknown.push(...argv.slice(i + 1));
+      i = argv.length; // Stop the loop
       break;
     } else {
       unknown.push(arg);
@@ -861,8 +875,10 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     const tok = wsToken ?? process.env.ROME_WEBSOCKET_TOKEN;
-    const capCmd = unknown.filter(a => a !== '--');
-    await runWorker(wsUrl, capabilities, capCmd, tok);
+    
+    // unknown now contains only what was after the -- separator
+    // if the loop correctly stopped there.
+    await runWorker(wsUrl, capabilities, unknown, tok);
   } else {
     // Legacy once-off mode: <task_id> <start_time> <cmd...>
     const args = process.argv.slice(2);

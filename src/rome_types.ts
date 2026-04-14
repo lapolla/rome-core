@@ -1,3 +1,20 @@
+import { execSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+
+export function getRomeVersion(): string {
+  try {
+    return execSync('git describe --tags --always --dirty', { stdio: 'pipe' }).toString().trim();
+  } catch {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
+      return pkg.version || '0.0.0-unknown';
+    } catch {
+      return '0.0.0-unknown';
+    }
+  }
+}
+
 export interface RomeMessage {
   type: string;
   request_id?: string;
