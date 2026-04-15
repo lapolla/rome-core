@@ -37,11 +37,13 @@ export class EventBus {
 
     const msg = JSON.stringify({ type: 'event', event: fullEvent });
     for (const sub of this.subscribers) {
-      if (typeof sub === 'function') {
-        sub(fullEvent);
-      } else if (sub.readyState === WebSocket.OPEN) {
-        sub.send(msg);
-      }
+      try {
+        if (typeof sub === 'function') {
+          sub(fullEvent);
+        } else if (sub.readyState === WebSocket.OPEN) {
+          sub.send(msg);
+        }
+      } catch { /* dead subscriber — ignore */ }
     }
   }
 

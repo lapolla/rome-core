@@ -108,7 +108,9 @@ export class PeerServer {
           }
         });
 
-        this.bus.subscribe((ev: RomeEvent) => ws.send(JSON.stringify({ type: 'event', event: ev })));
+        const busSub = (ev: RomeEvent) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'event', event: ev })); };
+        this.bus.subscribe(busSub);
+        ws.on('close', () => this.bus.unsubscribe(busSub));
         ws.send(JSON.stringify({
           type: 'daemon_hello',
           version: getRomeVersion(),

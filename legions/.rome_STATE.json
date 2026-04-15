@@ -1,12 +1,17 @@
 {
   "state": {
-    "build_status": "SUCCESS"
+    "build_status": "SUCCESS",
+    "test_key": "test_val"
   },
   "causalMeta": {
     "build_status": {
       "caused_by_task": "ts-fae23ef8",
       "task_ts": 1776036700.954
+    },
+    "test_key": {
+      "caused_by_task": "ts-init",
+      "task_ts": 1776236139.884
     }
   },
-  "updated_at": 1776036700.962
+  "updated_at": 1776236139.884
 }
