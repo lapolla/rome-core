@@ -34,7 +34,6 @@ export class PeerServer {
   private arsenal: any;
   private capability: string;
   private port: number;
-  private token: string;
 
   constructor(capability: string, port?: number) {
     this.capability = capability.toUpperCase();
@@ -44,23 +43,18 @@ export class PeerServer {
     this.blackboard.setPersistence(path.join(ROME_ROOT, 'legions', '.rome_STATE.json'));
 
     let meshPort = 8741;
-    let tokenRelPath = '.rome_SOVEREIGN_TOKEN';
 
     try {
       const configPath = path.join(ROME_ROOT, 'dictator', 'rome.conf');
       if (fs.existsSync(configPath)) {
         const content = fs.readFileSync(configPath, 'utf-8');
-        const lines = content.split('\n');
-        for (const line of lines) {
+        for (const line of content.split('\n')) {
           if (line.startsWith('MESH_PORT=')) meshPort = parseInt(line.split('=')[1]);
-          if (line.startsWith('SOVEREIGN_TOKEN_PATH=')) tokenRelPath = line.split('=')[1].trim();
         }
       }
     } catch {}
 
     this.port = port !== undefined ? port : meshPort;
-    const tokenPath = path.join(ROME_ROOT, tokenRelPath);
-    this.token = fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, 'utf-8').trim() : "ROME_V6_SECURE_TOKEN";
   }
 
   async start(): Promise<number> {
@@ -99,24 +93,6 @@ export class PeerServer {
       });
 
       this.wss!.on('connection', (ws, req) => {
-        const url = new URL(req.url || '', `http://${req.headers.host}`);
-        
-        // Same-origin dashboard connections bypass auth (browser can't set Authorization on WS upgrade)
-        let sameOrigin = false;
-        const origin = req.headers.origin;
-        if (origin) {
-          try { sameOrigin = new URL(origin).host === req.headers.host; } catch { /* bad origin */ }
-        }
-
-        const queryToken = url.searchParams.get('token');
-        const authHeader = req.headers['authorization'];
-        const token = queryToken || (authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null);
-
-        if (!sameOrigin && token !== this.token) {
-          ws.close(1008, "Unauthorized");
-          return;
-        }
-
         ws.on('message', (raw) => {
           try {
             const msg = JSON.parse(raw.toString()) as RomeMessage;
@@ -226,6 +202,14 @@ export class PeerServer {
           ? prompt 
           : this.aaak.preDispatch(prompt, '', capability);
 
+        if (capability === 'NATIVE_SHELL') {
+          this.registry.register(task_id, 'NATIVE_SHELL', prompt, undefined, prompt.slice(0, 50), 'Native Daemon Shell');
+          this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability: 'NATIVE_SHELL' } });
+          this.runNativeShell(ws, request_id || '', prompt, task_id);
+          ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { task_id, accepted: true, routed_to: 'native_shell' } }));
+          break;
+        }
+
         this.registry.register(task_id, capability, prompt, payload.parent_task_id, payload.goal, payload.intent);
         this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability, goal: payload.goal, intent: payload.intent } });
         const workerWs = this.workers.findWorker(capability);
@@ -295,17 +279,26 @@ export class PeerServer {
       this.bus.broadcast({ type: 'error', task_id, payload: { message: `Unknown capability: ${capability}` } });
       return;
     }
-    const model = cap.model || 'gemini-3.1-pro-preview';
-    const finalArgs = (cap.args || []).map((a: any) => typeof a === 'string' ? a.replace(/{MODEL}/g, model) : a).concat(prompt);
-    executeTask(task_id, capability, finalArgs, wsSender).then(manifest => {
-      const usage = manifest.usage ? { ...manifest.usage, cost_usd: manifest.usage.cost_usd ?? undefined } : undefined;
-      this.registry.update(task_id, manifest.status === 'SUCCESS' ? 'completed' : 'failed', manifest, usage);
-      this.bus.broadcast({ type: 'complete', task_id, payload: manifest });
-      this.logUsage('legion', manifest.status, task_id, manifest.usage);
-    }).catch(e => {
-      this.registry.update(task_id, 'failed', { error: e.message });
-      this.bus.broadcast({ type: 'error', task_id, payload: { message: e.message } });
-    });
+    if (cap.type === 'shell') {
+      executeShell(task_id, prompt, wsSender).then(res => {
+        this.registry.update(task_id, res.status === 'SUCCESS' ? 'completed' : 'failed', res);
+        this.bus.broadcast({ type: 'complete', task_id, payload: res });
+        this.logUsage('shell', res.status, task_id, null);
+      });
+    } else {
+      const model = cap.model || 'gemini-3.1-pro-preview';
+      const effectivePrompt = cap.system_prompt ? `${cap.system_prompt}\n\nTASK: ${prompt}` : prompt;
+      const finalArgs = (cap.args || []).map((a: any) => typeof a === 'string' ? a.replace(/{MODEL}/g, model) : a).concat(effectivePrompt);
+      executeTask(task_id, capability, finalArgs, wsSender).then(manifest => {
+        const usage = manifest.usage ? { ...manifest.usage, cost_usd: manifest.usage.cost_usd ?? undefined } : undefined;
+        this.registry.update(task_id, manifest.status === 'SUCCESS' ? 'completed' : 'failed', manifest, usage);
+        this.bus.broadcast({ type: 'complete', task_id, payload: manifest });
+        this.logUsage('legion', manifest.status, task_id, manifest.usage);
+      }).catch(e => {
+        this.registry.update(task_id, 'failed', { error: e.message });
+        this.bus.broadcast({ type: 'error', task_id, payload: { message: e.message } });
+      });
+    }
   }
 
   private reapZombies() {

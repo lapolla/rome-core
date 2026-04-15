@@ -118,13 +118,15 @@
         "--output-format",
         "json",
         "-m",
-        "gemini-3.1-pro-preview",
-        "-p",
-        "You are the ROME Decomposer. Break complex goals into discrete domains and probes. Output valid YAML only. Goal: {PROMPT}"
+        "{MODEL}",
+        "-p"
       ],
       "timeout": 300,
       "min_version": "2.0",
-      "_note": "Decomposer Persona — specialized for planning",
+      "model": "gemini-3.1-pro-preview",
+      "model_fallback_chain": ["gemini-2.0-flash", "gemini-1.5-flash"],
+      "system_prompt": "You are the ROME Decomposer. Break complex goals into discrete parallel subtasks. Output valid YAML only.",
+      "_note": "Decomposer Persona — model-agnostic, runs in-process. system_prompt prepended at dispatch.",
       "peer_port": 8752,
       "peer_host": "127.0.0.1"
     },

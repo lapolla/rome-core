@@ -12,7 +12,7 @@ import { getRomeVersion } from './rome_types.js';
 
 // ── constants ──────────────────────────────────────────────────────────────────
 
-const ROME_ROOT = process.env.ROME_ROOT ?? path.resolve(process.cwd(), '..');
+const ROME_ROOT = process.env.ROME_ROOT || process.cwd();
 const MAX_ARTIFACT_SIZE = 5 * 1024 * 1024;
 
 // ── types ──────────────────────────────────────────────────────────────────────
@@ -389,7 +389,7 @@ export function parseRomeSignals(text: string): RomeSignals {
     if (statusMatch) signals.status_override = statusMatch[1].toUpperCase();
   } catch { /* ignore */ }
 
-  // ROME V6: Direct Agent signals
+  // ROME ${getRomeVersion()}: Direct Agent signals
   const dispatchRe = /\[ROME_DISPATCH:\s*(\w+)\s+"(.*?)"\]/g;
   let dm: RegExpExecArray | null;
   while ((dm = dispatchRe.exec(text)) !== null) {
@@ -471,6 +471,9 @@ export async function executeTask(
 
   const taskDir = path.join(ROME_ROOT, 'legions', taskId);
   fs.mkdirSync(taskDir, { recursive: true });
+
+  const geminiCliPath = process.env.GEMINI_CLI || path.resolve(process.env.HOME || '', 'projects/gemini-cli/bundle/gemini.js');
+  cmdArgs = cmdArgs.map(a => typeof a === 'string' ? a.replace(/{ROME_ROOT}/g, ROME_ROOT).replace(/{GEMINI_CLI}/g, geminiCliPath) : a);
 
   const taskMdPath = path.join(taskDir, 'task.md');
   let initialTaskContent = '';
@@ -712,7 +715,7 @@ export async function runWorker(
   token?: string,
 ): Promise<void> {
   const urlWithToken = token ? `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}token=${token}` : wsUrl;
-  console.log(`ROME V6: Connecting as persistent worker to ${wsUrl}`);
+  console.log(`ROME ${getRomeVersion()}: Connecting as persistent worker to ${wsUrl}`);
 
   const { port: peerPort } = await startPeerServer(capabilities, capabilityCmdBase);
   const peerUrl = `ws://127.0.0.1:${peerPort}`;
@@ -724,7 +727,7 @@ export async function runWorker(
 
       ws.on('open', () => {
         backoff = 1.0;
-        console.log('ROME V6: Registered. Awaiting tasks...');
+        console.log(`ROME ${getRomeVersion()}: Registered. Awaiting tasks...`);
         ws.send(JSON.stringify({
           type: 'agent_hello',
           payload: {
@@ -740,10 +743,10 @@ export async function runWorker(
         void (async () => {
           try {
             const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
-            console.log(`ROME V6: Received message type=${String(msg.type ?? '')}`, JSON.stringify(msg));
+            console.log(`ROME ${getRomeVersion()}: Received message type=${String(msg.type ?? '')}`, JSON.stringify(msg));
 
             if (msg.type === 'worker_ack') {
-              console.log('ROME V6: Handshake confirmed by server:', JSON.stringify((msg as any).payload || {}));
+              console.log(`ROME ${getRomeVersion()}: Handshake confirmed by server:`, JSON.stringify((msg as any).payload || {}));
               return;
             }
 
@@ -798,13 +801,13 @@ export async function runWorker(
             // Ack dispatch immediately so daemon keeps WS responsive
             ws.send(JSON.stringify({ type: 'response', request_id: msg.request_id, ok: true }));
           } catch (e) {
-            console.error('ROME V6: Message handler error:', e);
+            console.error(`ROME ${getRomeVersion()}: Message handler error:`, e);
           }
         })();
       });
 
       ws.on('error', (err: Error) => {
-        console.error(`ROME V6: Worker error: ${err.message}. Reconnecting in ${backoff.toFixed(1)}s...`);
+        console.error(`ROME ${getRomeVersion()}: Worker error: ${err.message}. Reconnecting in ${backoff.toFixed(1)}s...`);
       });
 
       ws.on('close', () => resolveLoop());

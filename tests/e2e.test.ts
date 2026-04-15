@@ -18,7 +18,7 @@ describe('ROME E2E Mesh Dispatch', () => {
   });
 
   test('should dispatch native_shell task and receive complete event', async () => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}?token=ROME_V4_SECURE_TOKEN`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}?token=ROME_SECURE_TOKEN`);
     
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('E2E Timeout')), 5000);

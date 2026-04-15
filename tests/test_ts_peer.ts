@@ -2,7 +2,7 @@ import { PeerServer } from '../src/peer_server.js';
 import { WebSocket } from 'ws';
 import * as assert from 'assert';
 
-const TOKEN = "ROME_V4_SECURE_TOKEN";
+const TOKEN = "ROME_SECURE_TOKEN";
 
 async function waitMessage(ws: WebSocket, predicate: (msg: any) => boolean, timeout: number = 10000): Promise<any> {
   return new Promise((resolve, reject) => {

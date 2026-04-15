@@ -1,7 +1,7 @@
 #!/bin/bash
 # ROME: START PEER MESH
 
-ROME_ROOT="$(cd "$(dirname "$0")" && pwd)"
+export ROME_ROOT="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_PATH="$ROME_ROOT/dictator/rome.conf"
 
 if [ ! -f "$CONFIG_PATH" ]; then
@@ -10,10 +10,6 @@ if [ ! -f "$CONFIG_PATH" ]; then
 fi
 
 MESH_PORT=$(grep '^MESH_PORT=' "$CONFIG_PATH" | cut -d= -f2)
-TOKEN_REL_PATH=$(grep '^SOVEREIGN_TOKEN_PATH=' "$CONFIG_PATH" | cut -d= -f2)
-
-TOKEN_PATH="$ROME_ROOT/$TOKEN_REL_PATH"
-WS_TOKEN=$(cat "$TOKEN_PATH")
 WS_URL="ws://127.0.0.1:$MESH_PORT"
 
 # 0. Kill stale workers and daemon
@@ -36,7 +32,6 @@ start_worker() {
         "--mode" "worker"
         "--capabilities" "$cap"
         "--ws-url" "$WS_URL"
-        "--ws-token" "$WS_TOKEN"
         "--"
         "$@"
     )
@@ -46,11 +41,6 @@ start_worker() {
 # GEMINI
 GEMINI_CLI="$HOME/projects/gemini-cli/bundle/gemini.js"
 start_worker "GEMINI" node "$GEMINI_CLI" --sandbox false --include-directories "$ROME_ROOT" --yolo --output-format json -m gemini-3.1-pro-preview -p
-
-# SAFE_SHELL (Scaled to 11 for parallel decomposition)
-for i in {1..11}; do
-    start_worker "SAFE_SHELL" bash -c
-done
 
 # MISTRAL (Upgraded with Native WS)
 start_worker "MISTRAL" env PYTHONPATH=/home/paul-kane/projects/mistral-cli python3 -m vibe.cli.entrypoint --agent auto-approve --output text -p
