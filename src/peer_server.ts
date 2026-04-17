@@ -267,6 +267,16 @@ export class PeerServer {
         this.runNativeShell(ws, request_id || '', cmdStr, task_id);
         break;
       }
+      case 'get_state': {
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: {
+          tasks: Object.fromEntries(this.registry.getAll().map(t => [t.task_id, t])),
+          workers: this.workers.getInfo(),
+          ...this.registry.getSessionStats(),
+          uptime_s: (Date.now() / 1000) - this.startTime,
+          state: this.blackboard.get()
+        } }));
+        break;
+      }
       case 'status': {
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { 
           tasks: Object.fromEntries(this.registry.getAll().map(t => [t.task_id, t])), 
