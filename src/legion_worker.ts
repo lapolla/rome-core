@@ -4,6 +4,7 @@
  */
 
 import { spawn } from 'child_process';
+import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
@@ -528,13 +529,20 @@ export async function executeTask(
 
   child.stderr?.on('data', (data: Buffer) => { stderrChunks.push(data); });
 
-  const exitPromise = new Promise<number>(resolve => {
-    child.on('exit', code => resolve(code ?? 0));
-    child.on('error', () => resolve(1));
-  });
-
   // Stream stdout line-by-line; await signal responses before continuing
   const rl = readline.createInterface({ input: child.stdout!, crlfDelay: Infinity });
+
+  const exitPromise = new Promise<number>(resolve => {
+    const onExit = (code: number | null) => {
+      // Force-close the readline and stdout stream so the for-await loop below
+      // terminates even if a detached descendant still holds the pipe open.
+      try { rl.close(); } catch { /* ignore */ }
+      try { child.stdout?.destroy(); } catch { /* ignore */ }
+      resolve(code ?? 0);
+    };
+    child.on('exit', onExit);
+    child.on('error', () => onExit(1));
+  });
   for await (const line of rl) {
     const buf = Buffer.from(line + '\n');
     ui.handleBytes(buf);
@@ -720,102 +728,141 @@ export async function runWorker(
   const { port: peerPort } = await startPeerServer(capabilities, capabilityCmdBase);
   const peerUrl = `ws://127.0.0.1:${peerPort}`;
 
+  const bus = new EventEmitter();
   let backoff = 1.0;
-  while (true) {
-    await new Promise<void>(resolveLoop => {
-      const ws = new WebSocket(urlWithToken);
+  let shutdownRequested = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-      ws.on('open', () => {
-        backoff = 1.0;
-        console.log(`ROME ${getRomeVersion()}: Registered. Awaiting tasks...`);
-        ws.send(JSON.stringify({
-          type: 'agent_hello',
-          payload: {
-            capabilities,
-            version: getRomeVersion(),
-            platform: process.platform,
-            peer_url: peerUrl,
-          }
-        }));
-      });
+  const shutdown = () => {
+    shutdownRequested = true;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    bus.emit('shutdown');
+  };
 
-      ws.on('message', (raw) => {
-        void (async () => {
-          try {
-            const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
-            console.log(`ROME ${getRomeVersion()}: Received message type=${String(msg.type ?? '')}`, JSON.stringify(msg));
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 
-            if (msg.type === 'worker_ack') {
-              console.log(`ROME ${getRomeVersion()}: Handshake confirmed by server:`, JSON.stringify((msg as any).payload || {}));
-              return;
-            }
+  function connect(): void {
+    if (shutdownRequested) return;
 
-            if (msg.type !== 'command' || msg.command !== 'dispatch') return;
+    const ws = new WebSocket(urlWithToken);
 
-            const payload = (msg.payload ?? {}) as Record<string, unknown>;
-            const taskId  = String(payload.task_id  ?? '');
-            const cap     = String(payload.capability ?? '');
-            const prompt  = payload.prompt != null ? String(payload.prompt) : undefined;
-
-            const cmd = [...capabilityCmdBase];
-            // If the prompt contains ROME metadata (GOAL/INTENT), strip it for shell workers
-            let cleanPrompt = prompt || '';
-            if (cleanPrompt.includes('GOAL:')) {
-              const taskIdx = cleanPrompt.indexOf('TASK:');
-              if (taskIdx >= 0) {
-                cleanPrompt = cleanPrompt.slice(taskIdx + 5).trim();
-              }
-            }
-            if (cleanPrompt) cmd.push(cleanPrompt);
-
-            const uiSender = async (ev: object): Promise<void> => {
-              if (ws.readyState === WebSocket.OPEN) {
-                try { ws.send(JSON.stringify(ev)); } catch { /* ignore */ }
-              }
-            };
-
-            void (async () => {
-              const manifest = await executeTask(taskId, cap, cmd, uiSender);
-              const reportPath = manifest.artifacts[0]?.path;
-              // Use manifest.report directly — artifact write may be skipped
-              let reportContent = manifest.report || '';
-              if (!reportContent && reportPath) {
-                try { reportContent = fs.readFileSync(reportPath, 'utf-8'); } catch { /* ignore */ }
-              }
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                  type: 'event',
-                  event: {
-                    type: 'complete', task_id: taskId,
-                    payload: {
-                      status: manifest.status,
-                      usage: manifest.usage,
-
-                      report: reportContent,
-                    },
-                  },
-                }));
-              }
-            })();
-
-            // Ack dispatch immediately so daemon keeps WS responsive
-            ws.send(JSON.stringify({ type: 'response', request_id: msg.request_id, ok: true }));
-          } catch (e) {
-            console.error(`ROME ${getRomeVersion()}: Message handler error:`, e);
-          }
-        })();
-      });
-
-      ws.on('error', (err: Error) => {
-        console.error(`ROME ${getRomeVersion()}: Worker error: ${err.message}. Reconnecting in ${backoff.toFixed(1)}s...`);
-      });
-
-      ws.on('close', () => resolveLoop());
+    ws.on('open', () => {
+      backoff = 1.0;
+      console.log(`ROME ${getRomeVersion()}: Registered. Awaiting tasks...`);
+      ws.send(JSON.stringify({
+        type: 'agent_hello',
+        payload: {
+          capabilities,
+          version: getRomeVersion(),
+          platform: process.platform,
+          peer_url: peerUrl,
+        }
+      }));
     });
 
-    await new Promise<void>(r => setTimeout(r, backoff * 1000));
-    backoff = Math.min(backoff * 2, 30);
+    ws.on('message', (raw) => {
+      void (async () => {
+        try {
+          const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
+          console.log(`ROME ${getRomeVersion()}: Received message type=${String(msg.type ?? '')}`, JSON.stringify(msg));
+
+          if (msg.type === 'worker_ack') {
+            console.log(`ROME ${getRomeVersion()}: Handshake confirmed by server:`, JSON.stringify((msg as any).payload || {}));
+            return;
+          }
+
+          if (msg.type !== 'command' || msg.command !== 'dispatch') return;
+
+          const payload = (msg.payload ?? {}) as Record<string, unknown>;
+          const taskId  = String(payload.task_id  ?? '');
+          const cap     = String(payload.capability ?? '');
+          const prompt  = payload.prompt != null ? String(payload.prompt) : undefined;
+
+          const cmd = [...capabilityCmdBase];
+          // If the prompt contains ROME metadata (GOAL/INTENT), strip it for shell workers
+          let cleanPrompt = prompt || '';
+          if (cleanPrompt.includes('GOAL:')) {
+            const taskIdx = cleanPrompt.indexOf('TASK:');
+            if (taskIdx >= 0) {
+              cleanPrompt = cleanPrompt.slice(taskIdx + 5).trim();
+            }
+          }
+          if (cleanPrompt) cmd.push(cleanPrompt);
+
+          const uiSender = async (ev: object): Promise<void> => {
+            if (ws.readyState === WebSocket.OPEN) {
+              try { ws.send(JSON.stringify(ev)); } catch { /* ignore */ }
+            }
+          };
+
+          void (async () => {
+            const manifest = await executeTask(taskId, cap, cmd, uiSender);
+            const reportPath = manifest.artifacts[0]?.path;
+            // Use manifest.report directly — artifact write may be skipped
+            let reportContent = manifest.report || '';
+            if (!reportContent && reportPath) {
+              try { reportContent = fs.readFileSync(reportPath, 'utf-8'); } catch { /* ignore */ }
+            }
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: 'event',
+                event: {
+                  type: 'complete', task_id: taskId,
+                  payload: {
+                    status: manifest.status,
+                    usage: manifest.usage,
+
+                    report: reportContent,
+                  },
+                },
+              }));
+            }
+          })();
+
+          // Ack dispatch immediately so daemon keeps WS responsive
+          ws.send(JSON.stringify({ type: 'response', request_id: msg.request_id, ok: true }));
+        } catch (e) {
+          console.error(`ROME ${getRomeVersion()}: Message handler error:`, e);
+        }
+      })();
+    });
+
+    ws.on('error', (err: Error) => {
+      console.error(`ROME ${getRomeVersion()}: Worker error: ${err.message}. Reconnecting in ${backoff.toFixed(1)}s...`);
+    });
+
+    ws.on('close', () => {
+      if (shutdownRequested) return;
+      const delay = backoff * 1000;
+      backoff = Math.min(backoff * 2, 30);
+      console.log(`ROME ${getRomeVersion()}: Disconnected. Reconnect scheduled in ${(delay / 1000).toFixed(1)}s`);
+      bus.emit('reconnect_scheduled', { delay_ms: delay, next_backoff: backoff });
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        bus.emit('reconnect_fired');
+        connect();
+      }, delay);
+    });
+
+    // Immediate shutdown: close the socket so close handler fires but
+    // shutdownRequested flag prevents reconnect scheduling
+    bus.once('shutdown', () => {
+      console.log(`ROME ${getRomeVersion()}: Shutdown signal received, closing connection.`);
+      try { ws.close(); } catch { /* ignore */ }
+    });
   }
+
+  connect();
+
+  // Keep the function alive until shutdown is requested
+  await new Promise<void>(resolve => {
+    if (shutdownRequested) { resolve(); return; }
+    bus.once('shutdown', resolve);
+  });
 }
 
 // ── CLI ENTRY ──────────────────────────────────────────────────────────────────

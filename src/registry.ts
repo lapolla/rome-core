@@ -168,23 +168,19 @@ export class TaskRegistry {
     this.tasks.clear();
   }
 
-  async awaitTask(task_id: string, timeoutMs: number = 300000): Promise<TaskInfo | null> {
+  async awaitTask(task_id: string, bus: EventBus): Promise<TaskInfo | null> {
     const task = this.tasks.get(task_id);
     if (!task) return null;
     if (['completed', 'failed', 'cancelled'].includes(task.status)) return task;
 
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        task.emitter.removeListener('done', onDone);
-        resolve(this.get(task_id) || null);
-      }, timeoutMs);
-
-      const onDone = (t: TaskInfo) => {
-        clearTimeout(timer);
-        resolve(t);
+      const onEvent = (ev: RomeEvent) => {
+        if (ev.task_id === task_id && ['task_completed', 'task_failed', 'task_timeout'].includes(ev.type)) {
+          bus.unsubscribe(onEvent);
+          resolve(this.get(task_id) || null);
+        }
       };
-
-      task.emitter.once('done', onDone);
+      bus.subscribe(onEvent);
     });
   }
 }

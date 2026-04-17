@@ -10,13 +10,30 @@ import { EventBus, TaskRegistry, WorkerRegistry, Blackboard, MeshReducer } from 
 import { executeTask } from './legion_worker.js';
 import { executeShell } from './shell_executor.js';
 import { AAAK } from './aaak/index.js';
+import { probeArsenal, type ProbeResult } from './arsenal_probe.js';
 
 const ROME_ROOT = process.env.ROME_ROOT || process.cwd();
 const BUSY_PATTERNS = ['installing', 'building', 'compiling', 'searching', 'thinking'];
 
 function loadArsenal(root: string) {
-  try { return JSON.parse(fs.readFileSync(path.join(root, 'arsenal', 'core_arsenal.json'), 'utf-8')).capabilities; }
-  catch { return {}; }
+  const arsenalPath = path.join(root, 'arsenal', 'core_arsenal.json');
+  let raw: string;
+  try {
+    raw = fs.readFileSync(arsenalPath, 'utf-8');
+  } catch (e) {
+    throw new Error(`ROME: arsenal not found at ${arsenalPath}: ${(e as Error).message}`);
+  }
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`ROME: arsenal at ${arsenalPath} is not valid JSON: ${(e as Error).message}`);
+  }
+  const caps = parsed?.capabilities;
+  if (!caps || typeof caps !== 'object' || Object.keys(caps).length === 0) {
+    throw new Error(`ROME: arsenal at ${arsenalPath} has no capabilities defined`);
+  }
+  return caps;
 }
 
 export class PeerServer {
@@ -29,9 +46,10 @@ export class PeerServer {
   private reducer = new MeshReducer();
   private aaak: AAAK;
   private startTime = Date.now() / 1000;
-  private intervals: NodeJS.Timeout[] = [];
   private activeSubprocesses = new Map<string, { kill: () => void }>();
+  private tickScheduled = false;
   private arsenal: any;
+  private probeResults: Record<string, ProbeResult> = {};
   private capability: string;
   private port: number;
 
@@ -58,14 +76,13 @@ export class PeerServer {
   }
 
   async start(): Promise<number> {
+    // Probe the arsenal for binary/backend availability. Advisory only —
+    // dispatches still work for anything the probe flags; this surfaces
+    // misconfiguration early and gates ROME-start.sh worker spawns.
+    this.probeResults = await probeArsenal(this.arsenal);
+
     this.server = http.createServer((req, res) => {
       const url = new URL(req.url || '', `http://${req.headers.host}`);
-      if (url.pathname === '/health') {
-        const stats = this.registry.getSessionStats();
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', uptime: (Date.now() / 1000) - this.startTime, ...stats }));
-        return;
-      }
       if (url.pathname === '/dashboard' || url.pathname === '/dashboard/') {
         const indexPath = path.join(ROME_ROOT, 'dashboard', 'index.html');
         if (fs.existsSync(indexPath)) {
@@ -79,9 +96,7 @@ export class PeerServer {
     });
 
     this.wss = new WebSocketServer({ server: this.server });
-    this.intervals.push(setInterval(() => this.bus.broadcast({ type: 'heartbeat', task_id: '', payload: {} }), 15000));
-    this.intervals.push(setInterval(() => this.reapZombies(), 60000));
-    this.intervals.push(setInterval(() => this.broadcastSystemStatus(), 15000));
+    this.wss.on('error', (err) => console.error('ROME WS error:', err));
 
     return new Promise((resolve, reject) => {
       this.server!.on('error', reject);
@@ -101,6 +116,7 @@ export class PeerServer {
               const p = msg.payload || {};
               this.workers.register(ws, p.capabilities, p.version, p.platform, p.peer_url);
               ws.send(JSON.stringify({ type: 'worker_ack', ok: true, payload: { message: 'Registered', capabilities_accepted: p.capabilities } }));
+              this.scheduleTick();
             }
             else if (msg.type === 'event') this.handleWorkerEvent(ws, msg);
           } catch (e) {
@@ -110,7 +126,15 @@ export class PeerServer {
 
         const busSub = (ev: RomeEvent) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'event', event: ev })); };
         this.bus.subscribe(busSub);
-        ws.on('close', () => this.bus.unsubscribe(busSub));
+        ws.on('close', () => {
+          this.bus.unsubscribe(busSub);
+          const orphaned = this.workers.unregister(ws);
+          for (const tid of orphaned) {
+            this.registry.update(tid, 'failed', { error: 'worker disconnected' });
+            this.bus.broadcast({ type: 'error', task_id: tid, payload: { message: 'worker disconnected' } });
+          }
+          this.scheduleTick();
+        });
         ws.send(JSON.stringify({
           type: 'daemon_hello',
           version: getRomeVersion(),
@@ -123,10 +147,15 @@ export class PeerServer {
   }
 
   stop() {
-    this.intervals.forEach(clearInterval);
     this.wss?.close();
     this.server?.close();
-    this.activeSubprocesses.forEach(p => p.kill());
+    this.activeSubprocesses.forEach(p => {
+      try {
+        p.kill();
+      } catch {
+        // Process already exited, ignore ESRCH
+      }
+    });
   }
 
   getPort(): number {
@@ -157,11 +186,13 @@ export class PeerServer {
         this.bus.broadcast({ type: 'complete', task_id: tid, payload: p });
         this.workers.markIdle(ws, tid);
         this.logUsage('worker', status, tid, p.usage);
+        this.scheduleTick();
         break;
-      case 'error': 
-        this.registry.update(tid, 'failed', { error: p.message }); 
-        this.bus.broadcast({ type: 'error', task_id: tid, payload: p }); 
-        this.workers.markIdle(ws, tid); 
+      case 'error':
+        this.registry.update(tid, 'failed', { error: p.message });
+        this.bus.broadcast({ type: 'error', task_id: tid, payload: p });
+        this.workers.markIdle(ws, tid);
+        this.scheduleTick();
         break;
     }
   }
@@ -169,7 +200,7 @@ export class PeerServer {
   private logUsage(tool: string, status: string, task_id: string, usage: any) {
     const logPath = path.join(ROME_ROOT, 'logs', 'rome.jsonl');
     const entry = JSON.stringify({ ts: Date.now() / 1000, tool, task_id, status, usage }) + '\n';
-    try { fs.appendFileSync(logPath, entry); } catch (e) {}
+    fs.promises.appendFile(logPath, entry).catch(() => {});
   }
 
   private async handleCommand(ws: WebSocket, msg: RomeMessage) {
@@ -207,6 +238,7 @@ export class PeerServer {
         if (capability === 'NATIVE_SHELL') {
           this.registry.register(task_id, 'NATIVE_SHELL', prompt, undefined, prompt.slice(0, 50), 'Native Daemon Shell');
           this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability: 'NATIVE_SHELL' } });
+          this.scheduleTick();
           this.runNativeShell(ws, request_id || '', prompt, task_id);
           ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { task_id, accepted: true, routed_to: 'native_shell' } }));
           break;
@@ -214,6 +246,7 @@ export class PeerServer {
 
         this.registry.register(task_id, capability, prompt, payload.parent_task_id, payload.goal, payload.intent);
         this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability, goal: payload.goal, intent: payload.intent } });
+        this.scheduleTick();
         const workerWs = this.workers.findWorker(capability);
         if (workerWs) {
           this.workers.markBusy(workerWs, task_id);
@@ -230,6 +263,7 @@ export class PeerServer {
         const cmdStr = payload.command || '';
         this.registry.register(task_id, 'NATIVE_SHELL', cmdStr, undefined, cmdStr.slice(0, 50), 'Native Daemon Shell');
         this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability: 'NATIVE_SHELL', goal: cmdStr.slice(0, 50), intent: 'Native Daemon Shell' } });
+        this.scheduleTick();
         this.runNativeShell(ws, request_id || '', cmdStr, task_id);
         break;
       }
@@ -245,12 +279,18 @@ export class PeerServer {
       }
       case 'await': {
         const tids = Array.isArray(payload.task_ids) ? payload.task_ids : [payload.task_id];
-        const results = await Promise.all(tids.map((tid: string) => this.registry.awaitTask(tid, (payload.timeout || 300) * 1000)));
+        const results = await Promise.all(tids.map((tid: string) => this.registry.awaitTask(tid, this.bus)));
         ws.send(JSON.stringify({ type: 'response', request_id, ok: results.every(r => r && ['completed', 'success'].includes(r.status.toLowerCase())), payload: { tasks: results.filter(r => r !== null) } }));
         break;
       }
       case 'workers': {
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { workers: this.workers.getInfo() } }));
+        break;
+      }
+      case 'probe_arsenal': {
+        // Re-probe on demand. Dashboard "recheck" button / manual refresh.
+        this.probeResults = await probeArsenal(this.arsenal);
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { capabilities: this.probeResults } }));
         break;
       }
       case 'reset': this.registry.clearAll(); this.bus.broadcast({ type: 'reset', task_id: '', payload: { cleared: true } }); ws.send(JSON.stringify({ type: 'response', request_id, ok: true })); break;
@@ -268,6 +308,7 @@ export class PeerServer {
       if (taskId) {
         this.registry.update(taskId, code === 0 ? 'completed' : 'failed', { report: output });
         this.bus.broadcast({ type: 'complete', task_id: taskId, payload: { status: code === 0 ? 'SUCCESS' : 'FAILED', report: output } });
+        this.scheduleTick();
       }
     });
     if (taskId) this.activeSubprocesses.set(taskId, { kill: () => process.kill(-proc.pid!) });
@@ -286,6 +327,7 @@ export class PeerServer {
         this.registry.update(task_id, res.status === 'SUCCESS' ? 'completed' : 'failed', res);
         this.bus.broadcast({ type: 'complete', task_id, payload: res });
         this.logUsage('shell', res.status, task_id, null);
+        this.scheduleTick();
       });
     } else {
       const model = cap.model || 'gemini-3.1-pro-preview';
@@ -296,23 +338,37 @@ export class PeerServer {
         this.registry.update(task_id, manifest.status === 'SUCCESS' ? 'completed' : 'failed', manifest, usage);
         this.bus.broadcast({ type: 'complete', task_id, payload: manifest });
         this.logUsage('legion', manifest.status, task_id, manifest.usage);
+        this.scheduleTick();
       }).catch(e => {
         this.registry.update(task_id, 'failed', { error: e.message });
         this.bus.broadcast({ type: 'error', task_id, payload: { message: e.message } });
+        this.scheduleTick();
       });
     }
   }
 
-  private reapZombies() {
-    this.registry.getAll().forEach(t => {
+  private scheduleTick() {
+    if (this.tickScheduled) return;
+    this.tickScheduled = true;
+    queueMicrotask(() => {
+      this.tickScheduled = false;
+      this.tick();
+    });
+  }
+
+  private tick() {
+    // Reap zombie tasks (running > 180s)
+    for (const t of this.registry.getAll()) {
       if (t.status === 'running' && (Date.now() / 1000) - t.ts > 180) {
         this.registry.update(t.task_id, 'failed', { error: 'Task timeout (zombie)' });
         this.bus.broadcast({ type: 'error', task_id: t.task_id, payload: { message: 'Task timeout (zombie)' } });
       }
-    });
-  }
+    }
 
-  private broadcastSystemStatus() {
+    // Heartbeat
+    this.bus.broadcast({ type: 'heartbeat', task_id: '', payload: {} });
+
+    // System status
     this.bus.broadcast({
       type: 'system_status',
       task_id: '',
@@ -320,6 +376,7 @@ export class PeerServer {
         uptime_s: (Date.now() / 1000) - this.startTime,
         agents: this.workers.getInfo(),
         capability: this.capability,
+        capabilities_probe: this.probeResults,
         ...this.registry.getSessionStats()
       }
     });

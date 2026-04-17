@@ -1,13 +1,15 @@
 import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { EventEmitter } from 'events';
 
 const ROME_ROOT = process.env.ROME_ROOT || process.cwd();
 
 export function executeShell(
   taskId: string,
   command: string,
-  wsSender?: (ev: any) => Promise<void>
+  wsSender?: (ev: any) => Promise<void>,
+  cancelEmitter?: EventEmitter
 ): Promise<{ status: 'SUCCESS' | 'FAILED'; report: string; exit_code: number; elapsed_s: number }> & { kill?: () => void } {
   const taskDir = path.join(ROME_ROOT, 'legions', taskId);
   if (!fs.existsSync(taskDir)) {
@@ -15,9 +17,9 @@ export function executeShell(
   }
 
   const startTs = Date.now();
-  const shellTimeout = parseInt(process.env.SHELL_TIMEOUT || '600', 10);
   const chunks: Buffer[] = [];
-  let timedOut = false;
+  let interrupted = false;
+  let interruptReason = '';
   let lineCount = 0;
   let totalLineCount = 0;
   let lastProgressTs = Date.now();
@@ -34,13 +36,26 @@ export function executeShell(
       }
     });
 
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      try {
-        // Kill process group
-        process.kill(-proc.pid!, 'SIGKILL');
-      } catch (e) {}
-    }, shellTimeout * 1000);
+    const handleCancel = (id: string) => {
+      if (id === taskId) {
+        interrupted = true;
+        interruptReason = 'CANCEL';
+        try { process.kill(-proc.pid!, 'SIGKILL'); } catch (e) {}
+      }
+    };
+
+    const handleTimeout = (id: string) => {
+      if (id === taskId) {
+        interrupted = true;
+        interruptReason = 'TIMEOUT';
+        try { process.kill(-proc.pid!, 'SIGKILL'); } catch (e) {}
+      }
+    };
+
+    if (cancelEmitter) {
+      cancelEmitter.on('cancel', handleCancel);
+      cancelEmitter.on('timeout', handleTimeout);
+    }
 
     const onData = (data: Buffer) => {
       chunks.push(data);
@@ -50,12 +65,12 @@ export function executeShell(
       totalLineCount += lines.length - 1;
       const now = Date.now();
       const elapsed = (now - startTs) / 1000;
-      
+
       if (wsSender && (lineCount >= 5 || elapsed < 2 || now - lastProgressTs >= 2000)) {
         const lastLine = lines[lines.length - 1] || lines[lines.length - 2] || '';
         const message = lastLine.trim().slice(0, 80);
         const percent = Math.min(1 + Math.floor(totalLineCount / 5), 99);
-        
+
         wsSender({
           type: 'progress',
           task_id: taskId,
@@ -72,15 +87,22 @@ export function executeShell(
     proc.stdout?.on('data', onData);
     proc.stderr?.on('data', onData);
 
+    const cleanup = () => {
+      if (cancelEmitter) {
+        cancelEmitter.removeListener('cancel', handleCancel);
+        cancelEmitter.removeListener('timeout', handleTimeout);
+      }
+    };
+
     proc.on('close', (code: number) => {
-      clearTimeout(timeout);
-      if (timedOut) {
-          chunks.push(Buffer.from(`\n[TIMEOUT] Process killed after ${shellTimeout}s\n`));
+      cleanup();
+      if (interrupted) {
+          chunks.push(Buffer.from(`\n[${interruptReason}] Process killed\n`));
       }
       const elapsed_s = (Date.now() - startTs) / 1000;
-      const status = (code === 0 && !timedOut) ? 'SUCCESS' : 'FAILED';
+      const status = (code === 0 && !interrupted) ? 'SUCCESS' : 'FAILED';
       const report = Buffer.concat(chunks).toString('utf-8').slice(0, 4000);
-      
+
       resolve({
         status,
         report,
@@ -90,7 +112,7 @@ export function executeShell(
     });
 
     proc.on('error', (err: Error) => {
-      clearTimeout(timeout);
+      cleanup();
       const elapsed_s = (Date.now() - startTs) / 1000;
       chunks.push(Buffer.from(`\n[ERROR] ${err.message}\n`));
       resolve({

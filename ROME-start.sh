@@ -23,11 +23,13 @@ nohup node "$ROME_ROOT/dist/src/peer_server.js" DAEMON "$MESH_PORT" > "/tmp/rome
 sleep 2
 
 # 2. Start Workers
+# `start_worker_if` gates the spawn on availability. First arg is a test command
+# whose exit code decides whether to spawn. Missing binaries / unreachable
+# backends no longer produce doomed workers with silent stderr.
 start_worker() {
     local cap=$1
     shift
     echo "Starting worker: $cap"
-    # We use an array to preserve arguments exactly
     local args=(
         "--mode" "worker"
         "--capabilities" "$cap"
@@ -38,18 +40,33 @@ start_worker() {
     nohup node "$ROME_ROOT/dist/src/legion_worker.js" "${args[@]}" > "/tmp/rome-worker-$cap.log" 2>&1 &
 }
 
-# GEMINI
+start_worker_if() {
+    local cap=$1
+    local probe=$2
+    shift 2
+    if eval "$probe" >/dev/null 2>&1; then
+        start_worker "$cap" "$@"
+    else
+        echo "Skipping $cap: probe failed ($probe)"
+    fi
+}
+
+# GEMINI — requires gemini-cli bundle
 GEMINI_CLI="$HOME/projects/gemini-cli/bundle/gemini.js"
-start_worker "GEMINI" node "$GEMINI_CLI" --sandbox false --include-directories "$ROME_ROOT" --yolo --output-format json -m gemini-3.1-pro-preview -p
+start_worker_if "GEMINI" "test -f '$GEMINI_CLI'" \
+    node "$GEMINI_CLI" --sandbox false --include-directories "$ROME_ROOT" --yolo --output-format json -m gemini-3.1-pro-preview -p
 
-# MISTRAL (Upgraded with Native WS)
-start_worker "MISTRAL" env PYTHONPATH=/home/paul-kane/projects/mistral-cli python3 -m vibe.cli.entrypoint --agent auto-approve --output text -p
+# MISTRAL — requires mistral-cli python module
+start_worker_if "MISTRAL" "test -d /home/paul-kane/projects/mistral-cli && command -v python3" \
+    env PYTHONPATH=/home/paul-kane/projects/mistral-cli python3 -m vibe.cli.entrypoint --agent auto-approve --output text -p
 
-# CLAUDE
-start_worker "CLAUDE" claude --dangerously-skip-permissions --output-format json -p
+# CLAUDE — requires claude CLI on PATH
+start_worker_if "CLAUDE" "command -v claude" \
+    claude --dangerously-skip-permissions --output-format json -p
 
-# GEMMA (Ollama)
-start_worker "GEMMA" env ANTHROPIC_AUTH_TOKEN=ollama ANTHROPIC_BASE_URL=http://localhost:11434 claude --dangerously-skip-permissions --output-format json --model gemma4:e4b -p
+# GEMMA — requires claude CLI + reachable ollama at :11434
+start_worker_if "GEMMA" "command -v claude && curl -sf --max-time 1 http://localhost:11434/ >/dev/null" \
+    env ANTHROPIC_AUTH_TOKEN=ollama ANTHROPIC_BASE_URL=http://localhost:11434 claude --dangerously-skip-permissions --output-format json --model gemma4:e4b -p
 
 # ... 
 ROME_VERSION=$(grep '"version":' "$ROME_ROOT/package.json" | cut -d'"' -f4)
