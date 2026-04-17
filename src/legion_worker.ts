@@ -224,6 +224,10 @@ const _GEMINI_PRICING: Record<string, [number, number]> = {
 };
 
 const _RATE_LIMIT_SIGNALS = [
+  'You have exhausted',
+  'QUOTA_EXHAUSTED',
+  'exhausted your capacity',
+  'TerminalQuotaError',
   '429',
   'rate_limit',
   'rateLimitExceeded',
