@@ -12,9 +12,10 @@ A distributed Agent-to-Agent Direct Signal Mesh (A2A-DSM). Peer-to-peer orchestr
 
 ## Architecture
 
-- **Peer Mesh:** Every agent runs a `PeerServer` (TS), capable of hosting LLMs (GEMINI/CLAUDE) or Shell executors.
-- **DAS Protocol:** Agents trigger actions via stdout tags: `[ROME_DISPATCH: ...]`, `[ROME_AWAIT: ...]`, `[ROME_SHELL: ...]`.
-- **Worker Hub:** `src/legion_worker.ts` (TS) handles the real-time interception and stdio-feedback loop.
+- **Peer Mesh:** Every agent is an active participant in the WebSocket-native mesh.
+- **Native Agents:** `src/native_agent.ts` (TS) provides a full-duplex, real-time interaction loop for LLMs, bypassing legacy CLI wrappers.
+- **DAS Protocol:** Agents trigger actions via Direct Agent Signals: `[ROME_DISPATCH: ...]`, `[ROME_AWAIT: ...]`, `[ROME_SHELL: ...]`.
+- **Worker Hub:** Supports both legacy `legion_worker` (CLI-wrapped) and modern `native_agent` (WS-native) implementations.
 - **Registry:** `src/registry.ts` tracks causal chains (goals/intents) across the mesh.
 
 ## Configuration

@@ -16,7 +16,16 @@ describe('ROME Protocol Handshake', () => {
     port = await server.start();
   });
 
-  after(() => {
+  after(async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}?token=${TOKEN}`);
+    await new Promise<void>((resolve) => {
+      ws.on('open', () => {
+        ws.send(JSON.stringify({ type: 'command', command: 'state_delete', request_id: 'cleanup-1', payload: { key: 'test_key' } }));
+      });
+      ws.on('message', () => { ws.close(); resolve(); });
+      ws.on('error', () => resolve());
+      setTimeout(resolve, 500);
+    });
     server.stop();
   });
 

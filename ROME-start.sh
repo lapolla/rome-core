@@ -15,11 +15,15 @@ WS_URL="ws://127.0.0.1:$MESH_PORT"
 # 0. Kill stale workers and daemon
 pkill -f "peer_server.js" 2>/dev/null || true
 pkill -f "legion_worker.js" 2>/dev/null || true
+pkill -f "native_agent.js" 2>/dev/null || true
 sleep 1
 
 # 1. Start Peer Server (Daemon)
 echo "Starting ROME Peer Server (Port $MESH_PORT)..."
-nohup node "$ROME_ROOT/dist/src/peer_server.js" DAEMON "$MESH_PORT" > "/tmp/rome-daemon.log" 2>&1 &
+nohup env XDG_RUNTIME_DIR="/run/user/$(id -u)" \
+          DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" \
+          PULSE_SERVER="/run/user/$(id -u)/pulse/native" \
+          node "$ROME_ROOT/dist/src/peer_server.js" DAEMON "$MESH_PORT" > "/tmp/rome-daemon.log" 2>&1 &
 sleep 2
 
 # 2. Start Workers
@@ -64,9 +68,13 @@ start_worker_if "MISTRAL" "test -d /home/paul-kane/projects/mistral-cli && comma
 start_worker_if "CLAUDE" "command -v claude" \
     claude --dangerously-skip-permissions --output-format json -p
 
-# GEMMA — requires claude CLI + reachable ollama at :11434
-start_worker_if "GEMMA" "command -v claude && curl -sf --max-time 1 http://localhost:11434/ >/dev/null" \
-    env ANTHROPIC_AUTH_TOKEN=ollama ANTHROPIC_BASE_URL=http://localhost:11434 claude --dangerously-skip-permissions --output-format json --model gemma4:e4b -p
+# GEMMA — JS-Native agent via Ollama
+if curl -sf --max-time 1 http://localhost:11434/ >/dev/null 2>&1; then
+    echo "Starting native worker: GEMMA"
+    nohup node "$ROME_ROOT/dist/src/native_agent.js" --capability GEMMA --model gemma4:e4b --ws-url "$WS_URL/ws" > "/tmp/rome-worker-GEMMA.log" 2>&1 &
+else
+    echo "Skipping GEMMA: Ollama unreachable"
+fi
 
 # ... 
 ROME_VERSION=$(grep '"version":' "$ROME_ROOT/package.json" | cut -d'"' -f4)

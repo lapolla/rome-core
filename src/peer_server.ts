@@ -9,7 +9,6 @@ import { getRomeVersion } from './rome_types.js';
 import { EventBus, TaskRegistry, WorkerRegistry, Blackboard, MeshReducer } from './registry.js';
 import { executeTask } from './legion_worker.js';
 import { executeShell } from './shell_executor.js';
-import { AAAK } from './aaak/index.js';
 import { probeArsenal, type ProbeResult } from './arsenal_probe.js';
 
 const ROME_ROOT = process.env.ROME_ROOT || process.cwd();
@@ -63,7 +62,6 @@ export class PeerServer {
   private workers = new WorkerRegistry();
   private blackboard = new Blackboard();
   private reducer = new MeshReducer();
-  private aaak: AAAK;
   private startTime = Date.now() / 1000;
   private activeSubprocesses = new Map<string, { kill: () => void }>();
   private tickScheduled = false;
@@ -75,7 +73,6 @@ export class PeerServer {
   constructor(capability: string, port?: number) {
     this.capability = capability.toUpperCase();
     this.arsenal = loadArsenal(ROME_ROOT);
-    this.aaak = new AAAK("default", { enabled: true });
     this.registry.hydrateFromLog(path.join(ROME_ROOT, 'logs', 'rome.jsonl'));
     this.blackboard.setPersistence(path.join(ROME_ROOT, 'legions', '.rome_STATE.json'));
 
@@ -197,7 +194,6 @@ export class PeerServer {
         const status = ['SUCCESS', 'OK', 'COMPLETED'].includes(String(p.status).toUpperCase()) ? 'completed' : 'failed';
         if (p.report && tid) {
           const task = this.registry.get(tid);
-          this.aaak.postResult({ task_id: tid, status: p.status, report: p.report, usage: p.usage }, task?.prompt || "");
         }
         const usage = p.usage ? { ...p.usage, cost_usd: p.usage.cost_usd ?? undefined } : undefined;
         this.registry.update(tid, status, p, usage);
@@ -230,6 +226,7 @@ export class PeerServer {
     switch (command) {
       case 'ping': ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { pong: true } })); break;
       case 'state_get': ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { key: payload?.key, value: this.blackboard.get(payload?.key) } })); break;
+      case 'state_delete': { const ok = this.blackboard.delete(payload?.key); if (ok) this.bus.broadcast({ type: 'state_changed', task_id: '', payload: { key: payload?.key, value: undefined } }); ws.send(JSON.stringify({ type: 'response', request_id, ok })); break; }
       case 'state_get_meta': ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { key: payload?.key, meta: this.blackboard.getMeta(payload?.key) } })); break;
       case 'state_set': {
         const { key, value, caused_by_task } = payload || {};
@@ -251,11 +248,7 @@ export class PeerServer {
         let capability = (payload.capability || this.capability).toUpperCase();
         const prompt = payload.prompt || '';
         
-        // V7 Protocol: Shell capabilities (SAFE_SHELL, TEST, etc) bypass AAAK natural language context
-        const capConfig = this.arsenal[capability];
-        const distilledPrompt = (capConfig?.type === 'shell') 
-          ? prompt 
-          : this.aaak.preDispatch(prompt, '', capability);
+        const distilledPrompt = this.buildBlackboardContext(prompt, capability);
 
         if (capability === 'NATIVE_SHELL') {
           this.registry.register(task_id, 'NATIVE_SHELL', prompt, undefined, prompt.slice(0, 50), 'Native Daemon Shell');
@@ -293,6 +286,7 @@ export class PeerServer {
         this.registry.register(task_id, 'NATIVE_SHELL', cmdStr, undefined, cmdStr.slice(0, 50), 'Native Daemon Shell');
         this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability: 'NATIVE_SHELL', goal: cmdStr.slice(0, 50), intent: 'Native Daemon Shell' } });
         this.scheduleTick();
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { task_id, accepted: true } }));
         this.runNativeShell(ws, request_id || '', cmdStr, task_id);
         break;
       }
@@ -332,24 +326,34 @@ export class PeerServer {
   }
 
   private runNativeShell(ws: WebSocket, request_id: string, command: string, taskId?: string) {
-    const proc = spawn('/bin/bash', ['-c', command], { cwd: ROME_ROOT, env: { ...process.env, FORCE_COLOR: '1' }, detached: true });
+    console.log(`[NS] Executing: ${command}`);
+    const proc = spawn(command, [], { 
+      cwd: ROME_ROOT, 
+      env: { ...process.env, FORCE_COLOR: '1' }, 
+      shell: '/bin/bash' 
+    });
     let output = '';
-    proc.stdout.on('data', (d) => output += d.toString());
-    proc.stderr.on('data', (d) => output += d.toString());
+    if (proc.stdout) proc.stdout.on('data', (d) => { output += d.toString(); });
+    if (proc.stderr) proc.stderr.on('data', (d) => { output += d.toString(); });
+    
     proc.on('close', (code) => {
-      try {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'response', request_id, ok: code === 0, payload: { output, code } }));
-        }
-      } catch {}
+      console.log(`[NS] Finished [${code}]: ${command.slice(0, 30)}`);
       if (taskId) {
         this.registry.update(taskId, code === 0 ? 'completed' : 'failed', { report: output });
         this.applyStateSignals(output, taskId);
         this.bus.broadcast({ type: 'complete', task_id: taskId, payload: { status: code === 0 ? 'SUCCESS' : 'FAILED', report: output } });
         this.scheduleTick();
+      } else {
+        try {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'response', request_id, ok: code === 0, payload: { output, code } }));
+          }
+        } catch {}
       }
     });
-    if (taskId) this.activeSubprocesses.set(taskId, { kill: () => process.kill(-proc.pid!) });
+    if (taskId) this.activeSubprocesses.set(taskId, { kill: () => {
+      try { process.kill(proc.pid!, 'SIGTERM'); } catch {}
+    }});
   }
 
   private runLegion(task_id: string, capability: string, prompt: string) {
@@ -397,6 +401,32 @@ export class PeerServer {
         this.bus.broadcast({ type: 'state_changed', task_id, payload: { key: sig.key, value: sig.value } });
       }
     }
+  }
+
+  private buildBlackboardContext(prompt: string, capability: string): string {
+    const capConfig = this.arsenal[capability];
+    if (capConfig?.type === 'shell') return prompt;
+
+    const state = this.blackboard.get() as Record<string, any>;
+    const keys = Object.keys(state);
+    if (keys.length === 0) return prompt;
+
+    const now = Date.now() / 1000;
+    const TTL = 7200;
+    const fresh: Record<string, any> = {};
+    let count = 0;
+    for (const key of keys) {
+      if (count >= 20) break;
+      const meta = this.blackboard.getMeta(key);
+      if (meta && (now - meta.task_ts) > TTL) continue;
+      const val = state[key];
+      const str = typeof val === 'string' ? val : JSON.stringify(val);
+      fresh[key] = str.length > 200 ? str.slice(0, 200) + '…' : str;
+      count++;
+    }
+
+    if (Object.keys(fresh).length === 0) return prompt;
+    return `<blackboard>\n${JSON.stringify(fresh)}\n</blackboard>\n\n${prompt}`;
   }
 
   private markCapabilityDown(capability: string, reason: string) {

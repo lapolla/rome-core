@@ -470,6 +470,8 @@ export async function executeTask(
   wsSender?: (ev: object) => Promise<void>,
   modelChain?: string[],
   signalHandler?: SignalHandler,
+  wsUrl?: string,
+  wsToken?: string,
 ): Promise<Manifest> {
   const t0 = Date.now() / 1000;
   const cmdArgsOrig = cmdArgs;
@@ -485,7 +487,13 @@ export async function executeTask(
   fs.mkdirSync(taskDir, { recursive: true });
 
   const geminiCliPath = process.env.GEMINI_CLI || path.resolve(process.env.HOME || '', 'projects/gemini-cli/bundle/gemini.js');
-  cmdArgs = cmdArgs.map(a => typeof a === 'string' ? a.replace(/{ROME_ROOT}/g, ROME_ROOT).replace(/{GEMINI_CLI}/g, geminiCliPath) : a);
+  cmdArgs = cmdArgs.map(a => {
+    if (typeof a !== 'string') return a;
+    return a.replace(/{ROME_ROOT}/g, ROME_ROOT)
+            .replace(/{GEMINI_CLI}/g, geminiCliPath)
+            .replace(/{ROME_WS_URL}/g, wsUrl || process.env.ROME_WS_URL || '')
+            .replace(/{ROME_WS_TOKEN}/g, wsToken || process.env.ROME_WS_TOKEN || '');
+  });
 
   const taskMdPath = path.join(taskDir, 'task.md');
   let initialTaskContent = '';
@@ -514,6 +522,8 @@ export async function executeTask(
     ROME_TASK_ID: taskId,
     ROME_TASK_DIR: taskDir,
     ROME_TASK_TOKEN: process.env.ROME_TASK_TOKEN ?? '',
+    ROME_WS_URL: wsUrl || process.env.ROME_WS_URL || '',
+    ROME_WS_TOKEN: wsToken || process.env.ROME_WS_TOKEN || '',
   };
 
   let spawnArgs = filteredArgs.slice(1);
@@ -632,7 +642,7 @@ export async function executeTask(
   // Model fallback: retry with next model on rate-limit errors
   if (status === 'FAILED' && modelChain && modelChain.length > 1 && isRateLimitError(rawText)) {
     console.log(`[MODEL FALLBACK] ${modelChain[0]} → ${modelChain[1]}`);
-    return executeTask(taskId, capabilityName, cmdArgsOrig, wsSender, modelChain.slice(1));
+    return executeTask(taskId, capabilityName, cmdArgsOrig, wsSender, modelChain.slice(1), signalHandler, wsUrl, wsToken);
   }
 
   const progressLogPath = path.join(taskDir, 'progress.log');
@@ -869,7 +879,7 @@ export async function runWorker(
           };
 
           void (async () => {
-            const manifest = await executeTask(taskId, cap, cmd, uiSender, undefined, signalHandler);
+            const manifest = await executeTask(taskId, cap, cmd, uiSender, undefined, signalHandler, wsUrl, token);
             const reportPath = manifest.artifacts[0]?.path;
             // Use manifest.report directly — artifact write may be skipped
             let reportContent = manifest.report || '';
@@ -1002,7 +1012,7 @@ async function main(): Promise<void> {
     if (args.length < 3) { process.exit(1); }
     const tid = args[0];
     const cmd = args.slice(2);
-    const manifest = await executeTask(tid, 'LEGACY', cmd);
+    const manifest = await executeTask(tid, 'LEGACY', cmd, undefined, undefined, undefined, wsUrl, wsToken);
     console.log(manifest.status === 'SUCCESS' ? 'OK' : 'ERR');
   }
 

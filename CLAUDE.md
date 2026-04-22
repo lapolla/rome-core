@@ -2,40 +2,28 @@
 
 > **I am not here to do work. I am here to decompose it and get out of the way.**
 
-## Dictator's Harness (Execution Mandate)
+## Orchestrator's Harness (Execution Mandate)
 
-You are the **Dictator** of ROME. Caesar commands, you orchestrate.
+You are the **Orchestrator** of the ROME Mesh. Caesar commands, you decompose and delegate.
 
 **ABSOLUTE RULE: All work routes through ROME daemon (ws://127.0.0.1:8741).**
 
-- **Shell operations** → `RomeDispatch(NATIVE_SHELL, "command")` (daemon-native, cwd=ROME_ROOT)
-- **File reads/searches** → `RomeDispatch(GEMINI, "analysis task")`
-- **Code edits/refactoring** → `RomeDispatch(GEMINI, "edit request")`
-- **Complex decomposition** → Ask any LLM worker (Claude, Gemini, Haiku) to break down complex goal into YAML task graph; parse; orchestrate subtasks
-- **In-process signal handler** → When LLM output contains `[ROME_DISPATCH:]`, `[ROME_AWAIT:]`, `[ROME_SHELL:]` signals, parse and route to daemon
+- **Shell operations** → `ws_send("native_shell", {command: "..."})`
+- **Mesh Dispatch** → `ws_send("dispatch", {capability: "...", prompt: "..."})`
+- **Real-time Interaction** → Use Direct Agent Signals (DAS) in full-duplex agents: `[ROME_SHELL: "command"]`, `[ROME_DISPATCH: CAP "prompt"]`.
+- **In-process signal handler** → Native agents intercept signals in real-time, executing tools via the existing WS connection and feeding results back.
 
-**NEVER use:** Bash, Read, Grep, Edit, Write, Agent subagents (except daemon restart via `ROME-start.sh`).
-
-**Daemon restart only exception:** ROME daemon lifecycle control requires Bash (pkill, node spawn). For all other work, dispatch.
-
-**Why:** Every tool call you make locally is work that should decompose and delegate. The mesh exists. Use it.
-
-## Project
-
-Model-agnostic TypeScript orchestration framework. Persistent WebSocket-native daemon on port 8741 dispatches AI workers (Legions) in parallel. Claude Code integrates via native WS tools (RomeDispatch, TaskCreate, etc.) — no bridge needed.
+**NEVER use:** Local Bash, Read, Grep, Edit, Write (except daemon control).
 
 ## Architecture
 
-- **`src/peer_server.ts`** — Pure WS daemon (HTTP only serves `/dashboard/` static HTML). WS: all 19 commands. Hosts `EventBus`, `TaskRegistry`, `WorkerRegistry`, AAAK. Spawns `executeTask` in-process for LLM caps, `executeShell` for shell caps when no worker is available.
-- **`src/legion_worker.ts`** — V6 persistent worker engine. `runWorker()`: connects to daemon, sends `agent_hello`, receives dispatch commands, runs `executeTask`, streams progress via `uiSender`, sends `complete` event. Also hosts `startPeerServer()` for A2A peer dispatch. `executeTask()` spawns the LLM subprocess, parses ROME signals, extracts usage.
-- **`src/shell_executor.ts`** — Dedicated bash executor for SAFE_SHELL. Detached spawn, progress streaming, timeout/SIGKILL, killable promise.
-- **`src/registry.ts`** — `EventBus` (pub/sub to all WS subscribers), `TaskRegistry` (in-memory: status, capability, goal, intent, report, usage, created_at, completed_at), `WorkerRegistry` (connected workers by capability, busy tracking).
-- **`src/rome_types.ts`** — Shared interfaces: `RomeMessage`, `TaskInfo`, `TaskUsage`, `RomeEvent`, `PeerInfo`.
-- **`src/client.ts`** — Headless CLI dispatcher: connects via WS, dispatches task, streams events, exits on complete.
-- **`src/aaak/`** — Adaptive Agent Attention Kernel (TS port). `index.ts`: `AAAK` class. `store.ts`: JSONL fact store (TTL=2h, auto-compact every 50 saves). `distill.ts`: pure string prompt compression (no LLM). `compress.ts`: manifest → fact extraction. SAFE_SHELL and NATIVE_SHELL bypass AAAK entirely.
-- **`arsenal/core_arsenal.json`** — 8 capabilities: GEMINI, CLAUDE, CODEX, HAIKU, MISTRAL, GEMMA, SAFE_SHELL, TEST. Each has `type` (llm/shell), `args`, `timeout`, `peer_port`.
-- **`dashboard/index.html`** — Single-file browser dashboard. WS-driven: `get_state` on connect, 5-second `status` poll, live event stream. Canvas mesh animation, task grid with capability color coding.
-- **`v6-start.sh`** — Starts daemon + all workers: `node dist/peer_server.js DAEMON 8741`, then one `node dist/legion_worker.js --mode worker` per capability.
+- **`src/peer_server.ts`** — Pure WS daemon. Fixed `native_shell` task tracking. Injects sovereign audio context (`PULSE_SERVER`, `XDG_RUNTIME_DIR`) into all sub-tasks.
+- **`src/native_agent.ts`** — V7 full-duplex native agent. Pure JS/TS implementation. Connects to Ollama/Mistral directly. Implements the real-time DAS signal loop via the primary WebSocket.
+- **`src/legion_worker.ts`** — V6 persistent worker engine (legacy wrapper). Supports CLI-based agents. Intercepts signals via stdout line-parsing.
+- **`src/shell_executor.ts`** — Dedicated bash executor for SAFE_SHELL.
+- **`src/registry.ts`** — `EventBus` (with 100-event replay), `TaskRegistry` (causal tracking), `WorkerRegistry`.
+- **`src/client.ts`** — Headless CLI dispatcher.
+- **`ROME-start.sh`** — Orchestrates clean mesh startup. Hardened cleanup logic to prevent zombie worker leaks. Injects audio environment.
 
 ## WS Command Protocol (19 commands)
 

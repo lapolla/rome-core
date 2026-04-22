@@ -1,3 +1,13 @@
+## v7.1.0 — 2026-04-23
+- **JS Sovereignty Migration**: Initiated the decommissioning of legacy Python/CLI wrappers in favor of pure JS/TS native agents.
+- **Full-Duplex Native Agent**: Implemented `src/native_agent.ts` with direct WebSocket integration and real-time multi-turn tool interaction.
+- **Gemma V7 Native**: Switched GEMMA to the new native agent, enabling high-performance local mesh participation via Ollama.
+- **Kernel Fixes**: 
+    - Fixed `native_shell` task-id reporting and execution robustness.
+    - Injected sovereign audio context (PipeWire/Pulse) into the daemon environment.
+- **Dashboard Optimization**: Expanded Mesh Topology canvas to full header width and removed legacy stat cards.
+- **Process Management**: Hardened `ROME-start.sh` cleanup logic to prevent worker leaks.
+
 ## v7.1.0 — 2026-04-13
 
 ### Security & Configuration

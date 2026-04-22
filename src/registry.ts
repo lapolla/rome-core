@@ -280,6 +280,14 @@ export class Blackboard {
     return this.causalMeta[key];
   }
 
+  delete(key: string): boolean {
+    if (!(key in this.state)) return false;
+    delete this.state[key];
+    delete this.causalMeta[key];
+    this.save();
+    return true;
+  }
+
   set(update: StateUpdate): boolean {
     const existingMeta = this.causalMeta[update.key];
     // Optimistic concurrency: reject updates from older tasks if a newer task updated it

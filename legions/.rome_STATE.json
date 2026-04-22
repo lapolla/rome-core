@@ -1,17 +1,22 @@
 {
   "state": {
-    "build_status": "SUCCESS",
-    "test_key": "test_val"
+    "WORKER_COUNT": 42,
+    "LAST_TEST": "19 pass / 0 fail",
+    "SRC_TS_FILES": 12
   },
   "causalMeta": {
-    "build_status": {
-      "caused_by_task": "ts-fae23ef8",
-      "task_ts": 1776036700.954
+    "WORKER_COUNT": {
+      "caused_by_task": "claude-220-1776893583899",
+      "task_ts": 1776893583.899
     },
-    "test_key": {
-      "caused_by_task": "ts-init",
-      "task_ts": 1776415391.724
+    "LAST_TEST": {
+      "caused_by_task": "claude-281-1776894943776",
+      "task_ts": 1776894943.776
+    },
+    "SRC_TS_FILES": {
+      "caused_by_task": "claude-291-1776895170187",
+      "task_ts": 1776895170.187
     }
   },
-  "updated_at": 1776415391.724
+  "updated_at": 1776895170.191
 }
