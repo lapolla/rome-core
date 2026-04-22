@@ -19,6 +19,19 @@ function isQuotaError(msg: string): boolean {
   return QUOTA_PATTERNS.some(p => msg.includes(p));
 }
 
+
+function extractStateSignals(report: string): Array<{ key: string; value: any }> {
+  const results: Array<{ key: string; value: any }> = [];
+  const re = /\[ROME_STATE:\s*(\{[^}]+\})\]/g;
+  let m;
+  while ((m = re.exec(report)) !== null) {
+    try {
+      const obj = JSON.parse(m[1]);
+      if (obj.key !== undefined && obj.value !== undefined) results.push(obj);
+    } catch {}
+  }
+  return results;
+}
 const BUSY_PATTERNS = ['installing', 'building', 'compiling', 'searching', 'thinking'];
 
 function loadArsenal(root: string) {
@@ -189,6 +202,7 @@ export class PeerServer {
         const usage = p.usage ? { ...p.usage, cost_usd: p.usage.cost_usd ?? undefined } : undefined;
         this.registry.update(tid, status, p, usage);
         this.processStateReduction(tid);
+        if (p.report && tid) this.applyStateSignals(p.report, tid);
         this.bus.broadcast({ type: 'complete', task_id: tid, payload: p });
         this.workers.markIdle(ws, tid);
         if (status === 'failed' && isQuotaError(p.report || p.error || '')) { const t = this.registry.get(tid); if (t) this.markCapabilityDown(t.capability, 'quota exhausted'); }
@@ -336,6 +350,7 @@ export class PeerServer {
       } catch {}
       if (taskId) {
         this.registry.update(taskId, code === 0 ? 'completed' : 'failed', { report: output });
+        this.applyStateSignals(output, taskId);
         this.bus.broadcast({ type: 'complete', task_id: taskId, payload: { status: code === 0 ? 'SUCCESS' : 'FAILED', report: output } });
         this.scheduleTick();
       }
@@ -354,6 +369,7 @@ export class PeerServer {
     if (cap.type === 'shell') {
       executeShell(task_id, prompt, wsSender).then(res => {
         this.registry.update(task_id, res.status === 'SUCCESS' ? 'completed' : 'failed', res);
+        this.applyStateSignals(res.report || '', task_id);
         this.bus.broadcast({ type: 'complete', task_id, payload: res });
         this.logUsage('shell', res.status, task_id, null);
         this.scheduleTick();
@@ -365,6 +381,7 @@ export class PeerServer {
       executeTask(task_id, capability, finalArgs, wsSender).then(manifest => {
         const usage = manifest.usage ? { ...manifest.usage, cost_usd: manifest.usage.cost_usd ?? undefined } : undefined;
         this.registry.update(task_id, manifest.status === 'SUCCESS' ? 'completed' : 'failed', manifest, usage);
+        this.applyStateSignals(manifest.report || '', task_id);
         this.bus.broadcast({ type: 'complete', task_id, payload: manifest });
         this.logUsage('legion', manifest.status, task_id, manifest.usage);
         this.scheduleTick();
@@ -377,6 +394,16 @@ export class PeerServer {
     }
   }
 
+
+  private applyStateSignals(report: string, task_id: string) {
+    for (const sig of extractStateSignals(report)) {
+      const task = this.registry.get(task_id);
+      const update = { key: sig.key, value: sig.value, caused_by_task: task_id, task_ts: task ? task.ts : (Date.now() / 1000) };
+      if (this.blackboard.set(update)) {
+        this.bus.broadcast({ type: 'state_changed', task_id, payload: { key: sig.key, value: sig.value } });
+      }
+    }
+  }
 
   private markCapabilityDown(capability: string, reason: string) {
     if (!this.probeResults[capability]) return;

@@ -290,6 +290,10 @@
             <label>Throughput</label>
             <span class="val" id="statThroughput">0 tasks/min</span>
           </div>
+          <div class="stat-chip">
+            <label>Workers</label>
+            <span class="val" id="statWorkers">0 active</span>
+          </div>
         </div>
       </header>
 
@@ -359,21 +363,23 @@
 
         function renderBlackboard() {
           if (!els.stateGrid) return;
-          const keys = Object.keys(state.blackboard).sort();
+          const SYSTEM_KEYS = new Set(['AGENTS']);
+          const keys = Object.keys(state.blackboard).filter(k => !SYSTEM_KEYS.has(k)).sort();
           if (keys.length === 0) {
             els.stateGrid.innerHTML = `<div style="color:var(--text-dim); font-size:11px; text-align:center; padding:20px;">State is currently empty</div>`;
             return;
           }
           els.stateGrid.innerHTML = keys.map(k => {
             const val = state.blackboard[k];
+            const display = typeof val === 'object' && val !== null ? JSON.stringify(val, null, 2) : String(val);
             let color = 'var(--accent)';
             if (val === 'SUCCESS' || val === 'CLEAN') color = 'var(--success)';
             if (val === 'FAILED' || val === 'DIRTY') color = 'var(--failed)';
-            
+            const isObj = typeof val === 'object' && val !== null;
             return `
               <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:4px; padding:10px;">
                 <div style="font-size:10px; font-weight:700; color:var(--text-dim); text-transform:uppercase; margin-bottom:4px;">${k}</div>
-                <div style="font-family:'IBM Plex Mono', monospace; font-size:13px; color:${color}; font-weight:700;">${val}</div>
+                <div style="font-family:'IBM Plex Mono', monospace; font-size:${isObj ? 11 : 13}px; color:${color}; font-weight:700; white-space:pre-wrap; word-break:break-all;">${display}</div>
               </div>
             `;
           }).join("");
