@@ -69,7 +69,10 @@ describe('ROME Protocol Handshake', () => {
       });
 
       // If it doesn't close, we resolve on timeout or specific message
-      setTimeout(resolve, 500);
+      setTimeout(() => {
+        ws.close();
+        resolve();
+      }, 500);
     });
   });
 

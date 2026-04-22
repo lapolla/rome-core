@@ -168,21 +168,6 @@ export class TaskRegistry {
     this.tasks.clear();
   }
 
-  async awaitTask(task_id: string, bus: EventBus): Promise<TaskInfo | null> {
-    const task = this.tasks.get(task_id);
-    if (!task) return null;
-    if (['completed', 'failed', 'cancelled'].includes(task.status)) return task;
-
-    return new Promise((resolve) => {
-      const onEvent = (ev: RomeEvent) => {
-        if (ev.task_id === task_id && ['task_completed', 'task_failed', 'task_timeout'].includes(ev.type)) {
-          bus.unsubscribe(onEvent);
-          resolve(this.get(task_id) || null);
-        }
-      };
-      bus.subscribe(onEvent);
-    });
-  }
 }
 
 export class WorkerRegistry {
@@ -228,7 +213,7 @@ export class WorkerRegistry {
 
   markBusy(ws: WebSocket, task_id: string) {
     const entry = this.workers.get(ws);
-    if (entry) entry.busy_tasks.push(task_id);
+    if (entry && !entry.busy_tasks.includes(task_id)) entry.busy_tasks.push(task_id);
   }
 
   markIdle(ws: WebSocket, task_id: string) {

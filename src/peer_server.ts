@@ -316,12 +316,6 @@ export class PeerServer {
         } }));
         break;
       }
-      case 'await': {
-        const tids = Array.isArray(payload.task_ids) ? payload.task_ids : [payload.task_id];
-        const results = await Promise.all(tids.map((tid: string) => this.registry.awaitTask(tid, this.bus)));
-        ws.send(JSON.stringify({ type: 'response', request_id, ok: results.every(r => r && ['completed', 'success'].includes(r.status.toLowerCase())), payload: { tasks: results.filter(r => r !== null) } }));
-        break;
-      }
       case 'workers': {
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { workers: this.workers.getInfo() } }));
         break;

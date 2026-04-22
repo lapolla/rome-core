@@ -86,6 +86,7 @@ export function executeShell(
 
     proc.stdout?.on('data', onData);
     proc.stderr?.on('data', onData);
+    proc.stderr?.on('error', () => { /* ignore stderr I/O errors */ });
 
     const cleanup = () => {
       if (cancelEmitter) {

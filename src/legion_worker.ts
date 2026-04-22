@@ -4,6 +4,7 @@
  */
 
 import { spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -274,6 +275,18 @@ function loadModelChain(capabilityName: string): string[] {
   return [];
 }
 
+function loadCapabilityTimeout(capabilityName: string): number {
+  try {
+    const arsenalPath = path.join(ROME_ROOT, 'arsenal', 'core_arsenal.json');
+    const arsenal = JSON.parse(fs.readFileSync(arsenalPath, 'utf-8')) as {
+      capabilities?: Record<string, { timeout?: number }>;
+    };
+    const cap = arsenal.capabilities?.[capabilityName] ?? {};
+    if (cap.timeout) return cap.timeout * 1000;
+  } catch { /* ignore */ }
+  return 600_000;
+}
+
 // ── PARSING ────────────────────────────────────────────────────────────────────
 
 function extractJson(text: string): Record<string, any> | null {
@@ -401,12 +414,6 @@ export function parseRomeSignals(text: string): RomeSignals {
     signals.pending.push({ type: 'dispatch', capability: dm[1], prompt: dm[2] });
   }
 
-  const awaitRe = /\[ROME_AWAIT:\s*(.*?)\]/g;
-  let am: RegExpExecArray | null;
-  while ((am = awaitRe.exec(text)) !== null) {
-    signals.pending.push({ type: 'await', task_id: am[1].trim() });
-  }
-
   const readRe = /\[ROME_READ:\s*(.*?)\]/g;
   let rm: RegExpExecArray | null;
   while ((rm = readRe.exec(text)) !== null) {
@@ -521,6 +528,9 @@ export async function executeTask(
     throw new Error('No command provided to executeTask');
   }
 
+  const timeoutMs = loadCapabilityTimeout(capabilityName);
+  let timedOut = false;
+
   const child = spawn(finalCmd, spawnArgs, {
     detached: true,
     cwd: ROME_ROOT,
@@ -537,7 +547,16 @@ export async function executeTask(
   const rl = readline.createInterface({ input: child.stdout!, crlfDelay: Infinity });
 
   const exitPromise = new Promise<number>(resolve => {
+    const killTimer = setTimeout(() => {
+      timedOut = true;
+      ui.log(0, `Task timeout (${timeoutMs / 1000}s) — SIGKILL`);
+      try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* already dead */ }
+      try { rl.close(); } catch { /* ignore */ }
+      try { child.stdout?.destroy(); } catch { /* ignore */ }
+      resolve(137);
+    }, timeoutMs);
     const onExit = (code: number | null) => {
+      clearTimeout(killTimer);
       // Force-close the readline and stdout stream so the for-await loop below
       // terminates even if a detached descendant still holds the pipe open.
       try { rl.close(); } catch { /* ignore */ }
@@ -567,6 +586,7 @@ export async function executeTask(
 
   const exitCode = await exitPromise;
   let status = exitCode === 0 ? 'SUCCESS' : 'FAILED';
+  if (timedOut) status = 'FAILED';
   ui.finalize(status);
   ui.close();
 
@@ -599,6 +619,10 @@ export async function executeTask(
 
 //   fs.writeFileSync(artifactPath, reportContent, 'utf-8');
 
+  if (timedOut) {
+    signals.metadata.failure_reason = `timeout_${timeoutMs / 1000}s`;
+    if (isEmptyContent(reportContent)) reportContent = `Task killed: exceeded ${timeoutMs / 1000}s timeout.`;
+  }
   if (signals.status_override) status = signals.status_override;
   if (isEmptyContent(reportContent) && status === 'SUCCESS') {
     status = 'FAILED';
@@ -705,7 +729,11 @@ async function startPeerServer(
                   },
                 }));
               }
-            })();
+            })().catch(e => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'event', event: { type: 'error', task_id: taskId, payload: { message: (e as Error).message } } }));
+              }
+            });
           }
         } catch (e) {
           console.error('ROME A2A: peer handler error:', e);
@@ -727,6 +755,7 @@ export async function runWorker(
   token?: string,
 ): Promise<void> {
   const urlWithToken = token ? `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}token=${token}` : wsUrl;
+  const pendingRequests = new Map<string, (msg: any) => void>();
   console.log(`ROME ${getRomeVersion()}: Connecting as persistent worker to ${wsUrl}`);
 
   const { port: peerPort } = await startPeerServer(capabilities, capabilityCmdBase);
@@ -736,6 +765,7 @@ export async function runWorker(
   let backoff = 1.0;
   let shutdownRequested = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let currentWs: WebSocket | null = null;
 
   const shutdown = () => {
     shutdownRequested = true;
@@ -749,10 +779,17 @@ export async function runWorker(
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
+  /* Single shutdown handler — registered once, outside the reconnect loop */
+  bus.once('shutdown', () => {
+    console.log(`ROME ${getRomeVersion()}: Shutdown signal received, closing connection.`);
+    try { currentWs?.close(); } catch { /* ignore */ }
+  });
+
   function connect(): void {
     if (shutdownRequested) return;
 
     const ws = new WebSocket(urlWithToken);
+    currentWs = ws;
 
     ws.on('open', () => {
       backoff = 1.0;
@@ -773,6 +810,13 @@ export async function runWorker(
         try {
           const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
           console.log(`ROME ${getRomeVersion()}: Received message type=${String(msg.type ?? '')}`, JSON.stringify(msg));
+
+          if (msg.type === 'response' && msg.request_id && pendingRequests.has(String(msg.request_id))) {
+            const resolve = pendingRequests.get(String(msg.request_id))!;
+            pendingRequests.delete(String(msg.request_id));
+            resolve(msg);
+            return;
+          }
 
           if (msg.type === 'worker_ack') {
             console.log(`ROME ${getRomeVersion()}: Handshake confirmed by server:`, JSON.stringify((msg as any).payload || {}));
@@ -803,8 +847,29 @@ export async function runWorker(
             }
           };
 
+          const signalHandler: SignalHandler = async (signal) => {
+            const reqId = `sig-${randomUUID().substring(0, 8)}`;
+            if (signal.type === 'dispatch' && signal.capability) {
+              return new Promise((resolve, reject) => {
+                const t = setTimeout(() => { pendingRequests.delete(reqId); reject(new Error('signal dispatch timeout')); }, 30000);
+                pendingRequests.set(reqId, (msg: any) => { clearTimeout(t); resolve({ ok: msg.ok, task_id: msg.payload?.task_id }); });
+                try { ws.send(JSON.stringify({ type: 'command', command: 'dispatch', request_id: reqId, payload: { capability: signal.capability, prompt: signal.prompt } })); }
+                catch (e) { pendingRequests.delete(reqId); reject(e); }
+              });
+            }
+            if (signal.type === 'shell' && signal.command) {
+              return new Promise((resolve, reject) => {
+                const t = setTimeout(() => { pendingRequests.delete(reqId); reject(new Error('signal shell timeout')); }, 60000);
+                pendingRequests.set(reqId, (msg: any) => { clearTimeout(t); resolve({ ok: msg.ok, output: msg.payload?.output }); });
+                try { ws.send(JSON.stringify({ type: 'command', command: 'native_shell', request_id: reqId, payload: { command: signal.command } })); }
+                catch (e) { pendingRequests.delete(reqId); reject(e); }
+              });
+            }
+            return { ok: false, error: `Unhandled signal type: ${signal.type}` };
+          };
+
           void (async () => {
-            const manifest = await executeTask(taskId, cap, cmd, uiSender);
+            const manifest = await executeTask(taskId, cap, cmd, uiSender, undefined, signalHandler);
             const reportPath = manifest.artifacts[0]?.path;
             // Use manifest.report directly — artifact write may be skipped
             let reportContent = manifest.report || '';
@@ -825,7 +890,11 @@ export async function runWorker(
                 },
               }));
             }
-          })();
+          })().catch(e => {
+            if (ws.readyState === WebSocket.OPEN) {
+              try { ws.send(JSON.stringify({ type: 'event', event: { type: 'error', task_id: taskId, payload: { message: (e as Error).message } } })); } catch { /* ignore */ }
+            }
+          });
 
           // Ack dispatch immediately so daemon keeps WS responsive
           ws.send(JSON.stringify({ type: 'response', request_id: msg.request_id, ok: true }));
@@ -852,12 +921,6 @@ export async function runWorker(
       }, delay);
     });
 
-    // Immediate shutdown: close the socket so close handler fires but
-    // shutdownRequested flag prevents reconnect scheduling
-    bus.once('shutdown', () => {
-      console.log(`ROME ${getRomeVersion()}: Shutdown signal received, closing connection.`);
-      try { ws.close(); } catch { /* ignore */ }
-    });
   }
 
   connect();
