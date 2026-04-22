@@ -13,6 +13,12 @@ import { AAAK } from './aaak/index.js';
 import { probeArsenal, type ProbeResult } from './arsenal_probe.js';
 
 const ROME_ROOT = process.env.ROME_ROOT || process.cwd();
+
+const QUOTA_PATTERNS = ['QUOTA_EXHAUSTED', 'TerminalQuotaError', 'exhausted your capacity', 'quota will reset'];
+function isQuotaError(msg: string): boolean {
+  return QUOTA_PATTERNS.some(p => msg.includes(p));
+}
+
 const BUSY_PATTERNS = ['installing', 'building', 'compiling', 'searching', 'thinking'];
 
 function loadArsenal(root: string) {
@@ -185,6 +191,7 @@ export class PeerServer {
         this.processStateReduction(tid);
         this.bus.broadcast({ type: 'complete', task_id: tid, payload: p });
         this.workers.markIdle(ws, tid);
+        if (status === 'failed' && isQuotaError(p.report || p.error || '')) { const t = this.registry.get(tid); if (t) this.markCapabilityDown(t.capability, 'quota exhausted'); }
         this.logUsage('worker', status, tid, p.usage);
         this.scheduleTick();
         break;
@@ -192,6 +199,7 @@ export class PeerServer {
         this.registry.update(tid, 'failed', { error: p.message });
         this.bus.broadcast({ type: 'error', task_id: tid, payload: p });
         this.workers.markIdle(ws, tid);
+        if (isQuotaError(p.message || '')) { const t = this.registry.get(tid); if (t) this.markCapabilityDown(t.capability, p.message); }
         this.scheduleTick();
         break;
     }
@@ -247,6 +255,13 @@ export class PeerServer {
         this.registry.register(task_id, capability, prompt, payload.parent_task_id, payload.goal, payload.intent);
         this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability, goal: payload.goal, intent: payload.intent } });
         this.scheduleTick();
+        const probe = this.probeResults[capability];
+        if (probe && !probe.available) {
+          this.registry.update(task_id, 'failed', { error: `${capability} unavailable: ${probe.reason}` });
+          this.bus.broadcast({ type: 'error', task_id, payload: { message: `${capability} unavailable: ${probe.reason}` } });
+          ws.send(JSON.stringify({ type: 'response', request_id, ok: false, error: `${capability} unavailable: ${probe.reason}`, payload: { task_id } }));
+          break;
+        }
         const workerWs = this.workers.findWorker(capability);
         if (workerWs) {
           this.workers.markBusy(workerWs, task_id);
@@ -314,7 +329,11 @@ export class PeerServer {
     proc.stdout.on('data', (d) => output += d.toString());
     proc.stderr.on('data', (d) => output += d.toString());
     proc.on('close', (code) => {
-      ws.send(JSON.stringify({ type: 'response', request_id, ok: code === 0, payload: { output, code } }));
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'response', request_id, ok: code === 0, payload: { output, code } }));
+        }
+      } catch {}
       if (taskId) {
         this.registry.update(taskId, code === 0 ? 'completed' : 'failed', { report: output });
         this.bus.broadcast({ type: 'complete', task_id: taskId, payload: { status: code === 0 ? 'SUCCESS' : 'FAILED', report: output } });
@@ -352,9 +371,17 @@ export class PeerServer {
       }).catch(e => {
         this.registry.update(task_id, 'failed', { error: e.message });
         this.bus.broadcast({ type: 'error', task_id, payload: { message: e.message } });
+        if (isQuotaError(e.message || '')) this.markCapabilityDown(capability, e.message);
         this.scheduleTick();
       });
     }
+  }
+
+
+  private markCapabilityDown(capability: string, reason: string) {
+    if (!this.probeResults[capability]) return;
+    this.probeResults[capability] = { ...this.probeResults[capability], available: false, reason };
+    console.warn(`ROME: capability ${capability} marked unavailable — ${reason}`);
   }
 
   private scheduleTick() {
@@ -367,9 +394,9 @@ export class PeerServer {
   }
 
   private tick() {
-    // Reap zombie tasks (running > 180s)
+    // Reap zombie tasks (pending > 600s — covers max arsenal.timeout)
     for (const t of this.registry.getAll()) {
-      if (t.status === 'running' && (Date.now() / 1000) - t.ts > 180) {
+      if (t.status === 'pending' && (Date.now() / 1000) - t.ts > 600) {
         this.registry.update(t.task_id, 'failed', { error: 'Task timeout (zombie)' });
         this.bus.broadcast({ type: 'error', task_id: t.task_id, payload: { message: 'Task timeout (zombie)' } });
       }
