@@ -58,11 +58,11 @@ start_worker_if() {
 # GEMINI — requires gemini-cli bundle
 GEMINI_CLI="$HOME/projects/gemini-cli/bundle/gemini.js"
 start_worker_if "GEMINI" "test -f '$GEMINI_CLI'" \
-    node "$GEMINI_CLI" --sandbox false --include-directories "$ROME_ROOT" --yolo --output-format json -m gemini-3.1-pro-preview -p
+    node "$GEMINI_CLI" --sandbox false --include-directories "$ROME_ROOT" --yolo --output-format json -m '{MODEL}' -p
 
 # MISTRAL — requires mistral-cli python module
 start_worker_if "MISTRAL" "test -d /home/paul-kane/projects/mistral-cli && command -v python3" \
-    env PYTHONPATH=/home/paul-kane/projects/mistral-cli python3 -m vibe.cli.entrypoint --agent auto-approve --output text -p
+    env PYTHONPATH=/home/paul-kane/projects/mistral-cli python3 -m vibe.cli.entrypoint --agent auto-approve --output text --max-turns 1 -p
 
 # CLAUDE — requires claude CLI on PATH
 start_worker_if "CLAUDE" "command -v claude" \

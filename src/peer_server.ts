@@ -69,6 +69,7 @@ export class PeerServer {
   private probeResults: Record<string, ProbeResult> = {};
   private capability: string;
   private port: number;
+  private eventReplayWindow: number = 90000;
 
   constructor(capability: string, port?: number) {
     this.capability = capability.toUpperCase();
@@ -84,6 +85,14 @@ export class PeerServer {
         const content = fs.readFileSync(configPath, 'utf-8');
         for (const line of content.split('\n')) {
           if (line.startsWith('MESH_PORT=')) meshPort = parseInt(line.split('=')[1]);
+          if (line.startsWith('EVENT_REPLAY_WINDOW=')) this.eventReplayWindow = parseInt(line.split('=')[1]);
+        }
+      }
+      const jsonPath = path.join(ROME_ROOT, 'dictator', 'config.json');
+      if (fs.existsSync(jsonPath)) {
+        const jsonConfig = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+        if (jsonConfig.eventReplayWindow !== undefined) {
+          this.eventReplayWindow = jsonConfig.eventReplayWindow;
         }
       }
     } catch {}
@@ -130,7 +139,7 @@ export class PeerServer {
             if (msg.type === 'command') this.handleCommand(ws, msg);
             else if (msg.type === 'agent_hello') {
               const p = msg.payload || {};
-              this.workers.register(ws, p.capabilities, p.version, p.platform, p.peer_url);
+              this.workers.register(ws, p.capabilities, p.version, p.platform, p.peer_url, p.one_shot ?? true);
               ws.send(JSON.stringify({ type: 'worker_ack', ok: true, payload: { message: 'Registered', capabilities_accepted: p.capabilities } }));
               this.scheduleTick();
             }
@@ -140,8 +149,20 @@ export class PeerServer {
           }
         });
 
-        const busSub = (ev: RomeEvent) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'event', event: ev })); };
+        let isReplaying = true;
+        const busSub = (ev: RomeEvent) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            if (isReplaying) {
+              const evTime = (ev as any).timestamp ?? (ev.ts ? ev.ts * 1000 : Date.now());
+              if (Date.now() - evTime > this.eventReplayWindow) {
+                return;
+              }
+            }
+            ws.send(JSON.stringify({ type: 'event', event: ev }));
+          }
+        };
         this.bus.subscribe(busSub);
+        isReplaying = false;
         ws.on('close', () => {
           this.bus.unsubscribe(busSub);
           const orphaned = this.workers.unregister(ws);
@@ -201,6 +222,7 @@ export class PeerServer {
         if (p.report && tid) this.applyStateSignals(p.report, tid);
         this.bus.broadcast({ type: 'complete', task_id: tid, payload: p });
         this.workers.markIdle(ws, tid);
+        if (this.workers.isOneShot(ws)) ws.close();
         if (status === 'failed' && isQuotaError(p.report || p.error || '')) { const t = this.registry.get(tid); if (t) this.markCapabilityDown(t.capability, 'quota exhausted'); }
         this.logUsage('worker', status, tid, p.usage);
         this.scheduleTick();
@@ -292,7 +314,7 @@ export class PeerServer {
       }
       case 'get_state': {
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: {
-          tasks: Object.fromEntries(this.registry.getAll().map(t => [t.task_id, t])),
+          tasks: Object.fromEntries(this.registry.getAll().filter(t => t.status === "pending" || t.status === "running" || (Date.now() / 1000) - t.ts < 300).map(t => [t.task_id, t])),
           workers: this.workers.getInfo(),
           ...this.registry.getSessionStats(),
           uptime_s: (Date.now() / 1000) - this.startTime,
@@ -302,7 +324,7 @@ export class PeerServer {
       }
       case 'status': {
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { 
-          tasks: Object.fromEntries(this.registry.getAll().map(t => [t.task_id, t])), 
+          tasks: Object.fromEntries(this.registry.getAll().filter(t => t.status === "pending" || t.status === "running" || (Date.now() / 1000) - t.ts < 300).map(t => [t.task_id, t])), 
           workers: this.workers.getInfo(), 
           ...this.registry.getSessionStats(), 
           uptime_s: (Date.now() / 1000) - this.startTime,
@@ -446,7 +468,7 @@ export class PeerServer {
 
   private tick() {
     // Reap zombie tasks (pending > 600s — covers max arsenal.timeout)
-    for (const t of this.registry.getAll()) {
+    for (const t of this.registry.getAll().filter(t => t.status === "pending" || t.status === "running" || (Date.now() / 1000) - t.ts < 300)) {
       if (t.status === 'pending' && (Date.now() / 1000) - t.ts > 600) {
         this.registry.update(t.task_id, 'failed', { error: 'Task timeout (zombie)' });
         this.bus.broadcast({ type: 'error', task_id: t.task_id, payload: { message: 'Task timeout (zombie)' } });

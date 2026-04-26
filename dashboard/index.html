@@ -336,7 +336,7 @@
 
     <script>
       (function() {
-        const state = { socket: null, tasks: new Map(), logs: [], workers: [], cost: 0, tokens: 0, projectCost: 0, projectTokens: 0, agents: [], blackboard: {} };
+        const state = { socket: null, tasks: new Map(), logs: [], workers: [], cost: 0, tokens: 0, projectCost: 0, projectTokens: 0, agents: [], blackboard: {}, history: [], capabilitiesProbe: {} };
         const els = {
           grid: document.getElementById('taskGrid'),
           logs: document.getElementById('logStream'),

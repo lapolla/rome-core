@@ -72,4 +72,5 @@ export interface PeerInfo {
   version: string;
   platform: string;
   peer_url: string;
+  one_shot?: boolean;
 }

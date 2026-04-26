@@ -723,13 +723,11 @@ async function startPeerServer(
             if (cleanPrompt) cmd.push(cleanPrompt);
 
             void (async () => {
-              const noopSender = async (_ev: object): Promise<void> => { /* no-op */ };
-              const manifest = await executeTask(taskId, cap, cmd, noopSender);
-              let reportContent = '';
-              try {
-                const p = manifest.artifacts[0]?.path;
-                if (p) reportContent = fs.readFileSync(p, 'utf-8');
-              } catch { /* ignore */ }
+              const peerSender = async (ev: object): Promise<void> => {
+                if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(ev));
+              };
+              const manifest = await executeTask(taskId, cap, cmd, peerSender);
+              const reportContent = manifest.report || '';
               if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                   type: 'event',

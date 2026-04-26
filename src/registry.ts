@@ -173,12 +173,13 @@ export class TaskRegistry {
 export class WorkerRegistry {
   private workers: Map<WebSocket, PeerInfo> = new Map();
 
-  register(ws: WebSocket, caps: string[], version: string = "", platform: string = "", peer_url: string = "") {
+  register(ws: WebSocket, caps: string[], one_shot: boolean = true, version: string = "", platform: string = "", peer_url: string = "") {
     this.workers.set(ws, {
       worker_id: Math.random().toString(36).substring(7),
-      capabilities: caps.map(c => c.toUpperCase()),
+      capabilities: (caps || []).map(c => c.toUpperCase()),
       busy_tasks: [],
       connected_at: Date.now() / 1000,
+      one_shot,
       version,
       platform,
       peer_url
@@ -225,6 +226,11 @@ export class WorkerRegistry {
 
   getInfo(): PeerInfo[] {
     return Array.from(this.workers.values());
+  }
+
+  isOneShot(ws: WebSocket): boolean {
+    const entry = this.workers.get(ws);
+    return (entry?.one_shot !== false) && (entry?.busy_tasks.length === 0);
   }
 
   count(): number {
