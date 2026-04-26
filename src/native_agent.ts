@@ -37,6 +37,7 @@ class MeshAgent {
         type: 'agent_hello',
         payload: {
           capabilities: [this.config.capability],
+          one_shot: false,
           version: '7.1.0-native',
           platform: process.platform,
           worker_id: this.workerId
