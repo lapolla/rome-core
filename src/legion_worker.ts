@@ -806,6 +806,7 @@ export async function runWorker(
         type: 'agent_hello',
         payload: {
           capabilities,
+          one_shot: false,
           version: getRomeVersion(),
           platform: process.platform,
           peer_url: peerUrl,
