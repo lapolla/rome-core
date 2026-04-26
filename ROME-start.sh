@@ -15,6 +15,7 @@ WS_URL="ws://127.0.0.1:$MESH_PORT"
 # 0. Kill stale workers and daemon
 pkill -f "peer_server.js" 2>/dev/null || true
 pkill -f "legion_worker.js" 2>/dev/null || true
+pkill -f "vibe.cli.entrypoint" 2>/dev/null || true
 pkill -f "native_agent.js" 2>/dev/null || true
 sleep 1
 
