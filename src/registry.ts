@@ -173,7 +173,7 @@ export class TaskRegistry {
 export class WorkerRegistry {
   private workers: Map<WebSocket, PeerInfo> = new Map();
 
-  register(ws: WebSocket, caps: string[], one_shot: boolean = true, version: string = "", platform: string = "", peer_url: string = "") {
+  register(ws: WebSocket, caps: string[], version: string = "", platform: string = "", peer_url: string = "", one_shot: boolean = true) {
     this.workers.set(ws, {
       worker_id: Math.random().toString(36).substring(7),
       capabilities: (caps || []).map(c => c.toUpperCase()),
