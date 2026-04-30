@@ -340,7 +340,7 @@
         const els = {
           grid: document.getElementById('taskGrid'),
           logs: document.getElementById('logStream'),
-          mesh: document.getElementById('meshTopology'),
+          mesh: document.getElementById('caps'),
           cost: document.getElementById('statCost'),
           projectCost: document.getElementById('statProjectCost'),
           tokens: document.getElementById('statTokens'),
@@ -402,6 +402,13 @@
           // known-available show as "idle"; unavailable show greyed with reason.
           const probe = state.capabilitiesProbe || {};
           const chips = [];
+          // Daemon-native — always available, always first
+          const daemonNative = ['NATIVE_SHELL', 'SAFE_SHELL'];
+          daemonNative.forEach(cap => {
+            const col = getCapColor(cap);
+            chips.push(`<div class="chip" title="daemon-native"><span style="color:${col}">[${cap}]</span></div>`);
+            connectedCaps.add(cap);
+          });
           for (const a of agents) {
             const caps = (a.capabilities || []).join(',');
             chips.push(`<div class="chip" title="${a.peer_url || 'local'}"><span style="color:var(--accent)">[${caps}]</span></div>`);
@@ -436,7 +443,8 @@
           if (c === 'CLAUDE')     return '#a855f7';
           if (c === 'HAIKU')      return '#e879f9';
           if (c === 'GEMMA')      return '#34d399';
-          if (c === 'SAFE_SHELL') return '#22c55e';
+          if (c === 'NATIVE_SHELL') return '#06b6d4';
+          if (c === 'SAFE_SHELL')   return '#22c55e';
           if (c === 'CODEX')      return '#fb923c';
           return '#64748b';
         }
@@ -458,6 +466,8 @@
           // Position workers across the canvas width (end-to-end)
           const nodes = workers.map((wk, i) => {
             const cap = (wk.capabilities || [])[0] || '?';
+            const dupCap = workers.filter(w => (w.capabilities||[])[0] === cap).length > 1;
+            const label = dupCap ? cap + ':' + (wk.worker_id || '').slice(-4) : cap;
             const busy = (wk.busy_tasks || []).length > 0;
             // Distribute workers across the entire width
             const startX = 80;
@@ -466,7 +476,7 @@
             const x = startX + (i * step);
             const y = h / 2 + Math.sin(now * 0.0008 + i * 1.7) * (h * 0.25);
             return {
-              x, y, cap, color: getCapColor(cap), busy, id: wk.worker_id
+              x, y, cap: label, color: getCapColor(cap), busy, id: wk.worker_id
             };
           });
 
@@ -637,7 +647,7 @@
         window.viewReport = (tid) => {
           const task = state.tasks.get(tid);
           els.modalTitle.textContent = "TASK REPORT :: " + tid;
-          els.modalContent.textContent = task.report || "Requesting report from mesh...";
+          els.modalContent.textContent = task.report || task.prompt || task.goal || "";
           els.modal.classList.add('active');
         };
 

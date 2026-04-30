@@ -545,7 +545,7 @@ export async function executeTask(
     detached: true,
     cwd: ROME_ROOT,
     env: combinedEnv,
-    stdio: ['pipe', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 
   const stdoutLines: Buffer[] = [];
@@ -586,9 +586,9 @@ export async function executeTask(
       for (const pending of sigData.pending) {
         try {
           const res = await handleRomeSignal(pending, signalHandler);
-          child.stdin?.write(JSON.stringify(res) + '\n');
+          (child.stdin as any)?.write(JSON.stringify(res) + '\n');
         } catch (e) {
-          child.stdin?.write(JSON.stringify({ ok: false, error: String(e) }) + '\n');
+          (child.stdin as any)?.write(JSON.stringify({ ok: false, error: String(e) }) + '\n');
         }
       }
     }
