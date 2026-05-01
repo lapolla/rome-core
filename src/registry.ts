@@ -168,23 +168,6 @@ export class TaskRegistry {
     this.tasks.clear();
   }
 
-  reapStaleTasks(maxAgeMs: number = 30 * 60 * 1000): string[] {
-    const reaped: string[] = [];
-    const now = Date.now() / 1000;
-    for (const [task_id, task] of this.tasks.entries()) {
-      if (
-        (task.status === 'pending' || task.status === 'running') &&
-        (now - (task.created_at ?? now)) * 1000 > maxAgeMs
-      ) {
-        console.warn('[Registry] Reaped stale task:', task_id);
-        this.update(task_id, 'failed', { error: 'task TTL exceeded' });
-        reaped.push(task_id);
-      }
-    }
-    return reaped;
-  }
-
-
 }
 
 export class WorkerRegistry {

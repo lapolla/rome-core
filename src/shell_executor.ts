@@ -26,11 +26,6 @@ export function executeShell(
   let proc!: ReturnType<typeof spawn>;
 
   const promise = new Promise<{ status: 'SUCCESS' | 'FAILED'; report: string; exit_code: number; elapsed_s: number }>((resolve) => {
-    try {
-      const _e = JSON.stringify({ ts: Date.now(), task_id: taskId, cmd: command.slice(0, 500) }) + String.fromCharCode(10);
-      fs.appendFileSync('/tmp/rome-shell-audit.jsonl', _e);
-    } catch { /* ignore */ }
-
     proc = spawn('bash', ['-c', command], {
       detached: true,
       cwd: taskDir,
