@@ -1,3 +1,9 @@
+## v7.1.1 — 2026-05-01
+
+### Features
+- **AAAK Comms**: Wired AAAK into mesh dispatch — `preDispatch` enriches prompts with facts, `postResult` saves facts from completed tasks.
+- **New WS Commands**: `aaak_recall` (query fact store by text) and `aaak_seed` (seed facts directly) expose AAAK to the Dictator over WebSocket.
+
 ## v7.1.0 — 2026-04-23
 - **JS Sovereignty Migration**: Initiated the decommissioning of legacy Python/CLI wrappers in favor of pure JS/TS native agents.
 - **Full-Duplex Native Agent**: Implemented `src/native_agent.ts` with direct WebSocket integration and real-time multi-turn tool interaction.

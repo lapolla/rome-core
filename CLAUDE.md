@@ -25,7 +25,7 @@ You are the **Orchestrator** of the ROME Mesh. Caesar commands, you decompose an
 - **`src/client.ts`** — Headless CLI dispatcher.
 - **`ROME-start.sh`** — Orchestrates clean mesh startup. Hardened cleanup logic to prevent zombie worker leaks. Injects audio environment.
 
-## WS Command Protocol (19 commands)
+## WS Command Protocol (21 commands)
 
 Frames: `{"type": "command", "command": "<name>", "request_id": "<id>", "payload": {}}` → `{"type": "response", "request_id": "<id>", "ok": true/false, "payload": {}}`.
 
@@ -50,6 +50,8 @@ Frames: `{"type": "command", "command": "<name>", "request_id": "<id>", "payload
 | `workers` | List connected persistent workers |
 | `report_usage` | Self-report token usage |
 | `dashboard_stats` | Aggregated stats |
+| `aaak_recall` | Query AAAK fact store by text (returns ranked facts) |
+| `aaak_seed` | Seed a fact directly into AAAK store |
 
 ## ROME Protocol Rules (v7.1.0)
 
@@ -109,6 +111,8 @@ Reports are inline in `manifest.report` → `complete` payload → `registry.tas
 - **`postResult`**: Compresses manifest → saves fact (SUCCESS only). TTL=2h, auto-compact every 50 saves.
 - **`distill`**: Pure string manipulation (goal/intent/cause extraction + fact injection). No LLM call.
 - **Fact store**: `aaak/.facts/{prefix}.jsonl`. One instance per prefix (default: "default").
+- **`aaak_recall`** WS command: Dictator queries facts by text, returns ranked results.
+- **`aaak_seed`** WS command: Dictator seeds facts directly into the store.
 
 ## V6 Distributed Mesh (A2A)
 
