@@ -277,18 +277,7 @@
     <header class="header">
       <canvas id="meshGraph"></canvas>
 
-      <div class="sys-info">
-        <div class="stat-chip">
-          <label>Cost</label>
-          <span class="val" id="statCost">$0.0000</span>
-          <span class="sub-val">(PROJ: <span id="statProjectCost">$0.0000</span>)</span>
-        </div>
-        <div class="stat-chip">
-          <label>Tokens</label>
-          <span class="val" id="statTokens">0</span>
-          <span class="sub-val">(PROJ: <span id="statProjectTokens">0</span>)</span>
-        </div>
-      </div>
+
     </header>
 
     <div class="app">
@@ -309,6 +298,10 @@
           <div class="box">
             <div class="box-header" onclick="this.parentElement.classList.toggle('collapsed')"><h2>Sovereign Blackboard</h2></div>
             <div class="scroll" id="stateBlackboard" style="padding:16px;">
+              <div class="bb-stats" style="display:flex;gap:16px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.08);">
+                <div style="flex:1;"><span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em;">Session Cost</span><br><span id="statCost" style="font-size:13px;font-weight:600;color:#e0e0e0;">$0.0000</span><br><span style="font-size:10px;color:#666;">PROJ: <span id="statProjectCost">$0.0000</span></span></div>
+                <div style="flex:1;"><span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em;">Tokens</span><br><span id="statTokens" style="font-size:13px;font-weight:600;color:#e0e0e0;">0</span><br><span style="font-size:10px;color:#666;">PROJ: <span id="statProjectTokens">0</span></span></div>
+              </div>
               <div id="stateGrid" style="display:grid; gap:12px;"></div>
             </div>
           </div>
