@@ -675,8 +675,6 @@
                   if (p.usage) {
                     state.cost += (p.usage.cost_usd || 0);
                     state.tokens += (p.usage.total_tokens || 0);
-                    state.projectCost += (p.usage.cost_usd || 0);
-                    state.projectTokens += (p.usage.total_tokens || 0);
                   }
                   state.history.push(Date.now()); renderTasks();
                 }

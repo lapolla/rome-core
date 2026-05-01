@@ -73,6 +73,9 @@ start_worker_if() {
     fi
 }
 
+# Load Mistral API key from vibe env file
+[ -f "$HOME/.vibe/.env" ] && export $(grep -v "^#" "$HOME/.vibe/.env" | xargs)
+
 # GEMINI — requires gemini-cli bundle
 GEMINI_CLI="$HOME/projects/gemini-cli/bundle/gemini.js"
 start_worker_if "GEMINI" "test -f '$GEMINI_CLI'" \

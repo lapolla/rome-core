@@ -17,11 +17,14 @@
       ],
       "timeout": 300,
       "min_version": "2.0",
-      "_note": "Gemini CLI — -p must be last",
+      "_note": "Gemini CLI \u2014 -p must be last",
       "peer_port": 8742,
       "peer_host": "127.0.0.1",
-      "model": "gemini-2.5-flash-lite",
-      "model_fallback_chain": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash"]
+      "model": "gemini-3.1-pro-preview",
+      "model_fallback_chain": [
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview"
+      ]
     },
     "CLAUDE": {
       "type": "llm",
@@ -36,7 +39,7 @@
       ],
       "timeout": 300,
       "min_version": "1.0",
-      "_note": "Anthropic Claude Opus 4.6 — -p must be last",
+      "_note": "Anthropic Claude Opus 4.6 \u2014 -p must be last",
       "peer_port": 8743,
       "peer_host": "127.0.0.1"
     },
@@ -71,14 +74,14 @@
       ],
       "timeout": 300,
       "min_version": "0.1",
-      "_note": "OpenAI Codex CLI — requires OPENAI_API_KEY, not ChatGPT account. Currently disabled.",
+      "_note": "OpenAI Codex CLI \u2014 requires OPENAI_API_KEY, not ChatGPT account. Currently disabled.",
       "peer_port": 8744,
       "peer_host": "127.0.0.1"
     },
     "SAFE_SHELL": {
       "type": "shell",
       "timeout": 600,
-      "_note": "Dedicated bash executor — runs in-process via src/shell_executor.ts",
+      "_note": "Dedicated bash executor \u2014 runs in-process via src/shell_executor.ts",
       "peer_port": 8745,
       "peer_host": "127.0.0.1"
     },
@@ -102,26 +105,31 @@
       ],
       "timeout": 120,
       "min_version": "1.0",
-      "_note": "Claude Haiku 4.5 — fast cheap worker for file edits and simple tasks",
+      "_note": "Claude Haiku 4.5 \u2014 fast cheap worker for file edits and simple tasks",
       "peer_port": 8749,
       "peer_host": "127.0.0.1"
     },
     "MISTRAL": {
       "type": "llm",
       "args": [
+        "uv",
+        "run",
+        "--directory",
+        "/home/paul-kane/projects/mistral-cli",
         "python3",
         "-m",
         "vibe.cli.entrypoint",
-        "env:PYTHONPATH=/home/paul-kane/projects/mistral-cli",
-        "--agent",
-        "auto-approve",
         "--output",
         "text",
+        "--agent",
+        "auto-approve",
+        "--max-turns",
+        "1",
         "-p"
       ],
       "timeout": 300,
       "min_version": "2.0",
-      "_note": "Mistral Vibe CLI — -p must be last. Invokes external python3 (Mistral's own dep, not ROME's).",
+      "_note": "Mistral Vibe CLI via uv \u2014 -p must be last",
       "peer_port": 8748,
       "peer_host": "127.0.0.1"
     }

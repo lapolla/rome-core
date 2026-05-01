@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
+import { EventEmitter } from 'events'; // Added
 import { AAAK } from './aaak/index.js';
 import { spawn } from 'child_process';
 import type { RomeMessage, TaskUsage, RomeEvent } from './rome_types.js';
@@ -64,7 +65,8 @@ export class PeerServer {
   private blackboard = new Blackboard();
 
   private reducer = new MeshReducer();
-  private aaak = new AAAK('default', { enabled: true });
+  // FIX 3: Change AAAK initialization path
+  private aaak = new AAAK('default', { enabled: true }, path.join(ROME_ROOT, 'legions', '.aaak_facts'));
   private startTime = Date.now() / 1000;
   private activeSubprocesses = new Map<string, { kill: () => void }>();
   private tickScheduled = false;
@@ -217,7 +219,8 @@ export class PeerServer {
           if (!line) continue;
           try {
             const entry = JSON.parse(line);
-            if (entry.status === 'SUCCESS' && entry.usage) {
+            // FIX 4 (line ~220): Change `entry.status === 'SUCCESS' && entry.usage` to `entry.usage`
+            if (entry.usage) { 
               this.projectTotalCost += entry.usage.cost_usd || 0;
               this.projectTotalTokens += entry.usage.total_tokens || 0;
             }
@@ -259,7 +262,7 @@ export class PeerServer {
         this.bus.broadcast({ type: 'complete', task_id: tid, payload: p });
         this.workers.markIdle(ws, tid);
         if (this.workers.isOneShot(ws)) ws.close();
-        if (status === 'failed' && isQuotaError(p.report || p.error || '')) { const t = this.registry.get(tid); if (t) this.markCapabilityDown(t.capability, 'quota exhausted'); }
+        if (status === 'failed' && isQuotaError(p.report || p.error || '')) { const t = this.registry.get(tid); if (t) this.markCapabilityDown(t.capability, p.report || p.error || ''); }
         this.logUsage('worker', status, tid, p.usage);
         this.scheduleTick();
         break;
@@ -279,7 +282,8 @@ export class PeerServer {
     fs.promises.appendFile(logPath, entry).catch(() => {});
 
     // Update project totals if status is SUCCESS and usage is available
-    if (status === 'SUCCESS' && usage) {
+    // FIX 4 (line ~282): Change `status === 'SUCCESS' && usage` to `usage`
+    if (usage) {
       this.projectTotalCost += usage.cost_usd || 0;
       this.projectTotalTokens += usage.total_tokens || 0;
     }
@@ -450,11 +454,24 @@ export class PeerServer {
       return;
     }
     if (cap.type === 'shell') {
-      executeShell(task_id, prompt, wsSender).then(res => {
+      // FIX 1: SAFE_SHELL zombie timeout
+      const cancelEmitter = new EventEmitter();
+      const SHELL_TIMEOUT_MS = 90_000;
+      const shellTimer = setTimeout(() => cancelEmitter.emit('timeout', task_id), SHELL_TIMEOUT_MS);
+      
+      executeShell(task_id, prompt, wsSender, cancelEmitter).then(res => {
+        clearTimeout(shellTimer);
         this.registry.update(task_id, res.status === 'SUCCESS' ? 'completed' : 'failed', res);
         if (res.status === 'SUCCESS') this.aaak.postResult(res as any, capability);
         this.bus.broadcast({ type: 'complete', task_id, payload: res });
         this.logUsage('shell', res.status, task_id, null);
+        this.scheduleTick();
+      }).catch(e => { // Added catch block for executeShell
+        clearTimeout(shellTimer); // Clear timer on error
+        console.error(`ROME: executeShell failed for task ${task_id}:`, e);
+        this.registry.update(task_id, 'failed', { error: e.message });
+        this.bus.broadcast({ type: 'error', task_id, payload: { message: e.message } });
+        if (isQuotaError(e.message || '')) this.markCapabilityDown(capability, e.message);
         this.scheduleTick();
       });
     } else {
