@@ -17,6 +17,7 @@ export class FactStore {
   private _path: string;
   private _ttl: number;
   private _saveCount: number = 0;
+  private _knownContent: Set<string> | null = null;
 
   constructor(storeDir?: string, prefix: string = "default", ttlSeconds: number = DEFAULT_TTL) {
     this._storeDir = storeDir || path.join(__dirname, '..', '..', 'aaak', '.facts');
@@ -27,17 +28,28 @@ export class FactStore {
     this._ttl = ttlSeconds;
   }
 
-  save(fact: Fact): void {
-    if (!fact.ts) {
-      fact.ts = Date.now() / 1000;
+  private getKnownContent(): Set<string> {
+    if (this._knownContent === null) {
+      this._knownContent = new Set();
+      if (fs.existsSync(this._path)) {
+        const lines = fs.readFileSync(this._path, 'utf-8').split('\n').filter(Boolean);
+        for (const line of lines) {
+          try { this._knownContent.add(JSON.parse(line).content); } catch {}
+        }
+      }
     }
+    return this._knownContent;
+  }
+
+  save(fact: Fact): void {
+    if (!fact.ts) fact.ts = Date.now() / 1000;
+    const known = this.getKnownContent();
+    if (known.has(fact.content)) return;
+    known.add(fact.content);
     const line = JSON.stringify(fact);
     fs.appendFileSync(this._path, line + "\n", 'utf-8');
-    
     this._saveCount++;
-    if (this._saveCount % 50 === 0) {
-      this.compact();
-    }
+    if (this._saveCount % 50 === 0) this.compact();
   }
 
   loadActive(): Fact[] {

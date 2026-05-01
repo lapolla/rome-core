@@ -74,6 +74,10 @@ export class PeerServer {
   private port: number;
   private eventReplayWindow: number = 90000;
 
+  // Dashboard stats
+  private projectTotalCost: number = 0;
+  private projectTotalTokens: number = 0;
+
   constructor(capability: string, port?: number) {
     this.capability = capability.toUpperCase();
     this.arsenal = loadArsenal(ROME_ROOT);
@@ -101,7 +105,13 @@ export class PeerServer {
     } catch {}
 
     this.port = port !== undefined ? port : meshPort;
+
+    // Initialize project totals by aggregating logs on startup
+    this.loadProjectTotals().catch((e) => {
+      console.error(`ROME: Failed to initialize project totals:`, e);
+    });
   }
+
 
   async start(): Promise<number> {
     // Probe the arsenal for binary/backend availability. Advisory only —
@@ -126,7 +136,7 @@ export class PeerServer {
     this.wss = new WebSocketServer({ server: this.server });
     this.wss.on('error', (err) => console.error('ROME WS error:', err));
 
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       this.server!.on('error', reject);
       this.server!.listen(this.port, "0.0.0.0", () => {
         const addr = this.server!.address();
@@ -198,6 +208,29 @@ export class PeerServer {
     });
   }
 
+  private async loadProjectTotals() {
+    const logPath = path.join(ROME_ROOT, 'logs', 'rome.jsonl');
+    try {
+      if (fs.existsSync(logPath)) {
+        const logContent = await fs.promises.readFile(logPath, 'utf-8');
+        for (const line of logContent.split('\n')) {
+          if (!line) continue;
+          try {
+            const entry = JSON.parse(line);
+            if (entry.status === 'SUCCESS' && entry.usage) {
+              this.projectTotalCost += entry.usage.cost_usd || 0;
+              this.projectTotalTokens += entry.usage.total_tokens || 0;
+            }
+          } catch (e) {
+            console.error(`ROME: Failed to parse log entry: ${line}`, e);
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`ROME: Failed to read or process log file ${logPath}:`, e);
+    }
+  }
+
   getPort(): number {
     const addr = this.server?.address();
     return typeof addr === 'object' && addr !== null ? addr.port : this.port;
@@ -244,6 +277,12 @@ export class PeerServer {
     const logPath = path.join(ROME_ROOT, 'logs', 'rome.jsonl');
     const entry = JSON.stringify({ ts: Date.now() / 1000, tool, task_id, status, usage }) + '\n';
     fs.promises.appendFile(logPath, entry).catch(() => {});
+
+    // Update project totals if status is SUCCESS and usage is available
+    if (status === 'SUCCESS' && usage) {
+      this.projectTotalCost += usage.cost_usd || 0;
+      this.projectTotalTokens += usage.total_tokens || 0;
+    }
   }
 
   private async handleCommand(ws: WebSocket, msg: RomeMessage) {
@@ -331,7 +370,10 @@ export class PeerServer {
           workers: this.workers.getInfo(), 
           ...this.registry.getSessionStats(), 
           uptime_s: (Date.now() / 1000) - this.startTime,
-          state: this.blackboard.get()
+          state: this.blackboard.get(),
+          // Add project-wide totals
+          project_total_cost_usd: this.projectTotalCost,
+          project_total_tokens: this.projectTotalTokens
         } }));
         break;
       }
@@ -417,7 +459,9 @@ export class PeerServer {
       });
     } else {
       const model = cap.model || 'gemini-3.1-pro-preview';
-      const effectivePrompt = cap.system_prompt ? `${cap.system_prompt}\n\nTASK: ${prompt}` : prompt;
+      const effectivePrompt = cap.system_prompt ? `${cap.system_prompt}
+
+TASK: ${prompt}` : prompt;
       const finalArgs = (cap.args || []).map((a: any) => typeof a === 'string' ? a.replace(/{MODEL}/g, model) : a).concat(effectivePrompt);
       executeTask(task_id, capability, finalArgs, wsSender).then(manifest => {
         const usage = manifest.usage ? { ...manifest.usage, cost_usd: manifest.usage.cost_usd ?? undefined } : undefined;
@@ -469,7 +513,11 @@ export class PeerServer {
     }
 
     if (Object.keys(fresh).length === 0) return prompt;
-    return `<blackboard>\n${JSON.stringify(fresh)}\n</blackboard>\n\n${prompt}`;
+    return `<blackboard>
+${JSON.stringify(fresh)}
+</blackboard>
+
+${prompt}`;
   }
 
   private markCapabilityDown(capability: string, reason: string) {
