@@ -17,7 +17,7 @@ interface AgentConfig {
   mistralKey?: string;
 }
 
-class MeshAgent {
+export class MeshAgent {
   private ws: WebSocket | null = null;
   private config: AgentConfig;
   private workerId: string = Math.random().toString(36).substring(7);
@@ -25,6 +25,15 @@ class MeshAgent {
 
   constructor(config: AgentConfig) {
     this.config = config;
+  }
+
+  private _disconnecting = false;
+  private _reconnectTimer: NodeJS.Timeout | null = null;
+
+  disconnect() {
+    this._disconnecting = true;
+    if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+    this.ws?.close();
   }
 
   async connect() {
@@ -76,7 +85,7 @@ class MeshAgent {
 
     this.ws.on('close', () => {
       console.log(`[${this.config.capability}] Disconnected. Reconnecting...`);
-      setTimeout(() => this.connect(), 2000);
+      if (!this._disconnecting) this._reconnectTimer = setTimeout(() => this.connect(), 2000);
     });
   }
 
@@ -163,7 +172,7 @@ Always use this exact format. When you receive a result, analyze it and continue
     }
   }
 
-  private parseSignals(text: string) {
+  parseSignals(text: string) {
     const signals: Array<{ type: string; command?: string; capability?: string; prompt?: string }> = [];
     
     // [ROME_SHELL: "ls -la"]
@@ -253,4 +262,6 @@ async function main() {
   await agent.connect();
 }
 
-main().catch(console.error);
+import { fileURLToPath } from 'url';
+const isEntryPoint = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (isEntryPoint) main().catch(console.error);
