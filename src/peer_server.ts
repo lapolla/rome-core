@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
+import { AAAK } from './aaak/index.js';
 import { spawn } from 'child_process';
 import type { RomeMessage, TaskUsage, RomeEvent } from './rome_types.js';
 import { getRomeVersion } from './rome_types.js';
@@ -61,7 +62,8 @@ export class PeerServer {
   private registry = new TaskRegistry();
   private workers = new WorkerRegistry();
   private blackboard = new Blackboard();
-  private reducer = new MeshReducer();
+
+  private aaak = new AAAK('default', { enabled: true });
   private startTime = Date.now() / 1000;
   private activeSubprocesses = new Map<string, { kill: () => void }>();
   private tickScheduled = false;
@@ -270,7 +272,7 @@ export class PeerServer {
         let capability = (payload.capability || this.capability).toUpperCase();
         const prompt = payload.prompt || '';
         
-        const distilledPrompt = this.buildBlackboardContext(prompt, capability);
+        const distilledPrompt = this.aaak.preDispatch(this.buildBlackboardContext(prompt, capability), payload.goal || prompt.slice(0, 200), capability);
 
         if (capability === 'NATIVE_SHELL') {
           this.registry.register(task_id, 'NATIVE_SHELL', prompt, undefined, prompt.slice(0, 50), 'Native Daemon Shell');
@@ -342,8 +344,26 @@ export class PeerServer {
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { capabilities: this.probeResults } }));
         break;
       }
+
+      case 'aaak_recall': {
+        const query = payload.query || '';
+        const limit = typeof payload.limit === 'number' ? payload.limit : 7;
+        const facts = this.aaak.store.query(query, limit);
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { facts } }));
+        break;
+      }
+      case 'aaak_seed': {
+        const content = payload.content || '';
+        if (!content) {
+          ws.send(JSON.stringify({ type: 'response', request_id, ok: false, error: 'content required', payload: {} }));
+          break;
+        }
+        const fact = { content, ts: Date.now() / 1000, ...(payload.meta || {}) };
+        this.aaak.store.save(fact);
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { saved: true } }));
+        break;
+      }
       case 'reset': this.registry.clearAll(); this.bus.broadcast({ type: 'reset', task_id: '', payload: { cleared: true } }); ws.send(JSON.stringify({ type: 'response', request_id, ok: true })); break;
-      default: ws.send(JSON.stringify({ type: 'response', request_id, ok: false, error: `Unknown command: ${command}` }));
     }
   }
 
@@ -389,7 +409,7 @@ export class PeerServer {
     if (cap.type === 'shell') {
       executeShell(task_id, prompt, wsSender).then(res => {
         this.registry.update(task_id, res.status === 'SUCCESS' ? 'completed' : 'failed', res);
-        this.applyStateSignals(res.report || '', task_id);
+        if (res.status === 'SUCCESS') this.aaak.postResult(res as any, capability);
         this.bus.broadcast({ type: 'complete', task_id, payload: res });
         this.logUsage('shell', res.status, task_id, null);
         this.scheduleTick();
@@ -401,7 +421,7 @@ export class PeerServer {
       executeTask(task_id, capability, finalArgs, wsSender).then(manifest => {
         const usage = manifest.usage ? { ...manifest.usage, cost_usd: manifest.usage.cost_usd ?? undefined } : undefined;
         this.registry.update(task_id, manifest.status === 'SUCCESS' ? 'completed' : 'failed', manifest, usage);
-        this.applyStateSignals(manifest.report || '', task_id);
+        if (manifest.status === 'SUCCESS') this.aaak.postResult(manifest, capability);
         this.bus.broadcast({ type: 'complete', task_id, payload: manifest });
         this.logUsage('legion', manifest.status, task_id, manifest.usage);
         this.scheduleTick();
