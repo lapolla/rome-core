@@ -22,11 +22,11 @@ export class AAAK {
   private threshold: number;
   private maxRecall: number;
 
-  constructor(prefix: string = "default", config?: Partial<AAAKConfig>) {
+  constructor(prefix: string = "default", config?: Partial<AAAKConfig>, storeDir?: string) {
     this.enabled = config?.enabled ?? false;
     this.threshold = config?.distill_threshold ?? DEFAULT_THRESHOLD;
     this.maxRecall = config?.max_recall ?? 7;
-    this.store = new FactStore(undefined, prefix, config?.fact_ttl_seconds);
+    this.store = new FactStore(storeDir, prefix, config?.fact_ttl_seconds);
   }
 
   shouldProcess(capability: string): boolean {

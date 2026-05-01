@@ -63,6 +63,7 @@ export class PeerServer {
   private workers = new WorkerRegistry();
   private blackboard = new Blackboard();
 
+  private reducer = new MeshReducer();
   private aaak = new AAAK('default', { enabled: true });
   private startTime = Date.now() / 1000;
   private activeSubprocesses = new Map<string, { kill: () => void }>();
