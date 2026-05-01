@@ -33,23 +33,23 @@ export class AAAK {
     return this.enabled && !SKIP_CAPABILITIES.has(capability.toUpperCase());
   }
 
-  preDispatch(prompt: string, goal: string, capability: string): string {
+  async preDispatch(prompt: string, goal: string, capability: string): Promise<string> {
     if (!this.shouldProcess(capability)) {
       return prompt;
     }
 
-    const activeFacts = this.store.loadActive();
+    const activeFacts = await this.store.loadActive();
     if (!needsDistill(prompt, this.threshold) && activeFacts.length === 0) {
       return prompt;
     }
 
-    const facts = this.store.query(goal || prompt.slice(0, 200), this.maxRecall);
+    const facts = await this.store.query(goal || prompt.slice(0, 200), this.maxRecall);
     return distill({ prompt, facts }, goal);
   }
 
-  postResult(manifest: Manifest, taskDescription: string = ""): Fact {
+  async postResult(manifest: Manifest, taskDescription: string = ""): Promise<Fact> {
     const fact = compress(manifest, taskDescription);
-    this.store.save(fact);
+    await this.store.save(fact);
     return fact;
   }
 }

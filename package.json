@@ -1,10 +1,11 @@
 {
   "dependencies": {
     "puppeteer": "^24.40.0",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "vectra": "^0.12.3"
   },
   "name": "rome-core",
-  "version": "7.1.7",
+  "version": "7.1.9",
   "type": "module",
   "description": "A Python orchestration framework. Provides a persistent WebSocket-native daemon that dispatches AI workers (Legions) in parallel, supports persistent worker connections, streams live progress, and serves a browser dashboard.",
   "main": "index.js",

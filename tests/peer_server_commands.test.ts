@@ -10,6 +10,7 @@ describe('PeerServer WS commands', () => {
   let server: PeerServer;
   let port: number;
   let ws: WebSocket;
+  let tmpDir: string;
 
   function send(command: string, payload: any, reqId: string): Promise<any> {
     return new Promise((resolve, reject) => {
@@ -28,7 +29,8 @@ describe('PeerServer WS commands', () => {
   }
 
   before(async () => {
-    server = new PeerServer('DAEMON', 0);
+    tmpDir = fs.mkdtempSync(os.tmpdir() + '/aaak-test-');
+    server = new PeerServer('DAEMON', 0, tmpDir);
     port = await server.start();
     ws = new WebSocket(`ws://127.0.0.1:${port}`);
     await new Promise<void>(resolve => ws.on('open', resolve));
@@ -37,6 +39,7 @@ describe('PeerServer WS commands', () => {
   after(() => {
     ws.close();
     server.stop();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   test('ping returns pong', async () => {

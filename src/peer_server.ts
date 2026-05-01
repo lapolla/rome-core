@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as http from 'http';
 import { EventEmitter } from 'events'; // Added
 import { AAAK } from './aaak/index.js';
+import { SemanticCache } from './aaak/cache.js';
 import { spawn } from 'child_process';
 import type { RomeMessage, TaskUsage, RomeEvent } from './rome_types.js';
 import { getRomeVersion } from './rome_types.js';
@@ -66,7 +67,8 @@ export class PeerServer {
 
   private reducer = new MeshReducer();
   // FIX 3: Change AAAK initialization path
-  private aaak = new AAAK('default', { enabled: true }, path.join(ROME_ROOT, 'legions', '.aaak_facts'));
+  private aaak: AAAK;
+  private semanticCache: SemanticCache;
   private startTime = Date.now() / 1000;
   private activeSubprocesses = new Map<string, { kill: () => void }>();
   private tickScheduled = false;
@@ -80,7 +82,9 @@ export class PeerServer {
   private projectTotalCost: number = 0;
   private projectTotalTokens: number = 0;
 
-  constructor(capability: string, port?: number) {
+  constructor(capability: string, port?: number, aaakFactsPath?: string) {
+    this.aaak = new AAAK('default', { enabled: true }, aaakFactsPath ?? path.join(ROME_ROOT, 'legions', '.aaak_facts'));
+    this.semanticCache = new SemanticCache(path.join(ROME_ROOT, 'legions', '.aaak_cache'));
     this.capability = capability.toUpperCase();
     this.arsenal = loadArsenal(ROME_ROOT);
     this.registry.hydrateFromLog(path.join(ROME_ROOT, 'logs', 'rome.jsonl'));
@@ -316,10 +320,24 @@ export class PeerServer {
         let capability = (payload.capability || this.capability).toUpperCase();
         const prompt = payload.prompt || '';
         
-        const distilledPrompt = this.aaak.preDispatch(this.buildBlackboardContext(prompt, capability), payload.goal || prompt.slice(0, 200), capability);
+        const distilledPrompt = await this.aaak.preDispatch(this.buildBlackboardContext(prompt, capability), payload.goal || prompt.slice(0, 200), capability);
+
+        const CACHEABLE = !['NATIVE_SHELL', 'SAFE_SHELL', 'TEST'].includes(capability);
+        if (CACHEABLE) {
+          const cached = await this.semanticCache.get(capability, prompt);
+          if (cached) {
+            this.registry.register(task_id, capability, prompt, payload.parent_task_id, payload.goal, payload.intent);
+            this.registry.update(task_id, 'running');
+            this.registry.update(task_id, 'completed', cached, undefined);
+            this.bus.broadcast({ type: 'complete', task_id, payload: cached });
+            ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { task_id, accepted: true, routed_to: 'cache' } }));
+            break;
+          }
+        }
 
         if (capability === 'NATIVE_SHELL') {
           this.registry.register(task_id, 'NATIVE_SHELL', prompt, undefined, prompt.slice(0, 50), 'Native Daemon Shell');
+          this.registry.update(task_id, 'running');
           this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability: 'NATIVE_SHELL' } });
           this.scheduleTick();
           this.runNativeShell(ws, request_id || '', prompt, task_id);
@@ -328,6 +346,7 @@ export class PeerServer {
         }
 
         this.registry.register(task_id, capability, prompt, payload.parent_task_id, payload.goal, payload.intent);
+        this.registry.update(task_id, 'running');
         this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability, goal: payload.goal, intent: payload.intent } });
         this.scheduleTick();
         const probe = this.probeResults[capability];
@@ -343,7 +362,7 @@ export class PeerServer {
           workerWs.send(JSON.stringify({ type: 'command', command: 'dispatch', request_id: `fwd-${task_id}`, payload: { task_id, capability, prompt: distilledPrompt } }));
           ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { task_id, accepted: true, routed_to: 'worker' } }));
         } else {
-          this.runLegion(task_id, capability, distilledPrompt);
+          this.runLegion(task_id, capability, distilledPrompt, prompt);
           ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { task_id, accepted: true, routed_to: 'subprocess' } }));
         }
         break;
@@ -352,6 +371,7 @@ export class PeerServer {
         const task_id = `ts-${uuidv4().substring(0, 8)}`;
         const cmdStr = payload.command || '';
         this.registry.register(task_id, 'NATIVE_SHELL', cmdStr, undefined, cmdStr.slice(0, 50), 'Native Daemon Shell');
+        this.registry.update(task_id, 'running');
         this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability: 'NATIVE_SHELL', goal: cmdStr.slice(0, 50), intent: 'Native Daemon Shell' } });
         this.scheduleTick();
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { task_id, accepted: true } }));
@@ -395,7 +415,7 @@ export class PeerServer {
       case 'aaak_recall': {
         const query = payload.query || '';
         const limit = typeof payload.limit === 'number' ? payload.limit : 7;
-        const facts = this.aaak.store.query(query, limit);
+        const facts = await this.aaak.store.query(query, limit);
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { facts } }));
         break;
       }
@@ -406,7 +426,7 @@ export class PeerServer {
           break;
         }
         const fact = { content, ts: Date.now() / 1000, ...(payload.meta || {}) };
-        this.aaak.store.save(fact);
+        this.aaak.store.save(fact).catch(() => {});
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { saved: true } }));
         break;
       }
@@ -445,7 +465,7 @@ export class PeerServer {
     }});
   }
 
-  private runLegion(task_id: string, capability: string, prompt: string) {
+  private runLegion(task_id: string, capability: string, prompt: string, rawPrompt?: string) {
     const wsSender = async (ev: any) => this.bus.broadcast({ ...ev, task_id });
     const cap = this.arsenal[capability];
     if (!cap) {
@@ -462,7 +482,12 @@ export class PeerServer {
       executeShell(task_id, prompt, wsSender, cancelEmitter).then(res => {
         clearTimeout(shellTimer);
         this.registry.update(task_id, res.status === 'SUCCESS' ? 'completed' : 'failed', res);
-        if (res.status === 'SUCCESS') this.aaak.postResult(res as any, capability);
+        if (res.status === 'SUCCESS') {
+          this.aaak.postResult(res as any, capability).catch(() => {});
+          if (!['SAFE_SHELL', 'NATIVE_SHELL', 'TEST'].includes(capability)) {
+            this.semanticCache.set(capability, rawPrompt || prompt, res as any).catch(() => {});
+          }
+        }
         this.bus.broadcast({ type: 'complete', task_id, payload: res });
         this.logUsage('shell', res.status, task_id, null);
         this.scheduleTick();
@@ -483,7 +508,10 @@ TASK: ${prompt}` : prompt;
       executeTask(task_id, capability, finalArgs, wsSender).then(manifest => {
         const usage = manifest.usage ? { ...manifest.usage, cost_usd: manifest.usage.cost_usd ?? undefined } : undefined;
         this.registry.update(task_id, manifest.status === 'SUCCESS' ? 'completed' : 'failed', manifest, usage);
-        if (manifest.status === 'SUCCESS') this.aaak.postResult(manifest, capability);
+        if (manifest.status === 'SUCCESS') this.aaak.postResult(manifest, capability).catch(() => {});
+        if (manifest.status === 'SUCCESS' && !['SAFE_SHELL', 'NATIVE_SHELL', 'TEST'].includes(capability)) {
+          this.semanticCache.set(capability, rawPrompt || prompt, manifest).catch(() => {});
+        }
         this.bus.broadcast({ type: 'complete', task_id, payload: manifest });
         this.logUsage('legion', manifest.status, task_id, manifest.usage);
         this.scheduleTick();

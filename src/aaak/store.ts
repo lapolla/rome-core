@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { LocalIndex } from 'vectra';
+import { embed } from './embedding.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TTL = 7200; // 2 hours
@@ -14,127 +16,147 @@ export interface Fact {
 
 export class FactStore {
   private _storeDir: string;
-  private _path: string;
   private _ttl: number;
   private _saveCount: number = 0;
+  private _index: LocalIndex;
   private _knownContent: Set<string> | null = null;
+  private _isInit: boolean = false;
 
   constructor(storeDir?: string, prefix: string = "default", ttlSeconds: number = DEFAULT_TTL) {
     this._storeDir = storeDir || path.join(__dirname, '..', '..', 'aaak', '.facts');
     if (!fs.existsSync(this._storeDir)) {
       fs.mkdirSync(this._storeDir, { recursive: true });
     }
-    this._path = path.join(this._storeDir, `${prefix}.jsonl`);
+    const indexPath = path.join(this._storeDir, prefix);
+    this._index = new LocalIndex(indexPath);
     this._ttl = ttlSeconds;
   }
 
-  private getKnownContent(): Set<string> {
+  private _initPromise: Promise<void> | null = null;
+
+  async init(): Promise<void> {
+    if (!this._isInit) {
+      if (!this._initPromise) {
+        this._initPromise = (async () => {
+          if (!await this._index.isIndexCreated()) {
+            try {
+              await this._index.createIndex();
+            } catch (e: any) {
+              if (e.message && e.message.includes('already exists')) {
+                // ignore race condition
+              } else {
+                throw e;
+              }
+            }
+          }
+          this._isInit = true;
+        })();
+      }
+      await this._initPromise;
+    }
+  }
+
+  private async getKnownContent(): Promise<Set<string>> {
     if (this._knownContent === null) {
       this._knownContent = new Set();
-      if (fs.existsSync(this._path)) {
-        const lines = fs.readFileSync(this._path, 'utf-8').split('\n').filter(Boolean);
-        for (const line of lines) {
-          try { this._knownContent.add(JSON.parse(line).content); } catch {}
+      try {
+        const items = await this._index.listItems();
+        for (const item of items) {
+          if (item.metadata && (item.metadata as Fact).content) {
+            this._knownContent.add((item.metadata as Fact).content);
+          }
         }
+      } catch (e) {
       }
     }
     return this._knownContent;
   }
 
-  save(fact: Fact): void {
+  async save(fact: Fact): Promise<void> {
+    await this.init();
     if (!fact.ts) fact.ts = Date.now() / 1000;
-    const known = this.getKnownContent();
+    
+    const known = await this.getKnownContent();
     if (known.has(fact.content)) return;
     known.add(fact.content);
-    const line = JSON.stringify(fact);
-    fs.appendFileSync(this._path, line + "\n", 'utf-8');
-    this._saveCount++;
-    if (this._saveCount % 50 === 0) this.compact();
+    
+    const factText = this._factToText(fact);
+    const vector = await embed(factText);
+    
+    if (vector && vector.length > 0) {
+      try {
+        await this._index.insertItem({
+          vector,
+          metadata: fact as any
+        });
+        
+        this._saveCount++;
+        if (this._saveCount % 50 === 0) await this.compact();
+      } catch (e) {
+        console.warn(`Failed to save fact:`, e);
+      }
+    }
   }
 
-  loadActive(): Fact[] {
+  async loadActive(): Promise<Fact[]> {
+    await this.init();
     const cutoff = (Date.now() / 1000) - this._ttl;
     const facts: Fact[] = [];
     
-    if (!fs.existsSync(this._path)) {
-      return facts;
-    }
-
-    const lines = fs.readFileSync(this._path, 'utf-8').split('\n');
-    for (let line of lines) {
-      line = line.trim();
-      if (!line) continue;
-      try {
-        const fact = JSON.parse(line) as Fact;
-        if ((fact.ts || 0) >= cutoff) {
-          facts.push(fact); // Error here: TypeScript uses push, not append. Fixing in next turn.
+    try {
+      const items = await this._index.listItems();
+      for (const item of items) {
+        const fact = item.metadata as unknown as Fact;
+        if (fact && (fact.ts || 0) >= cutoff) {
+          facts.push(fact);
         }
-      } catch {
-        continue;
       }
-    }
+    } catch {}
     return facts;
   }
 
-  query(text: string, limit: number = DEFAULT_MAX_RECALL): Fact[] {
-    const queryTokens = this._tokenize(text);
-    if (queryTokens.size === 0) return [];
+  async query(text: string, limit: number = DEFAULT_MAX_RECALL): Promise<Fact[]> {
+    await this.init();
+    const vector = await embed(text);
+    if (!vector || vector.length === 0) return [];
 
-    const facts = this.loadActive();
-    const now = Date.now() / 1000;
-    const cutoff = now - this._ttl;
-
-    const scored: Array<{ score: number; fact: Fact }> = [];
-    
-    for (const fact of facts) {
-      const factText = this._factToText(fact);
-      const factTokens = this._tokenize(factText);
-      if (factTokens.size === 0) continue;
-
-      const intersection = new Set([...queryTokens].filter(x => factTokens.has(x)));
-      if (intersection.size === 0) continue;
-
-      const union = new Set([...queryTokens, ...factTokens]);
-      const jaccard = intersection.size / union.size;
-      const recency = Math.min(1.0, ((fact.ts || 0) - cutoff) / this._ttl);
+    try {
+      const results = await this._index.queryItems(vector, text, limit);
+      const cutoff = (Date.now() / 1000) - this._ttl;
       
-      const score = jaccard * 0.7 + recency * 0.3;
-      scored.push({ score, fact });
-    }
-
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, limit).map(s => s.fact);
-  }
-
-  compact(): number {
-    const cutoff = (Date.now() / 1000) - this._ttl;
-    if (!fs.existsSync(this._path)) return 0;
-
-    const lines = fs.readFileSync(this._path, 'utf-8').split('\n');
-    const activeLines: string[] = [];
-    
-    for (let line of lines) {
-      line = line.trim();
-      if (!line) continue;
-      try {
-        const fact = JSON.parse(line);
-        if ((fact.ts || 0) >= cutoff) {
-          activeLines.push(line);
+      const validFacts: Fact[] = [];
+      for (const res of results) {
+        const fact = res.item.metadata as unknown as Fact;
+        if (fact && (fact.ts || 0) >= cutoff) {
+          validFacts.push(fact);
         }
-      } catch { continue; }
+      }
+      return validFacts;
+    } catch (e) {
+      console.warn(`Failed to query index:`, e);
+      return [];
     }
-
-    fs.writeFileSync(this._path, activeLines.join('\n') + (activeLines.length > 0 ? '\n' : ''), 'utf-8');
-    return activeLines.length;
   }
 
-  private _tokenize(text: string): Set<string> {
-    return new Set(
-      text.toLowerCase()
-        .replace(/[^\w\s]/g, ' ')
-        .split(/\s+/)
-        .filter(t => t.length > 2)
-    );
+  async compact(): Promise<number> {
+    await this.init();
+    const cutoff = (Date.now() / 1000) - this._ttl;
+    
+    try {
+      const items = await this._index.listItems();
+      let keptCount = 0;
+      for (const item of items) {
+        const fact = item.metadata as unknown as Fact;
+        if (!fact || (fact.ts || 0) < cutoff) {
+          await this._index.deleteItem(item.id);
+        } else {
+          keptCount++;
+        }
+      }
+      return keptCount;
+    } catch {
+      return 0;
+    }
   }
 
   private _factToText(fact: Fact): string {

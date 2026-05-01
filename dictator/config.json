@@ -1,4 +1,8 @@
 {
   "mesh_port": 8741,
-  "sovereign_token_path": ".rome_SOVEREIGN_TOKEN"
+  "sovereign_token_path": ".rome_SOVEREIGN_TOKEN",
+  "embeddings": {
+    "url": "http://localhost:11434/api/embeddings",
+    "model": "nomic-embed-text"
+  }
 }

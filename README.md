@@ -10,13 +10,44 @@ A distributed Agent-to-Agent Direct Signal Mesh (A2A-DSM). Peer-to-peer orchestr
     └────────────── WS (Peer Protocol) ─────────┘
 ```
 
+## Setup & Requirements
+
+ROME is cross-platform (Linux/macOS) but requires a few core dependencies.
+
+### Prerequisites
+- **Node.js 20+**: Required for the Peer Server and Native Agents.
+- **Python 3.11+**: Required for the Dictator daemon and Legion wrappers.
+- **Ollama**: (Optional) Required for local vector embeddings (see `VECTOR_PLAN.md`).
+
+### Quick Start (macOS)
+
+1. **Install Dependencies**:
+   ```bash
+   # Using Homebrew
+   brew install node python@3.11
+   pip3 install -r requirements.txt
+   npm install
+   ```
+
+2. **Configure**:
+   Ensure you have a `.rome_SOVEREIGN_TOKEN` file in the root.
+   ```bash
+   echo "your-secure-token-here" > .rome_SOVEREIGN_TOKEN
+   ```
+
+3. **Launch the Mesh**:
+   ```bash
+   # Build TS and start the daemon
+   npx tsc && bash ROME-start.sh
+   ```
+
 ## Architecture
 
 - **Peer Mesh:** Every agent is an active participant in the WebSocket-native mesh.
+- **WebSocket Signal Bus:** Agents interact with the daemon via structured JSON frames over WS, providing a clean separation of control and data planes.
 - **Native Agents:** `src/native_agent.ts` (TS) provides a full-duplex, real-time interaction loop for LLMs, bypassing legacy CLI wrappers.
-- **DAS Protocol:** Agents trigger actions via Direct Agent Signals: `[ROME_DISPATCH: ...]`, `[ROME_AWAIT: ...]`, `[ROME_SHELL: ...]`.
-- **Worker Hub:** Supports both legacy `legion_worker` (CLI-wrapped) and modern `native_agent` (WS-native) implementations.
-- **Registry:** `src/registry.ts` tracks causal chains (goals/intents) across the mesh.
+- **Worker Hub:** Supports both legacy `legion_worker` (stdout-interception) and modern `native_agent` (WS-native) implementations.
+- **Registry:** `src/registry.ts` tracks causal chains (goals/intents) and asynchronous state across the mesh.
 
 ## Configuration
 
@@ -39,6 +70,14 @@ node dist/client.js GEMINI "Write a script and run it using [ROME_SHELL: '...']"
 ```
 
 ## Direct Agent Signals (DAS)
+
+ROME v7 supports two signaling modes:
+
+### 1. WebSocket Signal Bus (Primary)
+Agents connect to `$ROME_WS_URL` and send JSON command frames (e.g., `dispatch`, `await`, `native_shell`). See `ROME_PROTOCOL_V7_SPEC.md` for the full frame schema.
+
+### 2. Regex Tags (Legacy Compatibility)
+For non-WS agents, the following tags are intercepted from stdout:
 
 | Tag | Action |
 |-----|--------|

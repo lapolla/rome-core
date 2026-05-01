@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import { PeerServer } from '../src/peer_server.js';
 import { WebSocket } from 'ws';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 const TOKEN = fs.readFileSync(path.join(process.cwd(), '.rome_SOVEREIGN_TOKEN'), 'utf-8').trim();
@@ -10,9 +11,11 @@ const TOKEN = fs.readFileSync(path.join(process.cwd(), '.rome_SOVEREIGN_TOKEN'),
 describe('ROME Protocol Handshake', () => {
   let server: PeerServer;
   let port: number;
+  let tmpDir: string;
 
   before(async () => {
-    server = new PeerServer('DAEMON', 0);
+    tmpDir = fs.mkdtempSync(os.tmpdir() + '/aaak-test-');
+    server = new PeerServer('DAEMON', 0, tmpDir);
     port = await server.start();
   });
 
@@ -27,6 +30,7 @@ describe('ROME Protocol Handshake', () => {
       setTimeout(resolve, 500);
     });
     server.stop();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   test('should complete agent_hello handshake and register worker', async () => {

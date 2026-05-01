@@ -124,7 +124,7 @@
         "--agent",
         "auto-approve",
         "--max-turns",
-        "1",
+        "10",
         "-p"
       ],
       "timeout": 300,
@@ -132,6 +132,28 @@
       "_note": "Mistral Vibe CLI via uv \u2014 -p must be last",
       "peer_port": 8748,
       "peer_host": "127.0.0.1"
+    },
+    "GEMINI_FLASH": {
+      "type": "llm",
+      "args": [
+        "{GEMINI_CLI}",
+        "--sandbox",
+        "false",
+        "--include-directories",
+        "{ROME_ROOT}",
+        "--yolo",
+        "--output-format",
+        "json",
+        "-m",
+        "{MODEL}",
+        "-p"
+      ],
+      "timeout": 300,
+      "min_version": "2.0",
+      "_note": "Gemini Flash \u2014 fallback when Pro is rate-limited",
+      "peer_port": 8752,
+      "peer_host": "127.0.0.1",
+      "model": "gemini-3-flash-preview"
     }
   },
   "protocol_version": "1.1"

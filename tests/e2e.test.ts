@@ -1,20 +1,25 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
+import * as fs from 'fs';
+import * as os from 'os';
 import { PeerServer } from '../src/peer_server.js';
 import { WebSocket } from 'ws';
 
 describe('ROME E2E Mesh Dispatch', () => {
   let server: PeerServer;
   let port: number;
+  let tmpDir: string;
 
   before(async () => {
-    server = new PeerServer('DAEMON', 0);
+    tmpDir = fs.mkdtempSync(os.tmpdir() + '/aaak-test-');
+    server = new PeerServer('DAEMON', 0, tmpDir);
     await server.start();
     port = server.getPort();
   });
 
   after(() => {
     server.stop();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   test('should dispatch native_shell task and receive complete event', async () => {

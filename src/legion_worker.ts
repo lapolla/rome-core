@@ -957,8 +957,7 @@ async function main(): Promise<void> {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--mode')         { mode    = argv[++i] as 'once' | 'worker'; }
-    else if (arg === '--task-id') { taskId  = argv[++i]; }
+    if (arg === '--task-id')      { taskId  = argv[++i]; }
     else if (arg === '--ws-url')  { wsUrl   = argv[++i]; }
     else if (arg === '--ws-token'){ wsToken = argv[++i]; }
     else if (arg === '--capabilities') {
@@ -994,31 +993,20 @@ async function main(): Promise<void> {
     }
   }
 
-  if (mode === 'worker') {
-    if (capabilities.length === 0) {
-      console.error('Worker mode requires --capabilities');
-      process.exit(1);
-    }
-    if (!wsUrl) {
-      console.error('Worker mode requires --ws-url or config.json mesh_port');
-      process.exit(1);
-    }
-    const tok = wsToken ?? process.env.ROME_WEBSOCKET_TOKEN;
-    
-    // unknown now contains only what was after the -- separator
-    // if the loop correctly stopped there.
-    await runWorker(wsUrl, capabilities, unknown, tok);
-  } else {
-    // Legacy once-off mode: <task_id> <start_time> <cmd...>
-    const args = process.argv.slice(2);
-    if (args.length < 3) { process.exit(1); }
-    const tid = args[0];
-    const cmd = args.slice(2);
-    const manifest = await executeTask(tid, 'LEGACY', cmd, undefined, undefined, undefined, wsUrl, wsToken);
-    console.log(manifest.status === 'SUCCESS' ? 'OK' : 'ERR');
+  if (capabilities.length === 0) {
+    console.error('ROME v7: Worker requires --capabilities');
+    process.exit(1);
   }
+  if (!wsUrl) {
+    console.error('ROME v7: Worker requires --ws-url or config.json mesh_port');
+    process.exit(1);
+  }
+  const tok = wsToken ?? process.env.ROME_WEBSOCKET_TOKEN;
 
-  void taskId; // parsed but unused in once-mode (kept for parity with Python argparse)
+  // Execute as persistent V7 mesh worker
+  await runWorker(wsUrl, capabilities, unknown, tok);
+
+  void taskId; // parsed but unused (kept for parity with Python argparse)
 }
 
 const entry = process.argv[1] ?? '';
