@@ -20,9 +20,9 @@
       "_note": "Gemini CLI \u2014 -p must be last",
       "peer_port": 8742,
       "peer_host": "127.0.0.1",
-      "model": "gemini-3.1-pro-preview",
+      "model": "gemini-3-flash-preview",
       "model_fallback_chain": [
-        "gemini-3-flash-preview",
+        "gemini-3.1-pro-preview",
         "gemini-3.1-flash-lite-preview"
       ]
     },
