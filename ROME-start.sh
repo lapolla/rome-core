@@ -27,6 +27,7 @@ for pat in "peer_server.js" "legion_worker.js" "vibe.cli.entrypoint" "native_age
     pkill -9 -f "$pat" 2>/dev/null || true
 done
 
+export GEMINI_CLI="$HOME/projects/gemini-cli/bundle/gemini.js"
 # 1. Start Peer Server (Daemon)
 echo "Starting ROME Peer Server (Port $MESH_PORT)..."
 nohup env XDG_RUNTIME_DIR="/run/user/$(id -u)" \
@@ -77,7 +78,6 @@ start_worker_if() {
 [ -f "$HOME/.vibe/.env" ] && export $(grep -v "^#" "$HOME/.vibe/.env" | xargs)
 
 # GEMINI — requires gemini-cli bundle
-GEMINI_CLI="$HOME/projects/gemini-cli/bundle/gemini.js"
 start_worker_if "GEMINI" "test -f '$GEMINI_CLI'" \
     node "$GEMINI_CLI" --sandbox false --include-directories "$ROME_ROOT" --yolo --output-format json -m '{MODEL}' -p
 

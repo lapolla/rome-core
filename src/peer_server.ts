@@ -60,6 +60,7 @@ function loadArsenal(root: string) {
 export class PeerServer {
   private wss: WebSocketServer | null = null;
   private server: http.Server | null = null;
+  private _recoveryTimers: Record<string, NodeJS.Timeout> = {};
   private bus = new EventBus();
   private registry = new TaskRegistry();
   private workers = new WorkerRegistry();
@@ -504,7 +505,10 @@ export class PeerServer {
       const effectivePrompt = cap.system_prompt ? `${cap.system_prompt}
 
 TASK: ${prompt}` : prompt;
-      const finalArgs = (cap.args || []).map((a: any) => typeof a === 'string' ? a.replace(/{MODEL}/g, model) : a).concat(effectivePrompt);
+      const geminiCli = process.env.GEMINI_CLI || 'gemini';
+      const finalArgs = (cap.args || []).map((a: any) => typeof a === 'string'
+        ? a.replace(/{MODEL}/g, model).replace(/{GEMINI_CLI}/g, geminiCli).replace(/{ROME_ROOT}/g, ROME_ROOT)
+        : a).concat(effectivePrompt);
       executeTask(task_id, capability, finalArgs, wsSender).then(manifest => {
         const usage = manifest.usage ? { ...manifest.usage, cost_usd: manifest.usage.cost_usd ?? undefined } : undefined;
         this.registry.update(task_id, manifest.status === 'SUCCESS' ? 'completed' : 'failed', manifest, usage);
@@ -567,8 +571,21 @@ ${prompt}`;
 
   private markCapabilityDown(capability: string, reason: string) {
     if (!this.probeResults[capability]) return;
+
+    if (this._recoveryTimers[capability]) {
+      clearTimeout(this._recoveryTimers[capability]);
+    }
+
     this.probeResults[capability] = { ...this.probeResults[capability], available: false, reason };
     console.warn(`ROME: capability ${capability} marked unavailable — ${reason}`);
+
+    this._recoveryTimers[capability] = setTimeout(() => {
+      if (this.probeResults[capability]) {
+        this.probeResults[capability] = { ...this.probeResults[capability], available: true, reason: '' };
+        console.log(`ROME: capability ${capability} auto-recovered after quota TTL`);
+        delete this._recoveryTimers[capability];
+      }
+    }, 15 * 60 * 1000);
   }
 
   private scheduleTick() {
