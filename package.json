@@ -5,7 +5,7 @@
     "vectra": "^0.12.3"
   },
   "name": "rome-core",
-  "version": "7.1.10",
+  "version": "7.1.14",
   "type": "module",
   "description": "A Python orchestration framework. Provides a persistent WebSocket-native daemon that dispatches AI workers (Legions) in parallel, supports persistent worker connections, streams live progress, and serves a browser dashboard.",
   "main": "index.js",
