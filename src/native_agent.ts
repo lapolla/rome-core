@@ -15,6 +15,8 @@ interface AgentConfig {
   model: string;
   ollamaUrl?: string;
   mistralKey?: string;
+  cliCommand?: string;
+  cliOutputFormat?: 'json' | 'text';
 }
 
 export class MeshAgent {
@@ -210,7 +212,50 @@ Always use this exact format. When you receive a result, analyze it and continue
     });
   }
 
+
+  private async callCLI(messages: any[]): Promise<string> {
+    const { spawn } = await import('child_process');
+    const parts: string[] = [];
+    for (const m of messages) {
+      if (m.role === 'system') continue;
+      parts.push(m.content);
+    }
+    const prompt = parts.join('\n\n');
+    let rawCmd = (this.config.cliCommand || '').replace('{MODEL}', this.config.model || '');
+    const hasPromptPlaceholder = rawCmd.includes('{PROMPT}');
+    if (hasPromptPlaceholder) {
+      const escaped = prompt.replace(/'/g, "'\\\\''" );
+      rawCmd = rawCmd.replace('{PROMPT}', `'${escaped}'`);
+    }
+    return new Promise((resolve, reject) => {
+      const child = spawn(rawCmd, [], { stdio: ['pipe', 'pipe', 'pipe'], shell: true, env: process.env as any });
+      const chunks: Buffer[] = [];
+      child.stdout!.on('data', (d: Buffer) => chunks.push(d));
+      child.on('close', () => {
+        const raw = Buffer.concat(chunks).toString().trim();
+        if (this.config.cliOutputFormat === 'json') {
+          for (const line of raw.split('\n')) {
+            try {
+              const obj = JSON.parse(line);
+              if (obj.response) { resolve(obj.response); return; }
+              if (obj.result) { resolve(obj.result); return; }
+              if (obj.text) { resolve(obj.text); return; }
+              if (obj.content) { resolve(typeof obj.content === 'string' ? obj.content : JSON.stringify(obj.content)); return; }
+            } catch { /* skip */ }
+          }
+        }
+        resolve(raw);
+      });
+      if (!hasPromptPlaceholder) { child.stdin!.write(prompt); }
+      child.stdin!.end();
+      child.on('error', reject);
+    });
+  }
+
   private async callLLM(messages: any[]): Promise<string> {
+    if (this.config.cliCommand) {
+      return this.callCLI(messages);
+    }
     if (this.config.capability === 'GEMMA') {
       return this.callOllama(messages);
     }
@@ -251,6 +296,8 @@ async function main() {
     if (argv[i] === '--model') config.model = argv[++i];
     if (argv[i] === '--ws-url') config.wsUrl = argv[++i];
     if (argv[i] === '--ws-token') config.token = argv[++i];
+    if (argv[i] === '--cli') config.cliCommand = argv[++i];
+    if (argv[i] === '--cli-output-format') config.cliOutputFormat = argv[++i] as 'json' | 'text';
   }
 
   if (!config.token) {

@@ -49,45 +49,44 @@ fi
 # `start_worker_if` gates the spawn on availability. First arg is a test command
 # whose exit code decides whether to spawn. Missing binaries / unreachable
 # backends no longer produce doomed workers with silent stderr.
-start_worker() {
-    local cap=$1
-    shift
-    echo "Starting worker: $cap"
-    local args=(
-        "--mode" "worker"
-        "--capabilities" "$cap"
-        "--ws-url" "$WS_URL"
-        "--"
-        "$@"
-    )
-    nohup node "$ROME_ROOT/dist/src/legion_worker.js" "${args[@]}" > "/tmp/rome-worker-$cap.log" 2>&1 &
-}
-
-start_worker_if() {
-    local cap=$1
-    local probe=$2
-    shift 2
-    if eval "$probe" >/dev/null 2>&1; then
-        start_worker "$cap" "$@"
-    else
-        echo "Skipping $cap: probe failed ($probe)"
-    fi
-}
-
 # Load Mistral API key from vibe env file
 [ -f "$HOME/.vibe/.env" ] && export $(grep -v "^#" "$HOME/.vibe/.env" | xargs)
 
-# GEMINI — requires gemini-cli bundle
-start_worker_if "GEMINI" "test -f '$GEMINI_CLI'" \
-    node "$GEMINI_CLI" --sandbox false --include-directories "$ROME_ROOT" --yolo --output-format json -m '{MODEL}' -p
+# GEMINI — native agent via gemini-cli
+if test -f "$GEMINI_CLI"; then
+    echo "Starting native worker: GEMINI"
+    nohup node "$ROME_ROOT/dist/src/native_agent.js" \
+        --capability GEMINI --model gemini-3-flash-preview \
+        --ws-url "$WS_URL/ws" \
+        --cli "node $GEMINI_CLI --sandbox false --include-directories $ROME_ROOT --yolo --output-format json -m {MODEL} -p {PROMPT}" \
+        --cli-output-format json > "/tmp/rome-worker-GEMINI.log" 2>&1 &
+else
+    echo "Skipping GEMINI: gemini-cli not found"
+fi
 
-# MISTRAL — requires mistral-cli python module
-start_worker_if "MISTRAL" "test -d /home/paul-kane/projects/mistral-cli && command -v python3" \
-    env PYTHONPATH=/home/paul-kane/projects/mistral-cli python3 -m vibe.cli.entrypoint --agent auto-approve --output text --max-turns 1 -p
+# MISTRAL — native agent via vibe.cli
+if test -d /home/paul-kane/projects/mistral-cli && command -v python3 >/dev/null 2>&1; then
+    echo "Starting native worker: MISTRAL"
+    nohup node "$ROME_ROOT/dist/src/native_agent.js" \
+        --capability MISTRAL \
+        --ws-url "$WS_URL/ws" \
+        --cli "env PYTHONPATH=/home/paul-kane/projects/mistral-cli python3 -m vibe.cli.entrypoint --agent auto-approve --output text --max-turns 1 -p" \
+        --cli-output-format text > "/tmp/rome-worker-MISTRAL.log" 2>&1 &
+else
+    echo "Skipping MISTRAL: mistral-cli not found"
+fi
 
-# CLAUDE — requires claude CLI on PATH
-start_worker_if "CLAUDE" "command -v claude" \
-    claude --dangerously-skip-permissions --output-format json -p
+# CLAUDE — native agent via claude CLI
+if command -v claude >/dev/null 2>&1; then
+    echo "Starting native worker: CLAUDE"
+    nohup node "$ROME_ROOT/dist/src/native_agent.js" \
+        --capability CLAUDE \
+        --ws-url "$WS_URL/ws" \
+        --cli "claude --dangerously-skip-permissions --output-format json -p" \
+        --cli-output-format json > "/tmp/rome-worker-CLAUDE.log" 2>&1 &
+else
+    echo "Skipping CLAUDE: claude not found"
+fi
 
 # GEMMA — JS-Native agent via Ollama
 if curl -sf --max-time 1 http://localhost:11434/ >/dev/null 2>&1; then
