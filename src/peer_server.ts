@@ -7,7 +7,9 @@ import { EventEmitter } from 'events'; // Added
 import { AAAK } from './aaak/index.js';
 import { SemanticCache } from './aaak/cache.js';
 import { spawn } from 'child_process';
-import type { RomeMessage, TaskUsage, RomeEvent } from './rome_types.js';
+import type { RomeMessage, TaskUsage, RomeEvent, DecompTask, ExecutionMode } from './rome_types.js';
+import { decompose } from './decomposer.js';
+import { executePlan } from './router.js';
 import { getRomeVersion } from './rome_types.js';
 import { EventBus, TaskRegistry, WorkerRegistry, Blackboard, MeshReducer } from './registry.js';
 import { executeTask } from './legion_worker.js';
@@ -323,7 +325,7 @@ export class PeerServer {
         
         const distilledPrompt = await this.aaak.preDispatch(this.buildBlackboardContext(prompt, capability), payload.goal || prompt.slice(0, 200), capability);
 
-        const CACHEABLE = !['NATIVE_SHELL', 'SAFE_SHELL', 'TEST'].includes(capability);
+        const CACHEABLE = this.semanticCache.isStatelessAnalysis(capability, prompt);
         if (CACHEABLE) {
           const cached = await this.semanticCache.get(capability, prompt);
           if (cached) {
@@ -343,6 +345,18 @@ export class PeerServer {
           this.scheduleTick();
           this.runNativeShell(ws, request_id || '', prompt, task_id);
           ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { task_id, accepted: true, routed_to: 'native_shell' } }));
+          break;
+        }
+
+        if (capability === 'DECOMPOSER') {
+          this.registry.register(task_id, 'DECOMPOSER', prompt, payload.parent_task_id, payload.goal || prompt.slice(0, 50), 'Decomposer');
+          this.registry.update(task_id, 'running');
+          this.bus.broadcast({ type: 'dispatch_start', task_id, payload: { capability: 'DECOMPOSER', goal: payload.goal, intent: payload.intent } });
+          ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { task_id, accepted: true, routed_to: 'decomposer' } }));
+          this.runDecomposer(task_id, prompt).catch(e => {
+            this.registry.update(task_id, 'failed', { error: e.message });
+            this.bus.broadcast({ type: 'error', task_id, payload: { message: e.message } });
+          });
           break;
         }
 
@@ -433,6 +447,48 @@ export class PeerServer {
       }
       case 'reset': this.registry.clearAll(); this.bus.broadcast({ type: 'reset', task_id: '', payload: { cleared: true } }); ws.send(JSON.stringify({ type: 'response', request_id, ok: true })); break;
     }
+  }
+
+  private async runDecomposer(task_id: string, prompt: string): Promise<void> {
+    const llmCall = (p: string): Promise<string> => new Promise((resolve) => {
+      const sub_id = `decomp-${uuidv4().substring(0, 8)}`;
+      const cb = (ev: RomeEvent) => {
+        if (ev.task_id !== sub_id) return;
+        if (ev.type === 'complete') { this.bus.unsubscribe(cb); resolve(ev.payload?.report || ''); }
+        if (ev.type === 'error')    { this.bus.unsubscribe(cb); resolve(''); }
+      };
+      this.bus.subscribe(cb);
+      this.registry.register(sub_id, 'CLAUDE', p, task_id, 'decompose plan', 'Architect');
+      this.registry.update(sub_id, 'running');
+      this.runLegion(sub_id, 'CLAUDE', p, p);
+    });
+
+    const dispatchFn = (capability: string, input: string, mode: ExecutionMode): Promise<string> => new Promise((resolve) => {
+      const sub_id = `step-${uuidv4().substring(0, 8)}`;
+      const cb = (ev: RomeEvent) => {
+        if (ev.task_id !== sub_id) return;
+        if (ev.type === 'complete') { this.bus.unsubscribe(cb); resolve(ev.payload?.report || ''); }
+        if (ev.type === 'error')    { this.bus.unsubscribe(cb); resolve(''); }
+      };
+      this.bus.subscribe(cb);
+      this.registry.register(sub_id, capability, input, task_id, input.slice(0, 50), 'Router step');
+      this.registry.update(sub_id, 'running');
+      const workerWs = mode === 'native_ws' ? this.workers.findWorker(capability) : null;
+      if (workerWs) {
+        this.workers.markBusy(workerWs, sub_id);
+        workerWs.send(JSON.stringify({ type: 'command', command: 'dispatch', request_id: `fwd-${sub_id}`, payload: { task_id: sub_id, capability, prompt: input } }));
+      } else {
+        this.runLegion(sub_id, capability, input, input);
+      }
+    });
+
+    const plan = await decompose({ id: task_id, prompt } as DecompTask, llmCall);
+    const workers = this.workers.getInfo();
+    const results = await executePlan(plan, workers, dispatchFn);
+
+    const report = Array.from(results.entries()).map(([id, r]) => `[${id}]\n${r}`).join('\n\n');
+    this.registry.update(task_id, 'completed', { report });
+    this.bus.broadcast({ type: 'complete', task_id, payload: { status: 'SUCCESS', report } });
   }
 
   private runNativeShell(ws: WebSocket, request_id: string, command: string, taskId?: string) {

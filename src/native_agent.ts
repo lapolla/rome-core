@@ -234,13 +234,15 @@ Always use this exact format. When you receive a result, analyze it and continue
       child.on('close', () => {
         const raw = Buffer.concat(chunks).toString().trim();
         if (this.config.cliOutputFormat === 'json') {
-          for (const line of raw.split('\n')) {
+          /* try full document first (pretty-printed output), then line-by-line (NDJSON) */
+          const candidates = [raw, ...raw.split('\n')];
+          for (const chunk of candidates) {
             try {
-              const obj = JSON.parse(line);
+              const obj = JSON.parse(chunk);
               if (obj.response) { resolve(obj.response); return; }
-              if (obj.result) { resolve(obj.result); return; }
-              if (obj.text) { resolve(obj.text); return; }
-              if (obj.content) { resolve(typeof obj.content === 'string' ? obj.content : JSON.stringify(obj.content)); return; }
+              if (obj.result)   { resolve(obj.result);   return; }
+              if (obj.text)     { resolve(obj.text);     return; }
+              if (obj.content)  { resolve(typeof obj.content === 'string' ? obj.content : JSON.stringify(obj.content)); return; }
             } catch { /* skip */ }
           }
         }

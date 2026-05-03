@@ -74,3 +74,29 @@ export interface PeerInfo {
   peer_url: string;
   one_shot?: boolean;
 }
+
+/* ── Decomposer types (v1) ───────────────────────────────────────────────── */
+
+export type WorkerRole = 'GEMMA' | 'CLAUDE' | 'GEMINI' | 'MISTRAL' | 'SAFE_SHELL' | 'NATIVE_SHELL';
+export type ExecutionMode = 'native_ws' | 'cli' | 'fallback';
+
+export interface DecompTask {
+  id: string;
+  prompt: string;
+  context?: object;
+}
+
+export interface DecompStep {
+  id: string;
+  dependsOn?: string[];
+  payload: {
+    role: WorkerRole;
+    mode: ExecutionMode;
+    input: string;
+  };
+}
+
+export interface Plan {
+  taskId: string;
+  steps: DecompStep[];
+}

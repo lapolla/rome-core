@@ -1,0 +1,31 @@
+{
+  "workers": [
+    {
+      "capability": "GEMINI",
+      "invocation": "native_agent_cli",
+      "probe": "test -f \"$GEMINI_CLI\"",
+      "cli_command": "node $GEMINI_CLI --sandbox false --include-directories $ROME_ROOT --yolo",
+      "output_format": "text"
+    },
+    {
+      "capability": "MISTRAL",
+      "invocation": "direct_ws",
+      "probe": "test -d /home/paul-kane/projects/mistral-cli && command -v python3",
+      "start_command": "env PYTHONPATH=/home/paul-kane/projects/mistral-cli python3 -m vibe.cli.entrypoint"
+    },
+    {
+      "capability": "CLAUDE",
+      "invocation": "native_agent_cli",
+      "probe": "command -v claude",
+      "cli_command": "claude --dangerously-skip-permissions --output-format json -p",
+      "output_format": "json"
+    },
+    {
+      "capability": "GEMMA",
+      "invocation": "native_agent_ollama",
+      "probe": "curl -sf --max-time 1 http://localhost:11434/",
+      "model": "gemma4:e4b",
+      "ollama_url": "http://localhost:11434"
+    }
+  ]
+}

@@ -44,7 +44,8 @@ export class SemanticCache {
 
   private _hashEnvironment(): string {
     const hash = crypto.createHash('sha256');
-    const searchDirs = [path.join(ROME_ROOT, 'src'), path.join(ROME_ROOT, 'aaak')];
+    // Hash the target project's src and the orchestrator's aaak logic
+    const searchDirs = [path.join(process.cwd(), 'src'), path.join(ROME_ROOT, 'aaak')];
     
     try {
       for (const dir of searchDirs) {
@@ -54,7 +55,7 @@ export class SemanticCache {
       return hash.digest('hex');
     } catch (e) {
       console.warn('Environment hashing failed, falling back to static hash:', e);
-      return process.env.ROME_TASK_DIR || 'global-fallback';
+      return 'static-fallback';
     }
   }
 
