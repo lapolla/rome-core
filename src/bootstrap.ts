@@ -7,6 +7,7 @@ import { execSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import WebSocket from 'ws';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROME_ROOT = process.env.ROME_ROOT || path.resolve(__dirname, '../..');
@@ -22,6 +23,12 @@ interface WorkerPolicy {
   ollama_url?: string;
 }
 
+interface SpawnResult {
+  capability: string;
+  status: 'spawned' | 'skipped';
+  pid: number | null;
+}
+
 function probe(cmd: string, env: Record<string, string>): boolean {
   try {
     execSync(cmd, { env: { ...process.env, ...env }, stdio: 'ignore', timeout: 3000 });
@@ -29,11 +36,9 @@ function probe(cmd: string, env: Record<string, string>): boolean {
   } catch { return false; }
 }
 
-function spawnWorker(w: WorkerPolicy, wsUrl: string, env: Record<string, string>): void {
+function spawnWorker(w: WorkerPolicy, wsUrl: string, env: Record<string, string>): number | null {
   const logPath = `/tmp/rome-worker-${w.capability}.log`;
   const combinedEnv = { ...process.env, ...env };
-
-  let args: string[];
 
   if (w.invocation === 'direct_ws') {
     /* Native WS peer — spawns and self-registers with daemon via agent_hello */
@@ -49,9 +54,10 @@ function spawnWorker(w: WorkerPolicy, wsUrl: string, env: Record<string, string>
     });
     child.unref();
     console.log(`  [+] ${w.capability} spawned (pid ${child.pid}, direct_ws)`);
-    return;
+    return child.pid || null;
   }
 
+  let args: string[];
   if (w.invocation === 'native_agent_ollama') {
     args = [
       path.join(ROME_ROOT, 'dist/src/native_agent.js'),
@@ -80,6 +86,7 @@ function spawnWorker(w: WorkerPolicy, wsUrl: string, env: Record<string, string>
   });
   child.unref();
   console.log(`  [+] ${w.capability} spawned (pid ${child.pid})`);
+  return child.pid || null;
 }
 
 async function main() {
@@ -100,17 +107,48 @@ async function main() {
     }
   }
 
+  const results: SpawnResult[] = [];
   console.log('ROME Bootstrap: probing and spawning workers...');
   for (const w of policy.workers) {
     const probeCmd = w.probe
       .replace(/\$GEMINI_CLI/g, env.GEMINI_CLI)
       .replace(/\$ROME_ROOT/g, ROME_ROOT);
     if (probe(probeCmd, env)) {
-      spawnWorker(w, wsUrl, env);
+      const pid = spawnWorker(w, wsUrl, env);
+      results.push({ capability: w.capability, status: 'spawned', pid });
     } else {
       console.log(`  [-] ${w.capability} skipped (probe failed)`);
+      results.push({ capability: w.capability, status: 'skipped', pid: null });
     }
   }
+
+  await new Promise<void>((resolve) => {
+    const ws = new WebSocket(`${wsUrl}/ws`);
+    ws.on('open', () => {
+      for (const res of results) {
+        ws.send(JSON.stringify({
+          type: "command",
+          command: "event",
+          request_id: `boot-${res.capability}`,
+          payload: {
+            event: {
+              type: "worker_spawn",
+              task_id: "bootstrap",
+              capability: res.capability,
+              status: res.status,
+              pid: res.pid
+            }
+          }
+        }));
+      }
+      setTimeout(() => { ws.close(); resolve(); }, 500);
+    });
+    ws.on('error', (err) => {
+      console.error(`  [!] WS emission failed: ${err.message}`);
+      resolve();
+    });
+    setTimeout(() => resolve(), 3000);
+  });
 }
 
 main().catch(console.error);
