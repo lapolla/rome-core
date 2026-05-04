@@ -46,7 +46,7 @@ The daemon responds with a standard response frame:
 Agents also receive asynchronous events (e.g., `progress`, `complete`, `error`) via the same WS connection for any tasks they have dispatched.
 
 ## 5. Legacy Support (DAS Tags)
-While the WebSocket Signal Bus is the primary protocol, the `[ROME_DISPATCH: ...]` and `[ROME_SHELL: ...]` tags are maintained for backwards compatibility with non-WS-aware agents. These are intercepted via stdout by the `legion_worker` wrapper.
+Legacy `[ROME_DISPATCH: ...]` tags have been deprecated. All agents must use the WebSocket Command Protocol.
 
 ---
 **"The agent is the orchestrator. The mesh is the medium. ROME is the mind."**

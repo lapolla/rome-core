@@ -14,12 +14,11 @@ WS_URL="ws://127.0.0.1:$MESH_PORT"
 
 # 0. Kill stale workers and daemon
 pkill -f "peer_server.js" 2>/dev/null || true
-pkill -f "legion_worker.js" 2>/dev/null || true
 pkill -f "vibe.cli.entrypoint" 2>/dev/null || true
 pkill -f "native_agent.js" 2>/dev/null || true
 
 # Wait for processes to actually die (up to 5s), then force-kill
-for pat in "peer_server.js" "legion_worker.js" "vibe.cli.entrypoint" "native_agent.js"; do
+for pat in "peer_server.js" "vibe.cli.entrypoint" "native_agent.js"; do
     for i in $(seq 1 5); do
         pgrep -f "$pat" >/dev/null 2>&1 || break
         sleep 1
@@ -57,3 +56,4 @@ node "$ROME_ROOT/dist/src/bootstrap.js" "$WS_URL"
 # ... 
 ROME_VERSION=$(grep '"version":' "$ROME_ROOT/package.json" | cut -d'"' -f4)
 echo "ROME v$ROME_VERSION Mesh restarted."
+OME_VERSION Mesh restarted."

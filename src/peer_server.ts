@@ -12,7 +12,7 @@ import { decompose } from './decomposer.js';
 import { executePlan } from './router.js';
 import { getRomeVersion } from './rome_types.js';
 import { EventBus, TaskRegistry, WorkerRegistry, Blackboard, MeshReducer } from './registry.js';
-import { executeTask } from './legion_worker.js';
+
 import { executeShell } from './shell_executor.js';
 import { probeArsenal, type ProbeResult } from './arsenal_probe.js';
 
@@ -573,30 +573,11 @@ export class PeerServer {
         this.scheduleTick();
       });
     } else {
-      const model = cap.model || 'gemini-3.1-pro-preview';
-      const effectivePrompt = cap.system_prompt ? `${cap.system_prompt}
-
-TASK: ${prompt}` : prompt;
-      const geminiCli = process.env.GEMINI_CLI || 'gemini';
-      const finalArgs = (cap.args || []).map((a: any) => typeof a === 'string'
-        ? a.replace(/{MODEL}/g, model).replace(/{GEMINI_CLI}/g, geminiCli).replace(/{ROME_ROOT}/g, ROME_ROOT)
-        : a).concat(effectivePrompt);
-      executeTask(task_id, capability, finalArgs, wsSender).then(manifest => {
-        const usage = manifest.usage ? { ...manifest.usage, cost_usd: manifest.usage.cost_usd ?? undefined } : undefined;
-        this.registry.update(task_id, manifest.status === 'SUCCESS' ? 'completed' : 'failed', manifest, usage);
-        if (manifest.status === 'SUCCESS') this.aaak.postResult(manifest, capability).catch(() => {});
-        if (manifest.status === 'SUCCESS' && !['SAFE_SHELL', 'NATIVE_SHELL', 'TEST'].includes(capability)) {
-          this.semanticCache.set(capability, rawPrompt || prompt, manifest).catch(() => {});
-        }
-        this.bus.broadcast({ type: 'complete', task_id, payload: manifest });
-        this.logUsage('legion', manifest.status, task_id, manifest.usage);
-        this.scheduleTick();
-      }).catch(e => {
-        this.registry.update(task_id, 'failed', { error: e.message });
-        this.bus.broadcast({ type: 'error', task_id, payload: { message: e.message } });
-        if (isQuotaError(e.message || '')) this.markCapabilityDown(capability, e.message);
-        this.scheduleTick();
-      });
+      const errorMsg = `No persistent worker connected for capability: ${capability}. In-process fallback (v6) has been removed.`;
+      console.error(`ROME: ${errorMsg}`);
+      this.registry.update(task_id, 'failed', { error: errorMsg });
+      this.bus.broadcast({ type: 'error', task_id, payload: { message: errorMsg } });
+      this.scheduleTick();
     }
   }
 

@@ -81,11 +81,11 @@ Gemini: parse YAML, dispatch subtasks, await results
 
 **Key insight**: Dictator role ≠ Decomposer role. Any Dictator can ask any LLM for help, and that LLM decides the breakdown. This enables true flexibility: tomorrow swap in Codex as Dictator, ask Gemini to decompose, same pattern works.
 
-## Persistent Workers (V6)
+## Persistent Workers
 
 - **Handshake**: Worker sends `agent_hello` with `payload: { capabilities, version, platform, peer_url }` → daemon responds `worker_ack` with `capabilities_accepted`.
 - **WorkerRegistry**: Tracks connected workers by WS reference. Finds idle workers by capability (must have 0 busy_tasks).
-- **Dispatch routing**: Find idle worker → send `command/dispatch` to worker. No worker → run in-process via `runLegion`.
+- **Dispatch routing**: Find idle worker → send `command/dispatch` to worker. No worker → returns failure error message.
 - **Worker events**: Workers send `{"type": "event", "event": {...}}` for progress/complete/error. Daemon relays to EventBus → all subscribers (including dashboard).
 - **Orphan cleanup**: On worker disconnect, all busy tasks marked failed.
 - **All connections subscribed**: Every WS connection (worker or client) gets all EventBus broadcasts. Workers ignore non-dispatch messages.
@@ -128,4 +128,4 @@ Reports are inline in `manifest.report` → `complete` payload → `registry.tas
 - **Async safety**: Never block the event loop. Long-running work via `executeTask` (spawns child process) or `executeShell` (detached spawn).
 - **Subprocess safety**: Always `detached: true` on spawned children. Kill via `-pid` (process group).
 - **WS error handling**: All `ws.on('message')` handlers wrapped in try/catch. Errors logged, connection kept alive.
-- **Build**: `npx tsc` → `dist/`. Restart: `pkill -f dist/peer_server.js && bash v6-start.sh`.
+- **Build**: `npx tsc` → `dist/`. Restart: `pkill -f dist/peer_server.js && bash ROME-start.sh`.

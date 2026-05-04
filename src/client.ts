@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { WebSocket } from 'ws';
-import { executeTask } from './legion_worker.js';
+
 import { executeShell } from './shell_executor.js';
 
 const ROME_ROOT = process.env.ROME_ROOT || process.cwd();
@@ -125,11 +125,8 @@ async function main() {
     console.log(`\n[${taskId}] COMPLETE: ${res.status}\n--- REPORT ---\n${res.report}\n--------------`);
     process.exit(res.status === 'SUCCESS' ? 0 : 1);
   } else if (cap.type === 'llm') {
-    const model = cap.model || 'gemini-3.1-pro-preview';
-    const finalArgs = (cap.args || []).map((a: any) => typeof a === 'string' ? a.replace(/{MODEL}/g, model) : a).concat(prompt);
-    const manifest = await executeTask(taskId, capabilityName, finalArgs, wsSender);
-    console.log(`\n[${taskId}] COMPLETE: ${manifest.status}\n--- REPORT ---\n${manifest.report}\n--------------`);
-    process.exit(manifest.status === 'SUCCESS' ? 0 : 1);
+    console.error(`\n[${taskId}] COMPLETE: FAILED\n--- REPORT ---\nIn-process LLM execution (v6 fallback) has been removed. Start a persistent worker.\n--------------`);
+    process.exit(1);
   }
 }
 

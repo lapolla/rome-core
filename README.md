@@ -46,7 +46,7 @@ ROME is cross-platform (Linux/macOS) but requires a few core dependencies.
 - **Peer Mesh:** Every agent is an active participant in the WebSocket-native mesh.
 - **WebSocket Signal Bus:** Agents interact with the daemon via structured JSON frames over WS, providing a clean separation of control and data planes.
 - **Native Agents:** `src/native_agent.ts` (TS) provides a full-duplex, real-time interaction loop for LLMs, bypassing legacy CLI wrappers.
-- **Worker Hub:** Supports both legacy `legion_worker` (stdout-interception) and modern `native_agent` (WS-native) implementations.
+- **Worker Hub:** Supports `native_agent` (WS-native) implementations.
 - **Registry:** `src/registry.ts` tracks causal chains (goals/intents) and asynchronous state across the mesh.
 
 ## Configuration
