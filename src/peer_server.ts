@@ -206,6 +206,8 @@ export class PeerServer {
   }
 
   stop() {
+    Object.values(this._recoveryTimers).forEach(t => clearTimeout(t));
+    this._recoveryTimers = {};
     this.wss?.close();
     this.server?.close();
     this.activeSubprocesses.forEach(p => {
@@ -450,17 +452,31 @@ export class PeerServer {
   }
 
   private async runDecomposer(task_id: string, prompt: string): Promise<void> {
-    const llmCall = (p: string): Promise<string> => new Promise((resolve) => {
+    const llmCall = (p: string): Promise<string> => new Promise((resolve, reject) => {
       const sub_id = `decomp-${uuidv4().substring(0, 8)}`;
       const cb = (ev: RomeEvent) => {
         if (ev.task_id !== sub_id) return;
         if (ev.type === 'complete') { this.bus.unsubscribe(cb); resolve(ev.payload?.report || ''); }
-        if (ev.type === 'error')    { this.bus.unsubscribe(cb); resolve(''); }
+        if (ev.type === 'error')    { this.bus.unsubscribe(cb); reject(new Error(ev.payload?.message || 'decomposer LLM call failed')); }
       };
       this.bus.subscribe(cb);
-      this.registry.register(sub_id, 'CLAUDE', p, task_id, 'decompose plan', 'Architect');
+
+      const preferred = ['CLAUDE', 'GEMINI', 'MISTRAL', 'GEMMA'];
+      let chosenCap = 'CLAUDE';
+      let workerWs: WebSocket | null = null;
+      for (const cap of preferred) {
+        const w = this.workers.findWorker(cap);
+        if (w) { chosenCap = cap; workerWs = w; break; }
+      }
+
+      this.registry.register(sub_id, chosenCap, p, task_id, 'decompose plan', 'Architect');
       this.registry.update(sub_id, 'running');
-      this.runLegion(sub_id, 'CLAUDE', p, p);
+      if (workerWs) {
+        this.workers.markBusy(workerWs, sub_id);
+        workerWs.send(JSON.stringify({ type: 'command', command: 'dispatch', request_id: `fwd-${sub_id}`, payload: { task_id: sub_id, capability: chosenCap, prompt: p } }));
+      } else {
+        this.runLegion(sub_id, chosenCap, p, p);
+      }
     });
 
     const dispatchFn = (capability: string, input: string, mode: ExecutionMode): Promise<string> => new Promise((resolve) => {

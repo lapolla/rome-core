@@ -403,9 +403,12 @@
             if (connectedCaps.has(cap)) continue;
             const ok = info && info.available;
             const color = ok ? '#64748b' : '#dc2626';
-            const label = ok ? `[${cap}]` : `[${cap} ✗]`;
+            const label = ok ? `○ ${cap}` : `✗ ${cap}`;
             const tip = ok ? `${cap}: available but not connected` : `${cap}: ${info?.reason || 'unavailable'}`;
-            chips.push(`<div class="chip" title="${tip}" style="opacity:0.55"><span style="color:${color}">${label}</span></div>`);
+            const chipStyle = ok
+              ? 'opacity:0.5;border:1px dashed #64748b;border-radius:4px;padding:0 4px'
+              : 'opacity:0.4;border:1px dashed #dc2626;border-radius:4px;padding:0 4px';
+            chips.push(`<div class="chip" title="${tip}" style="${chipStyle}"><span style="color:${color}">${label}</span></div>`);
           }
           els.mesh.innerHTML = chips.join("");
 

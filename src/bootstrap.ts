@@ -29,7 +29,7 @@ interface SpawnResult {
   pid: number | null;
 }
 
-function probe(cmd: string, env: Record<string, string>): boolean {
+export function probe(cmd: string, env: Record<string, string>): boolean {
   try {
     execSync(cmd, { env: { ...process.env, ...env }, stdio: 'ignore', timeout: 3000 });
     return true;
@@ -151,4 +151,6 @@ async function main() {
   });
 }
 
-main().catch(console.error);
+const isEntryPoint = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (isEntryPoint) main().catch(console.error);
+
