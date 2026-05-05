@@ -25,7 +25,7 @@ export class EventBus {
     this.subscribers.delete(sub);
   }
 
-  broadcast(event: Omit<RomeEvent, 'ts' | 'sequence'>) {
+  broadcast(event: Omit<RomeEvent, 'ts' | 'sequence'>, skip?: (ws: WebSocket) => boolean) {
     const fullEvent: RomeEvent = {
       ...event,
       ts: Date.now() / 1000,
@@ -41,6 +41,7 @@ export class EventBus {
         if (typeof sub === 'function') {
           sub(fullEvent);
         } else if (sub.readyState === WebSocket.OPEN) {
+          if (skip && skip(sub)) continue;
           sub.send(msg);
         }
       } catch { /* dead subscriber — ignore */ }
@@ -191,6 +192,15 @@ export class WorkerRegistry {
     const orphaned = entry ? entry.busy_tasks : [];
     this.workers.delete(ws);
     return orphaned;
+  }
+
+  isRegistered(ws: WebSocket): boolean {
+    return this.workers.has(ws);
+  }
+
+  isBusyWith(ws: WebSocket, task_id: string): boolean {
+    const entry = this.workers.get(ws);
+    return entry ? entry.busy_tasks.includes(task_id) : false;
   }
 
   findWorker(capability: string): WebSocket | null {

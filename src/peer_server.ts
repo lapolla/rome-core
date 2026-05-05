@@ -169,6 +169,7 @@ export class PeerServer {
             if (msg.type === 'command') this.handleCommand(ws, msg);
             else if (msg.type === 'agent_hello') {
               const p = msg.payload || {};
+              (ws as any)._isWorker = true;
               this.workers.register(ws, p.capabilities, p.version, p.platform, p.peer_url, p.one_shot ?? true);
               ws.send(JSON.stringify({ type: 'worker_ack', ok: true, payload: { message: 'Registered', capabilities_accepted: p.capabilities } }));
               this.scheduleTick();
@@ -182,6 +183,7 @@ export class PeerServer {
         let isReplaying = true;
         const busSub = (ev: RomeEvent) => {
           if (ws.readyState === WebSocket.OPEN) {
+            if (ev.task_id && this.workers.isBusyWith(ws, ev.task_id)) return;
             if (isReplaying) {
               const evTime = (ev as any).timestamp ?? (ev.ts ? ev.ts * 1000 : Date.now());
               if (Date.now() - evTime > this.eventReplayWindow) {
