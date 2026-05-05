@@ -86,12 +86,12 @@ export class PeerServer {
   private projectTotalTokens: number = 0;
 
   constructor(capability: string, port?: number, aaakFactsPath?: string) {
-    this.aaak = new AAAK('default', { enabled: true }, aaakFactsPath ?? path.join(ROME_ROOT, 'legions', '.aaak_facts'));
-    this.semanticCache = new SemanticCache(path.join(ROME_ROOT, 'legions', '.aaak_cache'));
+    this.aaak = new AAAK('default', { enabled: true }, aaakFactsPath ?? path.join(ROME_ROOT, '.rome', 'memory'));
+    this.semanticCache = new SemanticCache(path.join(ROME_ROOT, '.rome', 'cache'));
     this.capability = capability.toUpperCase();
     this.arsenal = loadArsenal(ROME_ROOT);
     this.registry.hydrateFromLog(path.join(ROME_ROOT, 'logs', 'rome.jsonl'));
-    this.blackboard.setPersistence(path.join(ROME_ROOT, 'legions', '.rome_STATE.json'));
+    this.blackboard.setPersistence(path.join(ROME_ROOT, '.rome', 'state.json'));
 
     let meshPort = 8741;
 
@@ -127,6 +127,14 @@ export class PeerServer {
     // dispatches still work for anything the probe flags; this surfaces
     // misconfiguration early and gates ROME-start.sh worker spawns.
     this.probeResults = await probeArsenal(this.arsenal);
+
+    /* Sweep orphaned tasks from a previous crash — any task still 'running'
+       at startup has no live executor and will never complete on its own. */
+    for (const task of this.registry.getAll()) {
+      if (task.status === 'running') {
+        this.registry.update(task.task_id, 'failed', { error: 'daemon restarted' });
+      }
+    }
 
     this.server = http.createServer((req, res) => {
       const url = new URL(req.url || '', `http://${req.headers.host}`);
@@ -259,29 +267,34 @@ export class PeerServer {
         this.registry.updateProgress(tid, p.percent, p.message); 
         this.bus.broadcast({ type: 'progress', task_id: tid, payload: p }); 
         break;
-      case 'complete':
+      case 'complete': {
         const status = ['SUCCESS', 'OK', 'COMPLETED'].includes(String(p.status).toUpperCase()) ? 'completed' : 'failed';
-        if (p.report && tid) {
-          const task = this.registry.get(tid);
-        }
         const usage = p.usage ? { ...p.usage, cost_usd: p.usage.cost_usd ?? undefined } : undefined;
-        this.registry.update(tid, status, p, usage);
-        this.processStateReduction(tid);
-        if (p.report && tid) this.applyStateSignals(p.report, tid);
-        this.bus.broadcast({ type: 'complete', task_id: tid, payload: p });
-        this.workers.markIdle(ws, tid);
-        if (this.workers.isOneShot(ws)) ws.close();
-        if (status === 'failed' && isQuotaError(p.report || p.error || '')) { const t = this.registry.get(tid); if (t) this.markCapabilityDown(t.capability, p.report || p.error || ''); }
-        this.logUsage('worker', status, tid, p.usage);
-        this.scheduleTick();
+        try {
+          this.registry.update(tid, status, p, usage);
+          this.processStateReduction(tid);
+          if (p.report && tid) this.applyStateSignals(p.report, tid);
+          this.bus.broadcast({ type: 'complete', task_id: tid, payload: p });
+          if (this.workers.isOneShot(ws)) ws.close();
+          if (status === 'failed' && isQuotaError(p.report || p.error || '')) { const t = this.registry.get(tid); if (t) this.markCapabilityDown(t.capability, p.report || p.error || ''); }
+          this.logUsage('worker', status, tid, p.usage);
+          this.scheduleTick();
+        } finally {
+          this.workers.markIdle(ws, tid);
+        }
         break;
-      case 'error':
-        this.registry.update(tid, 'failed', { error: p.message });
-        this.bus.broadcast({ type: 'error', task_id: tid, payload: p });
-        this.workers.markIdle(ws, tid);
-        if (isQuotaError(p.message || '')) { const t = this.registry.get(tid); if (t) this.markCapabilityDown(t.capability, p.message); }
-        this.scheduleTick();
+      }
+      case 'error': {
+        try {
+          this.registry.update(tid, 'failed', { error: p.message });
+          this.bus.broadcast({ type: 'error', task_id: tid, payload: p });
+          if (isQuotaError(p.message || '')) { const t = this.registry.get(tid); if (t) this.markCapabilityDown(t.capability, p.message); }
+          this.scheduleTick();
+        } finally {
+          this.workers.markIdle(ws, tid);
+        }
         break;
+      }
     }
   }
 
@@ -325,7 +338,7 @@ export class PeerServer {
         let capability = (payload.capability || this.capability).toUpperCase();
         const prompt = payload.prompt || '';
         
-        const distilledPrompt = await this.aaak.preDispatch(this.buildBlackboardContext(prompt, capability), payload.goal || prompt.slice(0, 200), capability);
+        const distilledPrompt = await this.aaak.preDispatch(prompt, payload.goal || prompt.slice(0, 200), capability);
 
         const CACHEABLE = this.semanticCache.isStatelessAnalysis(capability, prompt);
         if (CACHEABLE) {
@@ -436,6 +449,67 @@ export class PeerServer {
         ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { facts } }));
         break;
       }
+      case 'await': {
+        const taskIds: string[] = Array.isArray(payload.task_ids) ? payload.task_ids : [payload.task_id].filter(Boolean) as string[];
+        if (taskIds.length === 0) {
+          ws.send(JSON.stringify({ type: 'response', request_id, ok: false, error: 'task_id or task_ids required' }));
+          break;
+        }
+
+        const checkDone = () => taskIds.every(id => {
+          const t = this.registry.get(id);
+          return t && ['completed', 'failed', 'cancelled'].includes(t.status);
+        });
+
+        if (checkDone()) {
+          const results = taskIds.map(id => {
+            const t = this.registry.get(id);
+            return { task_id: id, status: t?.status, report: t?.report };
+          });
+          ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { tasks: results } }));
+          break;
+        }
+
+        const onDone = () => {
+          if (checkDone()) {
+            this.bus.unsubscribe(onDone);
+            const results = taskIds.map(id => {
+              const t = this.registry.get(id);
+              return { task_id: id, status: t?.status, report: t?.report };
+            });
+            ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { tasks: results } }));
+          }
+        };
+
+        this.bus.subscribe(onDone);
+        // Safety timeout for await
+        setTimeout(() => {
+          this.bus.unsubscribe(onDone);
+          if (ws.readyState === WebSocket.OPEN) {
+            const results = taskIds.map(id => {
+              const t = this.registry.get(id);
+              return { task_id: id, status: t?.status, report: t?.report };
+            });
+            ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { tasks: results, timeout: true } }));
+          }
+        }, 300000);
+        break;
+      }
+      case 'read_report': {
+        const tid = payload.task_id;
+        const task = this.registry.get(tid);
+        if (!task) {
+          ws.send(JSON.stringify({ type: 'response', request_id, ok: false, error: 'task not found' }));
+        } else {
+          ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { report: task.report, status: task.status } }));
+        }
+        break;
+      }
+      case 'clear': {
+        this.registry.clearFinished();
+        ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { cleared: true } }));
+        break;
+      }
       case 'aaak_seed': {
         const content = payload.content || '';
         if (!content) {
@@ -521,6 +595,7 @@ export class PeerServer {
     proc.on('close', (code) => {
       console.log(`[NS] Finished [${code}]: ${command.slice(0, 30)}`);
       if (taskId) {
+        this.activeSubprocesses.delete(taskId);
         this.registry.update(taskId, code === 0 ? 'completed' : 'failed', { report: output });
         this.applyStateSignals(output, taskId);
         this.bus.broadcast({ type: 'complete', task_id: taskId, payload: { status: code === 0 ? 'SUCCESS' : 'FAILED', report: output } });

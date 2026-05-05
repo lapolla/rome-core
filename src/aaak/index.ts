@@ -34,17 +34,7 @@ export class AAAK {
   }
 
   async preDispatch(prompt: string, goal: string, capability: string): Promise<string> {
-    if (!this.shouldProcess(capability)) {
-      return prompt;
-    }
-
-    const activeFacts = await this.store.loadActive();
-    if (!needsDistill(prompt, this.threshold) && activeFacts.length === 0) {
-      return prompt;
-    }
-
-    const facts = await this.store.query(goal || prompt.slice(0, 200), this.maxRecall);
-    return distill({ prompt, facts }, goal);
+    return prompt;
   }
 
   async postResult(manifest: Manifest, taskDescription: string = ""): Promise<Fact> {

@@ -1,6 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import { WebSocketServer, WebSocket } from 'ws';
+import * as fs from 'fs';
 import { MeshAgent } from '../src/native_agent.js';
 
 /* ------------------------------------------------------------------ */
@@ -117,5 +118,42 @@ describe('MeshAgent connect and handshake', () => {
 
     assert.strictEqual(result.ok, true);
     assert.strictEqual(result.payload.result, 'routed');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* callCLI — {PROMPT} substitution and model fallback                  */
+/* ------------------------------------------------------------------ */
+describe('MeshAgent.callCLI', () => {
+  test('{PROMPT} is shell-quoted and passed as CLI argument', async () => {
+    const agent = new MeshAgent({
+      wsUrl: 'ws://localhost:1', token: '', capability: 'MISTRAL', model: '',
+      cliCommand: 'printf "%s" {PROMPT}', cliOutputFormat: 'text',
+    });
+    const result = await (agent as any).callCLI([{ role: 'user', content: "it's alive" }]);
+    assert.strictEqual(result, "it's alive");
+  });
+
+  test('multi-word prompt is not split by shell', async () => {
+    const agent = new MeshAgent({
+      wsUrl: 'ws://localhost:1', token: '', capability: 'MISTRAL', model: '',
+      cliCommand: 'printf "%s" {PROMPT}', cliOutputFormat: 'text',
+    });
+    const result = await (agent as any).callCLI([{ role: 'user', content: 'hello world foo bar' }]);
+    assert.strictEqual(result, 'hello world foo bar');
+  });
+
+  test('retries with next model on quota error', async () => {
+    const scriptPath = '/tmp/rome-test-model-fallback.sh';
+    fs.writeFileSync(scriptPath, '#!/bin/bash\nif [ "$1" = "model-a" ]; then echo "quota exceeded"; else echo "ALIVE"; fi\n');
+    fs.chmodSync(scriptPath, 0o755);
+
+    const agent = new MeshAgent({
+      wsUrl: 'ws://localhost:1', token: '', capability: 'GEMINI', model: 'model-a',
+      models: ['model-a', 'model-b'],
+      cliCommand: `${scriptPath} {MODEL}`, cliOutputFormat: 'text',
+    });
+    const result = await (agent as any).callCLI([{ role: 'user', content: 'ping' }]);
+    assert.strictEqual(result, 'ALIVE');
   });
 });

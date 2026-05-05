@@ -13,6 +13,7 @@ interface AgentConfig {
   token: string;
   capability: string;
   model: string;
+  models?: string[];
   ollamaUrl?: string;
   mistralKey?: string;
   cliCommand?: string;
@@ -23,6 +24,8 @@ export class MeshAgent {
   private ws: WebSocket | null = null;
   private config: AgentConfig;
   private workerId: string = Math.random().toString(36).substring(7);
+  private _busy = false;
+  private _cancelled = false;
   private pendingRequests = new Map<string, (msg: any) => void>();
 
   constructor(config: AgentConfig) {
@@ -76,6 +79,16 @@ export class MeshAgent {
           return;
         }
 
+        // Handle cancel/interrupt — drain pending awaits so handleDispatch exits fast
+        if (msg.type === 'command' && (msg.command === 'cancel' || msg.command === 'interrupt')) {
+          this._cancelled = true;
+          for (const resolve of this.pendingRequests.values()) {
+            resolve({ ok: false, error: 'cancelled', status: 'FAILED', payload: { report: 'Task cancelled' } });
+          }
+          this.pendingRequests.clear();
+          return;
+        }
+
         // Handle incoming tasks
         if (msg.type === 'command' && msg.command === 'dispatch' && msg.payload.capability === this.config.capability) {
           this.handleDispatch(msg);
@@ -87,6 +100,11 @@ export class MeshAgent {
 
     this.ws.on('close', () => {
       console.log(`[${this.config.capability}] Disconnected. Reconnecting...`);
+      /* Drain all pending promises so callers fail fast instead of deadlocking until timeout */
+      for (const resolve of this.pendingRequests.values()) {
+        resolve({ ok: false, error: 'disconnected', status: 'FAILED', payload: { report: 'WS disconnected' } });
+      }
+      this.pendingRequests.clear();
       if (!this._disconnecting) this._reconnectTimer = setTimeout(() => this.connect(), 2000);
     });
   }
@@ -116,8 +134,15 @@ export class MeshAgent {
   }
 
   private async handleDispatch(msg: any) {
+    if (this._busy) {
+      this.send({ type: 'response', request_id: msg.request_id, ok: false, error: 'worker busy' });
+      return;
+    }
+    this._busy = true;
+    this._cancelled = false;
+
     const { task_id, prompt } = msg.payload;
-    const logPath = '/tmp/rome-native-debug.log';
+    const logPath = `/tmp/rome-native-${this.config.capability}.log`;
     fs.appendFileSync(logPath, `\n\n--- TASK ${task_id} ---\nPROMPT: ${prompt}\n`);
 
     console.log(`[${this.config.capability}] Task engaged: ${task_id}`);
@@ -164,6 +189,9 @@ Always use this exact format. When you receive a result, analyze it and continue
             const resp = await this.request('dispatch', { capability: sig.capability, prompt: sig.prompt });
             const event = await this.awaitTask(resp.payload.task_id);
             feedback += `\n[DISPATCH RESULT: ${sig.capability}]\n${event.payload.report}\n`;
+          } else if (sig.type === 'await' && sig.taskId) {
+            const event = await this.awaitTask(sig.taskId);
+            feedback += `\n[AWAIT RESULT: ${sig.taskId}]\n${event.payload?.report || ''}\n`;
           }
         }
         messages.push({ role: 'user', content: feedback });
@@ -171,11 +199,13 @@ Always use this exact format. When you receive a result, analyze it and continue
       this.sendEvent(task_id, 'complete', { status: 'FAILED', report: 'Turn limit exceeded' });
     } catch (e: any) {
       this.sendEvent(task_id, 'complete', { status: 'FAILED', report: e.message });
+    } finally {
+      this._busy = false;
     }
   }
 
   parseSignals(text: string) {
-    const signals: Array<{ type: string; command?: string; capability?: string; prompt?: string }> = [];
+    const signals: Array<{ type: string; command?: string; capability?: string; prompt?: string; taskId?: string }> = [];
     
     // [ROME_SHELL: "ls -la"]
     const shellRe = /\[ROME_SHELL:\s*\"([^"]+)\"\]/g;
@@ -188,6 +218,12 @@ Always use this exact format. When you receive a result, analyze it and continue
     const dispRe = /\[ROME_DISPATCH:\s*([A-Z0-9_]+)\s*\"([^"]+)\"\]/g;
     while ((m = dispRe.exec(text)) !== null) {
       signals.push({ type: 'dispatch', capability: m[1], prompt: m[2] });
+    }
+
+    // [ROME_AWAIT: "task_id"]
+    const awaitRe = /\[ROME_AWAIT:\s*"([^"]+)"\]/g;
+    while ((m = awaitRe.exec(text)) !== null) {
+      signals.push({ type: 'await', taskId: m[1] });
     }
 
     // Support for Gemma's hallucinated tool format too
@@ -221,37 +257,46 @@ Always use this exact format. When you receive a result, analyze it and continue
       parts.push(m.content);
     }
     const prompt = parts.join('\n\n');
-    let rawCmd = (this.config.cliCommand || '').replace('{MODEL}', this.config.model || '');
-    const hasPromptPlaceholder = rawCmd.includes('{PROMPT}');
-    if (hasPromptPlaceholder) {
-      const escaped = prompt.replace(/'/g, "'\\\\''" );
-      rawCmd = rawCmd.replace('{PROMPT}', `'${escaped}'`);
-    }
-    return new Promise((resolve, reject) => {
-      const child = spawn(rawCmd, [], { stdio: ['pipe', 'pipe', 'pipe'], shell: true, env: process.env as any });
-      const chunks: Buffer[] = [];
-      child.stdout!.on('data', (d: Buffer) => chunks.push(d));
-      child.on('close', () => {
-        const raw = Buffer.concat(chunks).toString().trim();
-        if (this.config.cliOutputFormat === 'json') {
-          /* try full document first (pretty-printed output), then line-by-line (NDJSON) */
-          const candidates = [raw, ...raw.split('\n')];
-          for (const chunk of candidates) {
-            try {
-              const obj = JSON.parse(chunk);
-              if (obj.response) { resolve(obj.response); return; }
-              if (obj.result)   { resolve(obj.result);   return; }
-              if (obj.text)     { resolve(obj.text);     return; }
-              if (obj.content)  { resolve(typeof obj.content === 'string' ? obj.content : JSON.stringify(obj.content)); return; }
-            } catch { /* skip */ }
+
+    const models = (this.config.models && this.config.models.length > 0)
+      ? this.config.models
+      : [this.config.model || ''];
+
+    for (const model of models) {
+      let rawCmd = (this.config.cliCommand || '')
+        .replace('{MODEL}', model)
+        .replace('{PROMPT}', `'${prompt.replace(/'/g, "'\\''")}'`);
+      const hasPromptPlaceholder = (this.config.cliCommand || '').includes('{PROMPT}');
+      const result = await new Promise<string>((resolve, reject) => {
+        const child = spawn(rawCmd, [], { stdio: ['pipe', 'pipe', 'pipe'], shell: true, env: process.env as any });
+        const chunks: Buffer[] = [];
+        child.stdout!.on('data', (d: Buffer) => chunks.push(d));
+        child.on('close', () => {
+          const raw = Buffer.concat(chunks).toString().trim();
+          if (this.config.cliOutputFormat === 'json') {
+            const candidates = [raw, ...raw.split('\n')];
+            for (const chunk of candidates) {
+              try {
+                const obj = JSON.parse(chunk);
+                if (obj.response) { resolve(obj.response); return; }
+                if (obj.result)   { resolve(obj.result);   return; }
+                if (obj.text)     { resolve(obj.text);     return; }
+                if (obj.content)  { resolve(typeof obj.content === 'string' ? obj.content : JSON.stringify(obj.content)); return; }
+              } catch { /* skip */ }
+            }
           }
-        }
-        resolve(raw);
+          resolve(raw);
+        });
+        if (!hasPromptPlaceholder) { child.stdin!.write(prompt); }
+        child.stdin!.end();
+        child.on('error', reject);
       });
-      if (!hasPromptPlaceholder) { child.stdin!.write(prompt); }
-      child.stdin!.end();
-      child.on('error', reject);
-    });
+
+      const isQuota = /quota|429|rate.?limit|resource.?exhausted|too many/i.test(result);
+      if (!isQuota || model === models[models.length - 1]) return result;
+      /* quota hit — try next model */
+    }
+    return 'All models exhausted';
   }
 
   private async callLLM(messages: any[]): Promise<string> {
@@ -296,6 +341,7 @@ async function main() {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--capability') config.capability = argv[++i];
     if (argv[i] === '--model') config.model = argv[++i];
+    if (argv[i] === '--models') config.models = argv[++i].split(',');
     if (argv[i] === '--ws-url') config.wsUrl = argv[++i];
     if (argv[i] === '--ws-token') config.token = argv[++i];
     if (argv[i] === '--cli') config.cliCommand = argv[++i];

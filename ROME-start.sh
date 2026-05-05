@@ -56,4 +56,3 @@ node "$ROME_ROOT/dist/src/bootstrap.js" "$WS_URL"
 # ... 
 ROME_VERSION=$(grep '"version":' "$ROME_ROOT/package.json" | cut -d'"' -f4)
 echo "ROME v$ROME_VERSION Mesh restarted."
-OME_VERSION Mesh restarted."

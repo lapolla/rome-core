@@ -15,10 +15,16 @@ function dispatchAndAwait(ws: WebSocket, capability: string, prompt: string, tim
                 if (msg.type === 'response' && msg.request_id === reqId && msg.ok && msg.payload?.task_id) {
                     taskId = msg.payload.task_id;
                 }
-                if (taskId && msg.type === 'event' && msg.event?.task_id === taskId && msg.event?.type === 'complete') {
-                    clearTimeout(t);
-                    ws.removeListener('message', handler);
-                    resolve(msg.event.payload?.status ?? 'UNKNOWN');
+                if (taskId && msg.type === 'event' && msg.event?.task_id === taskId) {
+                    if (msg.event.type === 'complete') {
+                        clearTimeout(t);
+                        ws.removeListener('message', handler);
+                        resolve(msg.event.payload?.status ?? 'UNKNOWN');
+                    } else if (msg.event.type === 'error') {
+                        clearTimeout(t);
+                        ws.removeListener('message', handler);
+                        resolve('FAILED');
+                    }
                 }
             } catch { }
         };

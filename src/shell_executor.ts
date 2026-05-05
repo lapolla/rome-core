@@ -104,6 +104,15 @@ export function executeShell(
       const status = (code === 0 && !interrupted) ? 'SUCCESS' : 'FAILED';
       const report = Buffer.concat(chunks).toString('utf-8').slice(0, 4000);
 
+      // LEAVE NO TRACE: Shred the folder if it's empty
+      try {
+        if (fs.existsSync(taskDir) && fs.readdirSync(taskDir).length === 0) {
+          fs.rmdirSync(taskDir);
+        }
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+
       resolve({
         status,
         report,
