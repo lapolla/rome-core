@@ -18,6 +18,7 @@ interface AgentConfig {
   mistralKey?: string;
   cliCommand?: string;
   cliOutputFormat?: 'json' | 'text';
+  systemPrompt?: string;
 }
 
 export class MeshAgent {
@@ -125,14 +126,6 @@ export class MeshAgent {
     });
   }
 
-  private async awaitTask(taskId: string): Promise<any> {
-    return new Promise((resolve) => {
-      this.pendingRequests.set(`event-${taskId}`, resolve);
-      // Long timeout for subtasks
-      setTimeout(() => { if (this.pendingRequests.has(`event-${taskId}`)) { this.pendingRequests.delete(`event-${taskId}`); resolve({ status: 'FAILED', report: 'Subtask timeout' }); } }, 300000);
-    });
-  }
-
   private async handleDispatch(msg: any) {
     if (this._busy) {
       this.send({ type: 'response', request_id: msg.request_id, ok: false, error: 'worker busy' });
@@ -148,7 +141,7 @@ export class MeshAgent {
     console.log(`[${this.config.capability}] Task engaged: ${task_id}`);
     this.send({ type: 'response', request_id: msg.request_id, ok: true });
 
-    const systemPrompt = `You are a ROME Native Agent (v7). You have direct mesh access.
+    const systemPrompt = this.config.systemPrompt || `You are a ROME Native Agent (v7). You have direct mesh access.
 To execute shell commands, emit: [ROME_SHELL: "command"]
 Always use this exact format. When you receive a result, analyze it and continue or finish.`;
 
@@ -182,16 +175,9 @@ Always use this exact format. When you receive a result, analyze it and continue
         for (const sig of signals) {
           console.log(`[${this.config.capability}] Executing signal: ${sig.type}`);
           if (sig.type === 'shell' && sig.command) {
-            const resp = await this.request('native_shell', { command: sig.command });
-            const event = await this.awaitTask(resp.payload.task_id);
-            feedback += `\n[SHELL RESULT: ${sig.command}]\n${event.payload.report}\n`;
+            await this.request('native_shell', { command: sig.command });
           } else if (sig.type === 'dispatch' && sig.capability) {
-            const resp = await this.request('dispatch', { capability: sig.capability, prompt: sig.prompt });
-            const event = await this.awaitTask(resp.payload.task_id);
-            feedback += `\n[DISPATCH RESULT: ${sig.capability}]\n${event.payload.report}\n`;
-          } else if (sig.type === 'await' && sig.taskId) {
-            const event = await this.awaitTask(sig.taskId);
-            feedback += `\n[AWAIT RESULT: ${sig.taskId}]\n${event.payload?.report || ''}\n`;
+            await this.request('dispatch', { capability: sig.capability, prompt: sig.prompt });
           }
         }
         messages.push({ role: 'user', content: feedback });
@@ -205,7 +191,7 @@ Always use this exact format. When you receive a result, analyze it and continue
   }
 
   parseSignals(text: string) {
-    const signals: Array<{ type: string; command?: string; capability?: string; prompt?: string; taskId?: string }> = [];
+    const signals: Array<{ type: string; command?: string; capability?: string; prompt?: string }> = [];
     
     // [ROME_SHELL: "ls -la"]
     const shellRe = /\[ROME_SHELL:\s*\"([^"]+)\"\]/g;
@@ -218,12 +204,6 @@ Always use this exact format. When you receive a result, analyze it and continue
     const dispRe = /\[ROME_DISPATCH:\s*([A-Z0-9_]+)\s*\"([^"]+)\"\]/g;
     while ((m = dispRe.exec(text)) !== null) {
       signals.push({ type: 'dispatch', capability: m[1], prompt: m[2] });
-    }
-
-    // [ROME_AWAIT: "task_id"]
-    const awaitRe = /\[ROME_AWAIT:\s*"([^"]+)"\]/g;
-    while ((m = awaitRe.exec(text)) !== null) {
-      signals.push({ type: 'await', taskId: m[1] });
     }
 
     // Support for Gemma's hallucinated tool format too
@@ -351,6 +331,13 @@ async function main() {
   if (!config.token) {
     const tokenPath = path.join(process.cwd(), '.rome_SOVEREIGN_TOKEN');
     if (fs.existsSync(tokenPath)) config.token = fs.readFileSync(tokenPath, 'utf-8').trim();
+  }
+
+  /* Auto-load capability-specific system prompt from dictator/prompts/{CAPABILITY}.md */
+  const romeRoot = process.env.ROME_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+  const promptFile = path.join(romeRoot, 'dictator', 'prompts', `${config.capability}.md`);
+  if (fs.existsSync(promptFile)) {
+    config.systemPrompt = fs.readFileSync(promptFile, 'utf-8').trim();
   }
 
   const agent = new MeshAgent(config);
