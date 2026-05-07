@@ -13,4 +13,5 @@ legions/.cache/
 legions/*_report.json
 logs/
 aaak/.facts/
+.rome/
 build_errors.txt
