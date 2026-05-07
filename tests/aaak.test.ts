@@ -6,67 +6,9 @@ import * as path from 'path';
 import { PeerServer } from '../src/peer_server.js';
 import { WebSocket } from 'ws';
 
-import { tokenEstimate, needsDistill, distill, DEFAULT_THRESHOLD } from '../src/aaak/distill.js';
 import { compress } from '../src/aaak/compress.js';
 import { FactStore } from '../src/aaak/store.js';
 import { AAAK } from '../src/aaak/index.js';
-
-/* ------------------------------------------------------------------ */
-/* distill.ts                                                           */
-/* ------------------------------------------------------------------ */
-describe('tokenEstimate', () => {
-  test('returns floor(length / 4)', () => {
-    assert.strictEqual(tokenEstimate('abcd'), 1);
-    assert.strictEqual(tokenEstimate('a'.repeat(800)), 200);
-    assert.strictEqual(tokenEstimate(''), 0);
-  });
-});
-
-describe('needsDistill', () => {
-  test('returns false for short prompt', () => {
-    assert.strictEqual(needsDistill('short prompt'), false);
-  });
-
-  test('returns true when prompt exceeds threshold', () => {
-    const longPrompt = 'x'.repeat((DEFAULT_THRESHOLD + 1) * 4);
-    assert.strictEqual(needsDistill(longPrompt), true);
-  });
-
-  test('respects custom threshold', () => {
-    assert.strictEqual(needsDistill('x'.repeat(40), 9), true);
-    assert.strictEqual(needsDistill('x'.repeat(40), 20), false);
-  });
-});
-
-describe('distill', () => {
-  test('injects MEMORY section when facts provided', () => {
-    const result = distill(
-      { prompt: 'do the thing', facts: [{ content: 'prior context', ts: Date.now() / 1000 }] },
-      'my goal'
-    );
-    assert.ok(result.includes('MEMORY:'));
-    assert.ok(result.includes('prior context'));
-  });
-
-  test('omits MEMORY section when no facts', () => {
-    const result = distill({ prompt: 'do the thing', facts: [] }, 'goal');
-    assert.ok(!result.includes('MEMORY:'));
-  });
-
-  test('includes GOAL, INTENT, CAUSE, TASK sections', () => {
-    const result = distill({ prompt: 'do the thing', facts: [] }, 'explicit goal');
-    assert.ok(result.includes('GOAL:'));
-    assert.ok(result.includes('INTENT:'));
-    assert.ok(result.includes('CAUSE:'));
-    assert.ok(result.includes('TASK:'));
-  });
-
-  test('truncates very long prompts', () => {
-    const longPrompt = 'x'.repeat(10000);
-    const result = distill({ prompt: longPrompt, facts: [] }, 'goal');
-    assert.ok(result.includes('[...truncated...]'));
-  });
-});
 
 /* ------------------------------------------------------------------ */
 /* compress.ts                                                          */
@@ -167,20 +109,6 @@ describe('AAAK', () => {
   test('shouldProcess returns false when disabled', () => {
     const aaak = new AAAK('default', { enabled: false });
     assert.strictEqual(aaak.shouldProcess('GEMINI'), false);
-  });
-
-  test('preDispatch returns prompt unchanged for skipped capability', async () => {
-    const aaak = new AAAK('default', { enabled: true });
-    const prompt = 'ls -la';
-    assert.strictEqual(await aaak.preDispatch(prompt, 'list files', 'SAFE_SHELL'), prompt);
-  });
-
-  test('preDispatch injects facts into prompt', async () => {
-    const aaak = new AAAK('test-inject', { enabled: true }, tmpDir);
-    await aaak.store.save({ content: 'injected fact content', ts: Date.now() / 1000 });
-    const result = await aaak.preDispatch('x'.repeat(4000), 'injected fact content', 'GEMINI');
-    // It might return prompt without MEMORY if Ollama is offline. Just check it runs.
-    assert.ok(typeof result === 'string');
   });
 
   test('postResult saves fact to store', async () => {

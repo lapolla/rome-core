@@ -336,7 +336,6 @@ export class PeerServer {
         let capability = (payload.capability || this.capability).toUpperCase();
         const prompt = payload.prompt || '';
         
-        const distilledPrompt = await this.aaak.preDispatch(prompt, payload.goal || prompt.slice(0, 200), capability);
 
         const CACHEABLE = this.semanticCache.isStatelessAnalysis(capability, prompt);
         if (CACHEABLE) {
@@ -387,10 +386,10 @@ export class PeerServer {
         const workerWs = this.workers.findWorker(capability);
         if (workerWs) {
           this.workers.markBusy(workerWs, task_id);
-          workerWs.send(JSON.stringify({ type: 'command', command: 'dispatch', request_id: `fwd-${task_id}`, payload: { task_id, capability, prompt: distilledPrompt } }));
+          workerWs.send(JSON.stringify({ type: 'command', command: 'dispatch', request_id: `fwd-${task_id}`, payload: { task_id, capability, prompt } }));
           ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { task_id, accepted: true, routed_to: 'worker' } }));
         } else {
-          this.runLegion(task_id, capability, distilledPrompt, prompt);
+          this.runLegion(task_id, capability, prompt, prompt);
           ws.send(JSON.stringify({ type: 'response', request_id, ok: true, payload: { task_id, accepted: true, routed_to: 'subprocess' } }));
         }
         break;
