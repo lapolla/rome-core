@@ -122,7 +122,7 @@ describe('WorkerRegistry', () => {
   test('register adds worker with uppercased capabilities', () => {
     const reg = new WorkerRegistry();
     const ws = mockWs();
-    reg.register(ws, ['gemini', 'safe_shell'], '1.0', 'linux', '', false);
+    reg.register(ws, ['gemini', 'safe_shell'], '1.0', 'linux', false);
     const info = reg.getInfo();
     assert.strictEqual(info.length, 1);
     assert.ok(info[0].capabilities.includes('GEMINI'));
@@ -132,21 +132,21 @@ describe('WorkerRegistry', () => {
   test('findWorker returns idle worker matching capability', () => {
     const reg = new WorkerRegistry();
     const ws = mockWs();
-    reg.register(ws, ['GEMINI'], '1.0', 'linux', '', false);
+    reg.register(ws, ['GEMINI'], '1.0', 'linux', false);
     assert.strictEqual(reg.findWorker('GEMINI'), ws);
   });
 
   test('findWorker returns null when no matching capability', () => {
     const reg = new WorkerRegistry();
     const ws = mockWs();
-    reg.register(ws, ['MISTRAL'], '1.0', 'linux', '', false);
+    reg.register(ws, ['MISTRAL'], '1.0', 'linux', false);
     assert.strictEqual(reg.findWorker('GEMINI'), null);
   });
 
   test('findWorker returns null when all matching workers are busy', () => {
     const reg = new WorkerRegistry();
     const ws = mockWs();
-    reg.register(ws, ['GEMINI'], '1.0', 'linux', '', false);
+    reg.register(ws, ['GEMINI'], '1.0', 'linux', false);
     reg.markBusy(ws, 'task-1');
     assert.strictEqual(reg.findWorker('GEMINI'), null);
   });
@@ -154,7 +154,7 @@ describe('WorkerRegistry', () => {
   test('markBusy and markIdle toggle worker availability', () => {
     const reg = new WorkerRegistry();
     const ws = mockWs();
-    reg.register(ws, ['GEMINI'], '1.0', 'linux', '', false);
+    reg.register(ws, ['GEMINI'], '1.0', 'linux', false);
     reg.markBusy(ws, 'task-x');
     assert.strictEqual(reg.findWorker('GEMINI'), null);
     reg.markIdle(ws, 'task-x');
@@ -164,7 +164,7 @@ describe('WorkerRegistry', () => {
   test('unregister removes worker and returns orphaned task ids', () => {
     const reg = new WorkerRegistry();
     const ws = mockWs();
-    reg.register(ws, ['GEMINI'], '1.0', 'linux', '', false);
+    reg.register(ws, ['GEMINI'], '1.0', 'linux', false);
     reg.markBusy(ws, 'orphan-1');
     reg.markBusy(ws, 'orphan-2');
     const orphaned = reg.unregister(ws);

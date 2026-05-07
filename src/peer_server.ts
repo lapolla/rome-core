@@ -169,7 +169,7 @@ export class PeerServer {
             else if (msg.type === 'agent_hello') {
               const p = msg.payload || {};
               (ws as any)._isWorker = true;
-              this.workers.register(ws, p.capabilities, p.version, p.platform, p.peer_url, p.one_shot ?? true);
+              this.workers.register(ws, p.capabilities, p.version, p.platform, p.one_shot ?? true);
               ws.send(JSON.stringify({ type: 'worker_ack', ok: true, payload: { message: 'Registered', capabilities_accepted: p.capabilities } }));
               this.scheduleTick();
             }

@@ -38,7 +38,6 @@ export interface TaskInfo {
   usage?: TaskUsage;
   parent_task_id?: string | undefined;
   dispatch_mode?: 'subprocess' | 'peer_forward' | 'persistent_worker' | undefined;
-  peer_url?: string | undefined;
   progress_percent?: number | undefined;
   progress_message?: string | undefined;
   goal?: string | undefined;
@@ -71,7 +70,6 @@ export interface PeerInfo {
   connected_at: number;
   version: string;
   platform: string;
-  peer_url: string;
   one_shot?: boolean;
 }
 
