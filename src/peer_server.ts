@@ -69,7 +69,6 @@ export class PeerServer {
   private blackboard = new Blackboard();
 
   private reducer = new MeshReducer();
-  // FIX 3: Change AAAK initialization path
   private aaak: AAAK;
   private semanticCache: SemanticCache;
   private startTime = Date.now() / 1000;
@@ -238,7 +237,6 @@ export class PeerServer {
           if (!line) continue;
           try {
             const entry = JSON.parse(line);
-            // FIX 4 (line ~220): Change `entry.status === 'SUCCESS' && entry.usage` to `entry.usage`
             if (entry.usage) { 
               this.projectTotalCost += entry.usage.cost_usd || 0;
               this.projectTotalTokens += entry.usage.total_tokens || 0;
@@ -305,8 +303,6 @@ export class PeerServer {
     const entry = JSON.stringify({ ts: Date.now() / 1000, tool, task_id, status, usage }) + '\n';
     fs.promises.appendFile(logPath, entry).catch(() => {});
 
-    // Update project totals if status is SUCCESS and usage is available
-    // FIX 4 (line ~282): Change `status === 'SUCCESS' && usage` to `usage`
     if (usage) {
       this.projectTotalCost += usage.cost_usd || 0;
       this.projectTotalTokens += usage.total_tokens || 0;
@@ -624,7 +620,6 @@ export class PeerServer {
       return;
     }
     if (cap.type === 'shell') {
-      // FIX 1: SAFE_SHELL zombie timeout
       const cancelEmitter = new EventEmitter();
       const SHELL_TIMEOUT_MS = 90_000;
       const shellTimer = setTimeout(() => cancelEmitter.emit('timeout', task_id), SHELL_TIMEOUT_MS);
