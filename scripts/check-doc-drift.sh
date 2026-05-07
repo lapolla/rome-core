@@ -1,8 +1,8 @@
 #!/bin/bash
 # ROME doc/code drift guard.
 # Fails if CLAUDE.md mentions src paths that don't exist, if its WS command
-# table diverges from peer_server.ts, or if stale FIX-N markers reappear.
-# Phase 4.1 + 4.3 of v7 cleanup.
+# table diverges from peer_server.ts, if stale FIX-N markers reappear, or
+# if any export under src/ is truly orphaned. Phase 4.1 + 4.2 + 4.3.
 
 set -u
 
@@ -56,6 +56,16 @@ TODO_HITS=$(grep -rEn '// (TODO|XXX)\b' src/ 2>/dev/null || true)
 if [ -n "$TODO_HITS" ]; then
   TODO_COUNT=$(echo "$TODO_HITS" | wc -l)
   echo "[drift] warning: $TODO_COUNT TODO/XXX comment(s) in src/"
+fi
+
+echo "[drift] dead-export scan (ts-prune)"
+TSPRUNE_OUT=$(npx --no-install ts-prune 2>/dev/null | grep -v '(used in module)$' || true)
+if [ -n "$TSPRUNE_OUT" ]; then
+  echo "  unreferenced exports under src/:"
+  echo "$TSPRUNE_OUT" | sed 's/^/    /'
+  FAIL=1
+else
+  echo "  ok"
 fi
 
 if [ $FAIL -ne 0 ]; then
