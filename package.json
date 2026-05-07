@@ -21,7 +21,8 @@
     "ws": "^8.20.0"
   },
   "scripts": {
-    "test": "node --test dist/tests/*.test.js"
+    "test": "node --test dist/tests/*.test.js",
+    "pretest": "bash scripts/check-doc-drift.sh"
   },
   "keywords": [],
   "author": "",
