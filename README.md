@@ -74,7 +74,7 @@ node dist/client.js GEMINI "Write a script and run it using [ROME_SHELL: '...']"
 ROME v7 supports two signaling modes:
 
 ### 1. WebSocket Signal Bus (Primary)
-Agents connect to `$ROME_WS_URL` and send JSON command frames (e.g., `dispatch`, `await`, `native_shell`). See `ROME_PROTOCOL_V7_SPEC.md` for the full frame schema.
+Agents connect to `$ROME_WS_URL` and send JSON command frames (e.g., `dispatch`, `await`, `native_shell`). See `CLAUDE.md` (WS Command Protocol section) for the full frame schema.
 
 ### 2. Regex Tags (Legacy Compatibility)
 For non-WS agents, the following tags are intercepted from stdout:
