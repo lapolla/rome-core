@@ -17,41 +17,38 @@ You are the **Orchestrator** of the ROME Mesh. Caesar commands, you decompose an
 
 ## Architecture
 
-- **`src/peer_server.ts`** — Pure WS daemon. Fixed `native_shell` task tracking. Injects sovereign audio context (`PULSE_SERVER`, `XDG_RUNTIME_DIR`) into all sub-tasks.
+- **`src/peer_server.ts`** — Pure WS daemon. Injects sovereign audio context (`PULSE_SERVER`, `XDG_RUNTIME_DIR`) into all sub-tasks.
 - **`src/native_agent.ts`** — V7 full-duplex native agent. Pure JS/TS implementation. Connects to Ollama/Mistral directly. Implements the real-time DAS signal loop via the primary WebSocket.
-- **`src/legion_worker.ts`** — V6 persistent worker engine (legacy wrapper). Supports CLI-based agents. Intercepts signals via stdout line-parsing.
 - **`src/shell_executor.ts`** — Dedicated bash executor for SAFE_SHELL.
 - **`src/registry.ts`** — `EventBus` (with 100-event replay), `TaskRegistry` (causal tracking), `WorkerRegistry`.
 - **`src/client.ts`** — Headless CLI dispatcher.
 - **`ROME-start.sh`** — Orchestrates clean mesh startup. Hardened cleanup logic to prevent zombie worker leaks. Injects audio environment.
 
-## WS Command Protocol (21 commands)
+## WS Command Protocol (17 commands)
 
 Frames: `{"type": "command", "command": "<name>", "request_id": "<id>", "payload": {}}` → `{"type": "response", "request_id": "<id>", "ok": true/false, "payload": {}}`.
 
 | Command | Purpose |
 |---------|---------|
+| `ping` | Heartbeat |
 | `dispatch` | Dispatch task → persistent worker or in-process fallback |
+| `native_shell` | Async shell in daemon process (cwd=ROME_ROOT) |
+| `await` | Block until task_ids complete (EventBus-driven) |
 | `status` | Task dict + workers + session stats |
 | `get_state` | Full state dump (tasks dict, workers, usage, uptime) |
-| `await` | Block until task_ids complete (EventBus-driven) |
-| `cancel` | Cancel task + kill subprocess + notify worker |
-| `interrupt` | Same as cancel but for in-flight steering |
-| `ping` | Heartbeat |
-| `read_file` | Read file with line range support |
-| `write_file` | Write content to any path |
-| `list_dir` | List directory entries |
-| `native_shell` | Async shell in daemon process (cwd=ROME_ROOT) |
-| `event` | Relay task events to daemon EventBus |
-| `submit_result` | Worker submits task result |
-| `reset` | Clear all tasks from registry |
-| `clear` | Clear only finished tasks |
-| `recent_events` | Events since timestamp |
 | `workers` | List connected persistent workers |
-| `report_usage` | Self-report token usage |
-| `dashboard_stats` | Aggregated stats |
+| `probe_arsenal` | Probe configured capabilities; return availability |
+| `read_report` | Read a stored task report |
+| `state_get` | Read a Blackboard key |
+| `state_set` | Write a Blackboard key |
+| `state_delete` | Delete a Blackboard key |
+| `state_get_meta` | Read Blackboard key metadata |
 | `aaak_recall` | Query AAAK fact store by text (returns ranked facts) |
 | `aaak_seed` | Seed a fact directly into AAAK store |
+| `clear` | Clear only finished tasks |
+| `reset` | Clear all tasks from registry |
+
+**Removed in v7 (or never implemented):** `cancel`, `interrupt`, `read_file`, `write_file`, `list_dir`, `event`, `submit_result`, `recent_events`, `report_usage`, `dashboard_stats`. Worker events (`progress`, `complete`, `error`) are message types on the worker→daemon channel, not commands.
 
 ## ROME Protocol Rules (v7.1.0)
 
@@ -83,7 +80,7 @@ Gemini: parse YAML, dispatch subtasks, await results
 
 ## Persistent Workers
 
-- **Handshake**: Worker sends `agent_hello` with `payload: { capabilities, version, platform, peer_url }` → daemon responds `worker_ack` with `capabilities_accepted`.
+- **Handshake**: Worker sends `agent_hello` with `payload: { capabilities, version, platform, one_shot }` → daemon responds `worker_ack` with `capabilities_accepted`.
 - **WorkerRegistry**: Tracks connected workers by WS reference. Finds idle workers by capability (must have 0 busy_tasks).
 - **Dispatch routing**: Find idle worker → send `command/dispatch` to worker. No worker → returns failure error message.
 - **Worker events**: Workers send `{"type": "event", "event": {...}}` for progress/complete/error. Daemon relays to EventBus → all subscribers (including dashboard).
@@ -95,10 +92,8 @@ Gemini: parse YAML, dispatch subtasks, await results
 ```
 dispatch command → registry.register + bus.broadcast(dispatch_start)
   → worker.send(command/dispatch)
-    → executeTask() runs LLM subprocess
-    → LegionaryUI sends progress events → uiSender → daemon.handleWorkerEvent → bus.broadcast(progress)
-    → manifest returned → worker.send(event/complete)
-  → daemon.handleWorkerEvent(complete) → registry.update(completed) + bus.broadcast(complete)
+    → native_agent.sendEvent / shell_executor.onData
+    → daemon.handleWorkerEvent → bus.broadcast(progress/complete)
 → dashboard receives dispatch_start + progress + complete events
 ```
 
@@ -106,26 +101,20 @@ Reports are inline in `manifest.report` → `complete` payload → `registry.tas
 
 ## AAAK — Adaptive Agent Attention Kernel
 
-- **Location**: `src/aaak/`, wired in `peer_server.ts` at dispatch and completion.
-- **`preDispatch`**: Recalls facts → distills prompt if >800 tokens. SAFE_SHELL/NATIVE_SHELL bypass.
+AAAK is **write-only on the dispatch path**. `postResult` records facts on success; `preDispatch` was removed in v7. Explicit recall is via the `aaak_recall` WS command, never auto-injected.
+
+- **Location**: `src/aaak/`, wired in `peer_server.ts` at completion only.
 - **`postResult`**: Compresses manifest → saves fact (SUCCESS only). TTL=2h, auto-compact every 50 saves.
-- **`distill`**: Pure string manipulation (goal/intent/cause extraction + fact injection). No LLM call.
-- **Fact store**: `aaak/.facts/{prefix}.jsonl`. One instance per prefix (default: "default").
+- **Fact store**: vectra `LocalIndex` under `.rome/memory/<prefix>`.
 - **`aaak_recall`** WS command: Dictator queries facts by text, returns ranked results.
 - **`aaak_seed`** WS command: Dictator seeds facts directly into the store.
-
-## V6 Distributed Mesh (A2A)
-
-- Each worker also runs a local `startPeerServer()` on a random port, exposing its capability for peer dispatch.
-- `peer_url` registered with daemon on `agent_hello`. WorkerRegistry stores it.
-- Daemon's `broadcastSystemStatus()` emits all agent peer_urls every 15s → dashboard mesh topology.
-- In-process `signalHandler` in `runLegion` handles `[ROME_DISPATCH:]`, `[ROME_AWAIT:]`, `[ROME_SHELL:]` signals from LLM output.
 
 ## Coding Conventions
 
 - **TypeScript only**: No Python runtime. All source in `src/`, compiled to `dist/`.
 - **ES modules**: `import.meta.url` for `__dirname`, `.js` extensions on all imports.
-- **Async safety**: Never block the event loop. Long-running work via `executeTask` (spawns child process) or `executeShell` (detached spawn).
+- **Async safety**: Never block the event loop. Long-running work via subprocess spawning or detached shell execution.
 - **Subprocess safety**: Always `detached: true` on spawned children. Kill via `-pid` (process group).
 - **WS error handling**: All `ws.on('message')` handlers wrapped in try/catch. Errors logged, connection kept alive.
+- **No inline comments**: Use block comments only where the why is load-bearing; otherwise keep code self-documenting.
 - **Build**: `npx tsc` → `dist/`. Restart: `pkill -f dist/peer_server.js && bash ROME-start.sh`.
