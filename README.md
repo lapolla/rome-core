@@ -1,6 +1,6 @@
 # ROME: Remote Orchestrated Model Execution
 
-A WebSocket-native orchestration mesh. The Dictator decomposes goals and routes subtasks to worker Legions over a persistent WS daemon at `ws://127.0.0.1:8741`.
+A WebSocket-native orchestration mesh. The Dictator decomposes goals and routes subtasks to worker Legions via the WS daemon (`ROME_WS_URL`, default `ws://127.0.0.1:8741`).
 
 ## Architecture
 
@@ -36,7 +36,8 @@ Cost gradient — cheapest left, reach right only when needed:
 
 | Capability | Backend | Model | Use for |
 |---|---|---|---|
-| `NATIVE_SHELL` | Daemon-native bash | — | Shell, git, grep, file ops. Free, always first choice. |
+| `NATIVE_SHELL` | Daemon-native bash | — | Shell, git, grep, file ops. Runs at ROME_ROOT. Free, always first choice. |
+| `SAFE_SHELL` | Daemon-native bash | — | Same executor as `NATIVE_SHELL`, isolated cwd (`legions/<task_id>/`). Use when the task needs a clean working directory. |
 | `GEMMA` | Ollama `localhost:11434` | `gemma4:e4b` | Cheap local triage and simple analysis. |
 | `MISTRAL` | `~/projects/mistral-cli` | Mistral | Local LLM. Analysis, single-file edits. |
 | `HAIKU` | `claude` CLI | `claude-haiku-4-5-20251001` | Fast cheap Claude. Triage, summaries. |
@@ -70,7 +71,7 @@ Native agents (`src/native_agent.ts`) parse two tags from LLM output and route t
 
 | Tag | Action |
 |---|---|
-| `[ROME_SHELL: "<CMD>"]` | Run shell via `native_shell` |
+| `[ROME_SHELL: "<CMD>"]` | LLM-facing alias for `NATIVE_SHELL`. Same `runNativeShell` executor, same ROME_ROOT cwd. For use inside agent output — the Dictator dispatches `NATIVE_SHELL` directly. |
 | `[ROME_DISPATCH: <CAP> "<PROMPT>"]` | Spawn sub-task via `dispatch` |
 
 External workers and the Dictator speak the WS command protocol directly instead of using DAS tags — see `CLAUDE.md` for the full command schema.
