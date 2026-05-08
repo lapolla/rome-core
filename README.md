@@ -1,16 +1,21 @@
 # ROME: Remote Orchestrated Model Execution
 
-A WebSocket-native orchestration mesh. Dictator decomposes goals; Legions
-(LLM workers) execute via the daemon over `ws://127.0.0.1:8741`.
+A WebSocket-native orchestration mesh. The Dictator decomposes goals and routes subtasks to worker Legions over a persistent WS daemon at `ws://127.0.0.1:8741`.
 
 ## Architecture
 
-- **`src/peer_server.ts`** — WS daemon. Routes dispatch, tracks tasks, broadcasts events.
-- **`src/native_agent.ts`** — Full-duplex native agent. Connects directly to Ollama / external LLMs; intercepts DAS signals (`[ROME_SHELL:]`, `[ROME_DISPATCH:]`) from model output.
-- **`src/shell_executor.ts`** — Dedicated bash executor for `SAFE_SHELL`.
-- **`src/registry.ts`** — `EventBus`, `TaskRegistry`, `WorkerRegistry`.
-- **`src/client.ts`** — Headless CLI dispatcher.
-- **`ROME-start.sh`** — Mesh launcher.
+| Component | Path | Role |
+|---|---|---|
+| **Daemon** | `src/peer_server.ts` | WS server. Routes dispatches, tracks tasks, broadcasts events on the bus. |
+| **Native Agent** | `src/native_agent.ts` | LLM worker process. Connects back to the daemon via WS on spawn. Intercepts DAS signals from model output. |
+| **Shell Executor** | `src/shell_executor.ts` | Bash executor for `NATIVE_SHELL`. Exit code is authoritative — no LLM interpretation. |
+| **Registry** | `src/registry.ts` | `EventBus`, `TaskRegistry`, `WorkerRegistry`. Persists task state to disk. |
+| **AAAK** | `src/aaak/` | Semantic cache, memory, and response compression subsystem. |
+| **Arsenal Probe** | `src/arsenal_probe.ts` | Checks worker availability before dispatch. |
+| **CLI Dispatcher** | `src/client.ts` | Headless task dispatcher for external callers. |
+| **Launcher** | `ROME-start.sh` | Compiles TS and starts the mesh. |
+| **Dashboard** | `dashboard/index.html` | Live task monitor, subscribes to the WS bus. |
+| **Worker Config** | `dictator/workers.json` | Capability definitions — invocation type, probe command, model, CLI command. |
 
 See **`CLAUDE.md`** for the full WS command schema and protocol rules.
 
@@ -25,11 +30,25 @@ Every worker spawned by `native_agent_cli` — CLAUDE, OPUS, HAIKU, GEMINI, MIST
 - Progress events stream to the bus in real time. No polling needed.
 - Sub-tasks dispatched from inside a worker appear in the registry alongside parent tasks. The mesh is always deeper than one level.
 
+## Workers
+
+Cost gradient — cheapest left, reach right only when needed:
+
+| Capability | Backend | Model | Use for |
+|---|---|---|---|
+| `NATIVE_SHELL` | Daemon-native bash | — | Shell, git, grep, file ops. Free, always first choice. |
+| `GEMMA` | Ollama `localhost:11434` | `gemma4:e4b` | Cheap local triage and simple analysis. |
+| `MISTRAL` | `~/projects/mistral-cli` | Mistral | Local LLM. Analysis, single-file edits. |
+| `HAIKU` | `claude` CLI | `claude-haiku-4-5-20251001` | Fast cheap Claude. Triage, summaries. |
+| `GEMINI` | `~/projects/gemini-cli` | `gemini-2.5-pro` (+ fallbacks) | JS/TS edits and refactors. Unreliable on non-JS/TS files — always validate output. |
+| `CLAUDE` | `claude` CLI | Claude Pro default (auto-upgrades) | General backstop. Runs whatever the Pro subscription provides. |
+| `OPUS` | `claude` CLI | `claude-opus-4-7` (pinned) | Architectural reasoning, novel decomposition. Explicit when Opus-grade headroom is required. |
+
 ## Setup
 
 ### Prerequisites
 - **Node.js 20+**
-- **Ollama** (optional) — for local embeddings used by AAAK / SemanticCache.
+- **Ollama** (optional) — for GEMMA and local embeddings (AAAK SemanticCache)
 
 ### Install & launch
 
@@ -47,22 +66,21 @@ node dist/src/client.js GEMINI "your prompt here"
 
 ## Direct Agent Signals (DAS)
 
-Native agents (`src/native_agent.ts`) parse two tags from LLM output and
-execute them through the existing WS connection:
+Native agents (`src/native_agent.ts`) parse two tags from LLM output and route them through the existing WS connection:
 
 | Tag | Action |
-|-----|--------|
+|---|---|
 | `[ROME_SHELL: "<CMD>"]` | Run shell via `native_shell` |
 | `[ROME_DISPATCH: <CAP> "<PROMPT>"]` | Spawn sub-task via `dispatch` |
 
-CLI/external workers can speak the WS command protocol directly instead
-of using DAS tags — see `CLAUDE.md` for the 17-command schema.
+External workers and the Dictator speak the WS command protocol directly instead of using DAS tags — see `CLAUDE.md` for the full command schema.
 
 ## Configuration
 
-- **`dictator/config.json`** — daemon port + paths.
+- **`dictator/workers.json`** — worker capability definitions (invocation, probe, model, CLI command)
+- **`dictator/config.json`** — daemon port and paths
 - **`.rome_SOVEREIGN_TOKEN`** — WS auth token. Not committed.
-- **`arsenal/core_arsenal.json`** — capability definitions (CLI, args, model).
 
 ---
-**"The mesh is the medium. ROME is the mind."**
+**"The mesh is the medium. The Dictator decomposes; the Legions execute."**
+---
